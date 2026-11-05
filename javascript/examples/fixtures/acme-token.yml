@@ -1,0 +1,10 @@
+# Synthetic, detection-only teaching rule. Never use it as a provider validator.
+rules:
+  - id: acme.example-token
+    name: Acme example token
+    pattern: '\b(acme_demo_[A-Za-z0-9]{16})\b'
+    min_entropy: 0
+    examples:
+      - acme_demo_a9B2c7D4e1F8g3H6
+    negative_examples:
+      - acme_demo_too_short

@@ -9,6 +9,10 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+use base64::{
+    Engine as _, alphabet,
+    engine::{GeneralPurpose, GeneralPurposeConfig},
+};
 use kingfisher_vectorscan::{BlockDatabase, Flag, Pattern, Scan};
 use regex::Regex;
 use sha2::{Digest, Sha256};
@@ -17,6 +21,8 @@ use xxhash_rust::xxh3::Xxh3;
 use crate::{
     BetterleaksExpr, Confidence, scanner_pool::ScannerPool, tokenizer::cl100k_base_singleton,
 };
+
+const MAX_EXPRESSION_STRING_BYTES: usize = 16 * 1024 * 1024;
 
 /// Candidate data exposed to a Betterleaks filter expression.
 #[derive(Debug)]
@@ -915,6 +921,7 @@ impl<'a> Evaluator<'a, '_> {
             "join" => join(arguments),
             "lastIndexOf" => last_index_of(arguments),
             "replace" => replace(arguments),
+            "fromBase64" => from_base64(arguments),
             "type" | "string" | "int" | "float" | "trim" | "trimPrefix" | "trimSuffix"
             | "repeat" | "indexOf" | "hasPrefix" | "hasSuffix" | "keys" | "values" | "reverse"
             | "sort" | "uniq" | "flatten" | "concat" | "first" | "last" | "get" | "sum"
@@ -1481,6 +1488,33 @@ fn value_from_json<'a>(value: serde_json::Value) -> Value<'a> {
     }
 }
 
+/// Expr uses Go's base64.StdEncoding: standard alphabet, required padding, CR/LF ignored,
+/// and nonzero unused trailing bits accepted. Unlike Go byte strings, filter strings must be
+/// UTF-8, so non-text decoded data is an explicit error rather than a lossy conversion.
+fn from_base64<'a>(arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
+    const DECODER: GeneralPurpose = GeneralPurpose::new(
+        &alphabet::STANDARD,
+        GeneralPurposeConfig::new().with_decode_allow_trailing_bits(true),
+    );
+    let [input] = arguments.as_slice() else {
+        bail!("fromBase64 expects one argument");
+    };
+    let input = input.as_string()?;
+    // Decoding shrinks its input; bound it before allocating the CR/LF-normalized copy.
+    if input.len() > MAX_EXPRESSION_STRING_BYTES {
+        bail!("fromBase64 exceeds expression size limit");
+    }
+    let normalized: Cow<'_, [u8]> = if input.bytes().any(|byte| matches!(byte, b'\r' | b'\n')) {
+        Cow::Owned(input.bytes().filter(|byte| !matches!(byte, b'\r' | b'\n')).collect())
+    } else {
+        Cow::Borrowed(input.as_bytes())
+    };
+    let decoded = DECODER.decode(normalized.as_ref()).context("invalid base64 in fromBase64")?;
+    Ok(Value::string(
+        String::from_utf8(decoded).context("fromBase64 decoded data is not valid UTF-8")?,
+    ))
+}
+
 fn simple_builtin<'a>(name: &str, arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
     let input = arguments.first().ok_or_else(|| anyhow!("{name} expects an argument"))?;
     let text = || input.as_string();
@@ -1531,7 +1565,7 @@ fn simple_builtin<'a>(name: &str, arguments: Vec<Value<'a>>) -> Result<Value<'a>
         }
         "repeat" => {
             let count = usize::try_from(parameter(1)?.as_i64()?)?;
-            if text()?.len().saturating_mul(count) > 16 * 1024 * 1024 {
+            if text()?.len().saturating_mul(count) > MAX_EXPRESSION_STRING_BYTES {
                 bail!("repeat exceeds expression size limit");
             }
             Ok(Value::string(text()?.repeat(count)))
@@ -1696,6 +1730,149 @@ mod tests {
                 evaluate_filter(&parse(source), &context("token", "source.rs")).unwrap().discard,
                 "{source}"
             );
+        }
+    }
+
+    #[test]
+    fn from_base64_matches_expr_standard_padding_and_newline_semantics() {
+        for (encoded, decoded) in [
+            ("", ""),
+            ("\r\n", ""),
+            ("Zm9v", "foo"),
+            ("Zm8=", "fo"),
+            ("Zg==", "f"),
+            ("Zh==", "f"), // Go StdEncoding does not require zero unused padding bits.
+            ("Zm9=", "fo"),
+            ("Z\r\ng=\r\n=\r\n", "f"),
+            ("Pj4+Pz8/", ">>>???"),
+            ("w6nwn5iK", "é😊"),
+            ("AA==", "\0"),
+        ] {
+            let source = format!(
+                "fromBase64({}) == {}",
+                serde_json::to_string(encoded).unwrap(),
+                serde_json::to_string(decoded).unwrap()
+            );
+            assert!(
+                evaluate_filter(&parse(&source), &context("token", "source.rs")).unwrap().discard,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn from_base64_rejects_malformed_inputs_without_partial_results() {
+        for encoded in [
+            "Z",
+            "Zg",
+            "Zg=",
+            "Zg===",
+            "Z===",
+            "=Zg=",
+            "Z=g=",
+            "Zm9v=",
+            "Zg==Zg==",
+            "Zm9v$",
+            "Z g==",
+            "Zg==\t",
+            "Zg==\u{000b}",
+            "Zg==\u{000c}",
+            "Zg==\u{00a0}",
+            "Pj4-",
+            "Pz8_",
+        ] {
+            let source =
+                format!("fromBase64({}) == \"foo\"", serde_json::to_string(encoded).unwrap());
+            let error =
+                evaluate_filter(&parse(&source), &context("token", "source.rs")).unwrap_err();
+            assert!(
+                error.to_string().contains("invalid base64 in fromBase64"),
+                "{source}: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn from_base64_reports_type_arity_and_non_utf8_errors() {
+        for (source, message) in [
+            ("fromBase64()", "fromBase64 expects one argument"),
+            (r#"fromBase64("Zg==", "Zg==")"#, "fromBase64 expects one argument"),
+            ("fromBase64(42)", "expected string"),
+            ("fromBase64(nil)", "expected string"),
+            ("fromBase64([])", "expected string"),
+            (r#"fromBase64("/w==")"#, "fromBase64 decoded data is not valid UTF-8"),
+            (r#"fromBase64("wyg=")"#, "fromBase64 decoded data is not valid UTF-8"),
+        ] {
+            let error =
+                evaluate_filter(&parse(source), &context("token", "source.rs")).unwrap_err();
+            assert!(error.to_string().contains(message), "{source}: {error:#}");
+        }
+    }
+
+    #[test]
+    fn from_base64_bounds_input_before_normalizing_or_decoding() {
+        let expression = parse(r#"fromBase64(finding["secret"]) == """#);
+        let oversized = "\r".repeat(MAX_EXPRESSION_STRING_BYTES + 1);
+        let error = evaluate_filter(&expression, &context(&oversized, "source.rs")).unwrap_err();
+        assert!(error.to_string().contains("fromBase64 exceeds expression size limit"));
+    }
+
+    #[test]
+    fn from_base64_supports_exact_rc7_mapbox_url_safe_normalization() {
+        // Both the public and secret token rules use this exact rc.7 filter.
+        let expression = parse(
+            r#"
+let parts = split(finding["secret"], ".");
+let payload = len(parts) == 3 ? parts[1] : "";
+let padding = (4 - len(payload) % 4) % 4;
+entropy(finding["secret"]) < 4 || len(payload) % 4 == 1 ||
+ !(fromBase64(replace(replace(payload, "-", "+"), "_", "/") + repeat("=", padding)) matches
+   '^\\{"u":"[^"\\\\\\x00-\\x1f]+"\\s*,\\s*"a"\\s*:\\s*"[A-Za-z0-9]+"\\s*\\}$')
+"#,
+        );
+        let engine = BetterleaksFilterEngine::compile([&expression]).unwrap();
+        for prefix in ["pk", "sk"] {
+            for payload in [
+                "{\"u\":\"alice\",\"a\":\"abc123\"}",
+                "{\"u\":\"alice1\",\"a\":\"abc123\"}",
+                "{\"u\":\"alice12\",\"a\":\"abc123\"}",
+                "{\"u\":\"\u{10ffff}\",\"a\":\"abc123\"}",
+            ] {
+                let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
+                if payload.contains('\u{10ffff}') {
+                    assert!(encoded.contains('-') && encoded.contains('_'), "{encoded}");
+                }
+                let secret = format!("{prefix}.{encoded}.Z4xP8vN2qW6rT9mL5kJ3gA");
+                assert!(
+                    !evaluate_filter_with_engine(
+                        &expression,
+                        &context(&secret, "source.rs"),
+                        &engine
+                    )
+                    .unwrap()
+                    .discard,
+                    "unexpected normalization decision for synthetic {prefix} fixture"
+                );
+            }
+            for payload in [
+                "{\"u\":\"alice\",\"a\":\"not-allowed\"}",
+                "{\"a\":\"abc123\",\"u\":\"alice\"}",
+                "{\"u\":\"\",\"a\":\"abc123\"}",
+                "not-json",
+            ] {
+                let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
+                let secret = format!("{prefix}.{encoded}.Z4xP8vN2qW6rT9mL5kJ3gA");
+                assert!(
+                    evaluate_filter_with_engine(
+                        &expression,
+                        &context(&secret, "source.rs"),
+                        &engine
+                    )
+                    .unwrap()
+                    .discard,
+                    "unexpected normalization decision for synthetic {prefix} fixture"
+                );
+            }
         }
     }
 

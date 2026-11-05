@@ -190,6 +190,7 @@ fn required_vars_for_revocation(revocation: &Revocation) -> BTreeSet<String> {
         Revocation::Betterleaks(config) => {
             vars.insert("TOKEN".into());
             vars.extend(config.components.values().cloned());
+            vars.extend(config.expression.env_input_vars());
             required_betterleaks_context_vars(&config.expression, &mut vars);
         }
         Revocation::GCP => {
@@ -663,7 +664,8 @@ pub(super) fn build_blast_radius_command(
 pub(super) fn extract_akid_from_validation_body(body: &ValidationResponseBody) -> Option<String> {
     static AKID_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
         regex::Regex::new(
-            r"(?xi)\b(?:A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[0-9A-Z]{16}\b",
+            // IAM user/role/group/policy identifiers (AIDA/AROA/etc.) are not keys.
+            r"(?xi)\b(?:A3T[A-Z0-9]|AKIA|ASIA)[0-9A-Z]{16}\b",
         )
         .expect("AKID regex should compile")
     });
@@ -675,6 +677,34 @@ pub(super) fn extract_akid_from_validation_body(body: &ValidationResponseBody) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validation_identity_metadata_is_not_an_aws_access_key() {
+        for prefix in ["AIDA", "AROA", "AGPA", "AIPA", "ANPA", "ANVA"] {
+            let body = validation_body::from_string(format!(
+                r#"{{"metadata":{{"userid":"{prefix}ABCDEFGHIJKLMNOP"}},"result":"valid"}}"#
+            ));
+            let fallback = extract_akid_from_validation_body(&body);
+            assert_eq!(fallback, None, "{prefix}");
+            assert!(
+                build_revoke_command(
+                    "custom.unbound-aws-secret",
+                    &Revocation::AWS,
+                    "synthetic-secret",
+                    &BTreeMap::new(),
+                    None,
+                    fallback.as_deref()
+                )
+                .is_none(),
+                "identity metadata must not generate an unbound AWS revocation command"
+            );
+        }
+        for prefix in ["AKIA", "ASIA", "A3T0"] {
+            let key = format!("{prefix}ABCDEFGHIJKLMNOP");
+            let body = validation_body::from_string(format!("Access key: {key}"));
+            assert_eq!(extract_akid_from_validation_body(&body).as_deref(), Some(key.as_str()));
+        }
+    }
 
     #[test]
     fn fallback_validate_commands_preserve_akid_discovered_outside_variables() {
@@ -823,6 +853,73 @@ mod tests {
             )));
             assert!(command.contains("--var __BETTERLEAKS_RULE_ID='custom.primary'"));
         }
+    }
+
+    #[test]
+    fn betterleaks_revoke_commands_preserve_literal_env_inputs_without_changing_validation() {
+        let config = serde_json::json!({
+            "source": "env.get('SOURCE_ONLY')",
+            "expression": "[env.get('RESEND_ADMIN_API_KEY'), env.get('RESEND_API_KEY_ID'), env.getOrDefault('OPTIONAL', ''), components.helper.secret]",
+            "analyze": "env.get('ANALYZE_ONLY')",
+            "components": {"helper": "COMPONENT"}
+        });
+        let validation = serde_json::from_value(serde_json::json!({
+            "type": "Betterleaks", "content": config
+        }))
+        .unwrap();
+        let revocation = serde_json::from_value(serde_json::json!({
+            "type": "Betterleaks", "content": config
+        }))
+        .unwrap();
+        let variables = BTreeMap::from([
+            ("COMPONENT".into(), "component-secret".into()),
+            ("RESEND_ADMIN_API_KEY".into(), "admin'key".into()),
+            ("RESEND_API_KEY_ID".into(), "key-7".into()),
+            ("OPTIONAL".into(), "optional-value".into()),
+            ("SOURCE_ONLY".into(), "source-value".into()),
+            ("ANALYZE_ONLY".into(), "analysis-value".into()),
+            ("UNRELATED".into(), "unrelated-value".into()),
+        ]);
+        assert_eq!(
+            build_revoke_command(
+                "custom.env-revoker",
+                &revocation,
+                "secret",
+                &variables,
+                None,
+                None
+            )
+            .unwrap(),
+            format!(
+                "kingfisher revoke --rule 'custom.env-revoker' --var COMPONENT='component-secret' --var RESEND_ADMIN_API_KEY={} --var RESEND_API_KEY_ID='key-7' 'secret'",
+                escape_for_shell("admin'key")
+            )
+        );
+        assert_eq!(
+            build_validate_command(
+                "custom.env-revoker",
+                &validation,
+                "secret",
+                &variables,
+                None,
+                None
+            )
+            .unwrap(),
+            "kingfisher validate --rule 'custom.env-revoker' --var COMPONENT='component-secret' 'secret'"
+        );
+        // Static discovery does not make all branches' inputs mandatory.
+        assert_eq!(
+            build_revoke_command(
+                "custom.env-revoker",
+                &revocation,
+                "secret",
+                &BTreeMap::new(),
+                None,
+                None
+            )
+            .unwrap(),
+            "kingfisher revoke --rule 'custom.env-revoker' 'secret'"
+        );
     }
 
     #[test]

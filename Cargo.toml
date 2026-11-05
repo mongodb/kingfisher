@@ -6,6 +6,7 @@ members = [
     "crates/kingfisher-scanner",
     "tools/rule-bundle",
     "crates/kingfisher-python",
+    "crates/kingfisher-node",
 ]
 resolver = "2"
 
@@ -33,7 +34,7 @@ smallvec = { version = "1", features = ["const_generics", "const_new", "union"] 
 parking_lot = "0.12"
 tracing = "0.1"
 # Cache compatibility includes the exact binding/native crate build identity.
-kingfisher-vectorscan = "=0.1.2"
+kingfisher-vectorscan = "=0.1.4"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 ignore = "0.4"
 walkdir = "2.5"
@@ -57,7 +58,7 @@ thread_local = "1.1.10"
 
 [package]
 name = "kingfisher-bin"
-version = "2.16.0"
+version = "2.17.0"
 description = "MongoDB's blazingly fast and accurate secret scanning, validation, blast radius mapping, and secret revocation tool"
 edition.workspace = true
 rust-version.workspace = true
@@ -118,8 +119,8 @@ command-group = { version = "5.0.1", optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 # Library crates
 kingfisher-core = { version = "1.0.6", path = "crates/kingfisher-core" }
-kingfisher-rules = { version = "3.0.1", path = "crates/kingfisher-rules" }
-kingfisher-scanner = { version = "3.0.1", path = "crates/kingfisher-scanner", features = ["validation", "archives", "context", "extraction", "git", "__cli-internals"] }
+kingfisher-rules = { version = "3.1.0", path = "crates/kingfisher-rules" }
+kingfisher-scanner = { version = "3.0.2", path = "crates/kingfisher-scanner", features = ["validation", "archives", "context", "extraction", "git", "__cli-internals"] }
 
 clap = { version = "4.6", default-features = false, features = [
     "derive",
@@ -686,6 +687,12 @@ debug = true
 
 # Python extensions must let PyO3 contain Rust panics instead of aborting Python.
 [profile.python-release]
+inherits = "release"
+panic = "unwind"
+lto = false
+
+# Native Node callbacks must be able to contain panics rather than abort Node.
+[profile.node-release]
 inherits = "release"
 panic = "unwind"
 lto = false

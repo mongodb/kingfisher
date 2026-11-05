@@ -1,0 +1,2330 @@
+{
+  "schemaVersion": 1,
+  "packages": {
+    "Inflector@0.11.4": {
+      "declaredLicense": "BSD-2-Clause",
+      "crateChecksum": "fe438c63458706e03479442743baae6c88256498e6431708f6dfc520a26515d3",
+      "vcsRevision": "a4a95eac75043f4bffb127c7c8ec886b5b106053",
+      "licenses": [
+        {
+          "license": "BSD-2-Clause",
+          "file": "Inflector-BSD-2-Clause.txt",
+          "source": "https://raw.githubusercontent.com/whatisinternet/Inflector/a4a95eac75043f4bffb127c7c8ec886b5b106053/LICENSE.md",
+          "sha256": "03d1bd5bfbee8d44651e7f57faf9e5b4eda4233f0d4eda36a716f2f0533d230b"
+        }
+      ],
+      "reason": "Verbatim license omitted from the published crate; archived from its exact .cargo_vcs_info.json upstream revision."
+    },
+    "accesskit@0.24.1": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "d3b7f7f85a7e5f68090000ed7622545829afd484d210358702ae4cb97dd0c320",
+      "vcsRevision": "a55d3e1a18bb9ef0e4bccc9083fb13c3e0ad8969",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-23f18e03dc49df91622f.txt",
+          "source": "https://raw.githubusercontent.com/AccessKit/accesskit/a55d3e1a18bb9ef0e4bccc9083fb13c3e0ad8969/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "accesskit_atspi_common@0.19.1": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "023da0e5097f46df7092d5280b02efb9bbf8d93298daeced42652463e357d636",
+      "vcsRevision": "c88605b96d04431f9c3c792464a0f2f253480e94",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-23f18e03dc49df91622f.txt",
+          "source": "https://raw.githubusercontent.com/AccessKit/accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "accesskit_consumer@0.38.0": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "5d10a236f96f87d70732e44520046785431ef01d5bcd6b041317bfadd2f88245",
+      "vcsRevision": "c88605b96d04431f9c3c792464a0f2f253480e94",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-23f18e03dc49df91622f.txt",
+          "source": "https://raw.githubusercontent.com/AccessKit/accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "accesskit_macos@0.26.3": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "ce02dc63b43f0c9296af9ac946312a2dc8814427d7a64d2d600971dac55b6076",
+      "vcsRevision": "c88605b96d04431f9c3c792464a0f2f253480e94",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-23f18e03dc49df91622f.txt",
+          "source": "https://raw.githubusercontent.com/AccessKit/accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "accesskit_unix@0.22.1": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "03e156ed3802e35eefe894ef2671bc6c889303d8a7e110b5e1b48f504b91362f",
+      "vcsRevision": "c88605b96d04431f9c3c792464a0f2f253480e94",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-23f18e03dc49df91622f.txt",
+          "source": "https://raw.githubusercontent.com/AccessKit/accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "accesskit_windows@0.34.0": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "106c2b961215864d1c2e703ee63269c25c4e80a577ffb2c1017b9c17dcdf83a1",
+      "vcsRevision": "c88605b96d04431f9c3c792464a0f2f253480e94",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-23f18e03dc49df91622f.txt",
+          "source": "https://raw.githubusercontent.com/AccessKit/accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "alloc-stdlib@0.2.4": {
+      "declaredLicense": "BSD-3-Clause",
+      "crateChecksum": "0e76a019e91224d279006ff972f1e984179a6e9feb050adba6ce8274aef23195",
+      "vcsRevision": "ae42d22078b98549e987d2f03d12df7b984fde47",
+      "licenses": [
+        {
+          "license": "BSD-3-Clause",
+          "file": "license-c0c56f26d9c051cac4d2.txt",
+          "source": "https://raw.githubusercontent.com/dropbox/rust-alloc-no-stdlib/ae42d22078b98549e987d2f03d12df7b984fde47/LICENSE",
+          "sha256": "c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "alloc-stdlib@0.3.0": {
+      "declaredLicense": "BSD-3-Clause",
+      "crateChecksum": "0b5c1865780388bfa186411ab5f247819487fc4864c6e9c3106611fa347586e1",
+      "vcsRevision": "0a81fd6928ea3b33c8cd484aa4575d50ffb98012",
+      "licenses": [
+        {
+          "license": "BSD-3-Clause",
+          "file": "license-c0c56f26d9c051cac4d2.txt",
+          "source": "https://raw.githubusercontent.com/dropbox/rust-alloc-no-stdlib/0a81fd6928ea3b33c8cd484aa4575d50ffb98012/LICENSE",
+          "sha256": "c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "asn1-rs-impl@0.2.0": {
+      "declaredLicense": "MIT/Apache-2.0",
+      "crateChecksum": "7b18050c2cd6fe86c3a76584ef5e0baf286d038cda203eb6223df2cc413565f7",
+      "vcsRevision": "a20e5f7319c896737ad0f2557037817b91ad854f",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-a5c61b93b6ee1d104af9.txt",
+          "source": "https://raw.githubusercontent.com/rusticata/asn1-rs/a20e5f7319c896737ad0f2557037817b91ad854f/LICENSE-MIT",
+          "sha256": "a5c61b93b6ee1d104af9920cf020ff3c7efe818e31fe562c72261847a728f513"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "async-openai-macros@0.3.0": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "492a944774207eed3acf425214eadbd6ce84a2b89331164ff1c11bae92b26302",
+      "vcsRevision": "3d3f112464e65c5d30b8f01664e86d5b7818d9a2",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-ee868fed90a90ad13be5.txt",
+          "source": "https://raw.githubusercontent.com/64bit/async-openai/3d3f112464e65c5d30b8f01664e86d5b7818d9a2/LICENSE",
+          "sha256": "ee868fed90a90ad13be5299481f067166938227d77d5ca5cdb9fbeb8c6137d41"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "async-openai@0.41.3": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "d72db2750faea2ca5edbf6d0c50277a89dc8f75f5e6ddd695ef30f75e335019b",
+      "vcsRevision": "ca746070fdcd27de56b41966d31f1aa6c8600ce4",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-ee868fed90a90ad13be5.txt",
+          "source": "https://raw.githubusercontent.com/64bit/async-openai/ca746070fdcd27de56b41966d31f1aa6c8600ce4/LICENSE",
+          "sha256": "ee868fed90a90ad13be5299481f067166938227d77d5ca5cdb9fbeb8c6137d41"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "base64-simd@0.8.0": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "339abbe78e73178762e23bea9dfd08e697eb3f3301cd4be981c0f78ba5859195",
+      "vcsRevision": "d74c030d9dc4f3cae02146d1f497ff62726ef09a",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-71674605ec4c087fe9eb.txt",
+          "source": "https://raw.githubusercontent.com/Nugine/simd/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE",
+          "sha256": "71674605ec4c087fe9eb534e3e4f9e26eb2e4aabcd76a29fd156c6a844d44b3d"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "bitcoin_hashes@0.14.101": {
+      "declaredLicense": "CC0-1.0",
+      "crateChecksum": "bca4c7abb40c8817d77403c880988cfd484f23ab2365726afb2f798363e2c4a2",
+      "licenses": [
+        {
+          "license": "CC0-1.0",
+          "file": "license-a2010f343487d3f7618a.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/CC0-1.0.txt",
+          "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-7db5e2f64cd5d14d32df.txt",
+          "source": "https://docs.rs/crate/bitcoin_hashes/0.14.101/source/Cargo.toml",
+          "sha256": "7db5e2f64cd5d14d32df5631bfef8abdaed13544e03239aae80af68f5a208bfa",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-b55424493f4bc8689e35.txt",
+          "source": "https://docs.rs/crate/bitcoin_hashes/0.14.101/source/README.md",
+          "sha256": "b55424493f4bc8689e35111c6f85ce02e03c9b05faea76ab40e7187c328d7cd3",
+          "pathInCrate": "README.md"
+        }
+      ]
+    },
+    "blake3@1.8.7": {
+      "declaredLicense": "CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception",
+      "crateChecksum": "6d9e454fc11f76977dc803893aff6304ed33d6a26efae8696573bea74baa27ae",
+      "vcsRevision": "f3149ec5bb5449af877ba20377a11008ff499fa2",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-00fcc7a934ddbc9ece2a.txt",
+          "source": "https://docs.rs/crate/blake3/1.8.7/source/LICENSE_A2",
+          "sha256": "00fcc7a934ddbc9ece2a7cc063ac788e284b703b1d705ccbba72d462aa97921e",
+          "pathInCrate": "LICENSE_A2"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "block2@0.6.2": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "cdeb9d870516001442e364c5220d3574d2da8dc765554b4a617230d33fa58ef5",
+      "vcsRevision": "b4167b582b2f75f9a1be75495c41b765344fd03c",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-6d7c9e9d7d12c8d3753b.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/MIT.txt",
+          "sha256": "6d7c9e9d7d12c8d3753bdb24417b84819ba4d6c2f025c37948113d86dc81eef9",
+          "transform": "spdx-mit-permission-body"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. For MIT, only the generic SPDX template copyright line is omitted; the permission/disclaimer text is unchanged. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-e325c51f01145af3e11f.txt",
+          "source": "https://docs.rs/crate/block2/0.6.2/source/Cargo.toml",
+          "sha256": "e325c51f01145af3e11f2ee5ce7c47f10697d936c1d90b9ee81a0cf4f700f6d7",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-99073a83cfe6ee090546.txt",
+          "source": "https://docs.rs/crate/block2/0.6.2/source/README.md",
+          "sha256": "99073a83cfe6ee090546e3063f41251f7309fe2a017c4add8494e4ad7990d058",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-7f976f7e9cb2d87df723.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/b4167b582b2f75f9a1be75495c41b765344fd03c/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ]
+    },
+    "block@0.1.6": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "0d8c1fef690941d3e7788d328517591fecc684c084084702d6ff1641e993699a",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-6d7c9e9d7d12c8d3753b.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/MIT.txt",
+          "sha256": "6d7c9e9d7d12c8d3753bdb24417b84819ba4d6c2f025c37948113d86dc81eef9",
+          "transform": "spdx-mit-permission-body"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. For MIT, only the generic SPDX template copyright line is omitted; the permission/disclaimer text is unchanged. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-24df2f33b48c9e756a4f.txt",
+          "source": "https://docs.rs/crate/block/0.1.6/source/Cargo.toml",
+          "sha256": "24df2f33b48c9e756a4f864f882c1ab07a159b6c2b790f45af2e8162499b6719",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-01c56329fa14f48ea1c9.txt",
+          "source": "https://docs.rs/crate/block/0.1.6/source/README.md",
+          "sha256": "01c56329fa14f48ea1c9c7986c3660c41beeff2477f61c2d36bd8e666b9fc562",
+          "pathInCrate": "README.md"
+        }
+      ]
+    },
+    "bollard-stubs@1.53.1-rc.29.3.1": {
+      "declaredLicense": "Apache-2.0",
+      "crateChecksum": "ce412eb6f7096743011dc3cb5c674caeb24ced61d8c498fe07cf7998a4fea889",
+      "vcsRevision": "2094713a48ea9fded7189cef4283f1cbd8ef944a",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-9231b34da0d3ca12b312.txt",
+          "source": "https://raw.githubusercontent.com/fussybeaver/bollard/2094713a48ea9fded7189cef4283f1cbd8ef944a/LICENSE",
+          "sha256": "9231b34da0d3ca12b3122afbdcb91637a5bc91c3195fa74c871b8fe73c821e0e"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "brotli@9.1.1": {
+      "declaredLicense": "BSD-3-Clause AND MIT",
+      "crateChecksum": "627b7cfb0578f0eafce087a90fcd40add1231900b69e4d4de2d456260a4f5d81",
+      "vcsRevision": "a3cb9311ac6874a379c56b62b61885cc09a5c0d1",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-3d180008e36922a4e8da.txt",
+          "source": "https://docs.rs/crate/brotli/9.1.1/source/LICENSE.MIT",
+          "sha256": "3d180008e36922a4e8daec11c34c7af264fed5962d07924aea928c38e8663c94",
+          "pathInCrate": "LICENSE.MIT"
+        },
+        {
+          "license": "BSD-3-Clause",
+          "file": "license-c0c56f26d9c051cac4d2.txt",
+          "source": "https://docs.rs/crate/brotli/9.1.1/source/LICENSE.BSD-3-Clause",
+          "sha256": "c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae",
+          "pathInCrate": "LICENSE.BSD-3-Clause"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "crc-catalog@2.5.0": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "217698eaf96b4a3f0bc4f3662aaa55bdf913cd54d7204591faa790070c6d0853",
+      "vcsRevision": "ed4ad631f22b05055c21a3a4127eb7cf6d75bb62",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-5ef8fcfb6cccec8fcae0.txt",
+          "source": "https://docs.rs/crate/crc-catalog/2.5.0/source/LICENSES/MIT.txt",
+          "sha256": "5ef8fcfb6cccec8fcae043c834099a60c8b7406408db576e026d2b7e67dc5cf5",
+          "pathInCrate": "LICENSES/MIT.txt"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "dispatch2@0.3.1": {
+      "declaredLicense": "Zlib OR Apache-2.0 OR MIT",
+      "crateChecksum": "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38",
+      "vcsRevision": "8852b424193ca41602281b3d7540d7c8ed51e49a",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-f246cf8997c346fdcabb.txt",
+          "source": "https://docs.rs/crate/dispatch2/0.3.1/source/Cargo.toml",
+          "sha256": "f246cf8997c346fdcabb8925ad5be967f397fd8b92630ef7bcc9bdce5d33f775",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-eba8f5b9bc021bfaaf84.txt",
+          "source": "https://docs.rs/crate/dispatch2/0.3.1/source/README.md",
+          "sha256": "eba8f5b9bc021bfaaf84478017baf838a92d56a47e691a8b8989aae1210c05d7",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-7f976f7e9cb2d87df723.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/8852b424193ca41602281b3d7540d7c8ed51e49a/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ]
+    },
+    "dwrote@0.11.5": {
+      "declaredLicense": "MPL-2.0",
+      "crateChecksum": "9e1b35532432acc8b19ceed096e35dfa088d3ea037fe4f3c085f1f97f33b4d02",
+      "vcsRevision": "5bbe910f7156213cdbaca4e1addfe85ea8b421ef",
+      "licenses": [
+        {
+          "license": "MPL-2.0",
+          "file": "license-66a3107d5ad6a058aab7.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/MPL-2.0.txt",
+          "sha256": "66a3107d5ad6a058aab753eaac2047ccb2ed0e39465dd0fe5844da3e300d5172"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-f5f002712c93e06fe939.txt",
+          "source": "https://docs.rs/crate/dwrote/0.11.5/source/Cargo.toml",
+          "sha256": "f5f002712c93e06fe939d826188415c75532d52d1b84520f1530f21052cb1d28",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-d69d75705e2582721cbf.txt",
+          "source": "https://docs.rs/crate/dwrote/0.11.5/source/README.md",
+          "sha256": "d69d75705e2582721cbfb2d3b4b2af052c71679057a0b2ac53a22c03f1755bba",
+          "pathInCrate": "README.md"
+        }
+      ]
+    },
+    "encoding_rs@0.8.42": {
+      "declaredLicense": "(Apache-2.0 OR MIT) AND BSD-3-Clause",
+      "crateChecksum": "8e985e0451871ad22fb8d2b6b076e2028a502a0d3950998c2c5c0a4f9b5d9679",
+      "vcsRevision": "a155adc7271c9e507556d053c95b459186671d2a",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-3fa4ca83dcc9237839b1.txt",
+          "source": "https://docs.rs/crate/encoding_rs/0.8.42/source/LICENSE-MIT",
+          "sha256": "3fa4ca83dcc9237839b1bdeb2e6d16bdfb5ec0c5ce42b24694d8bbf0dcbef72c",
+          "pathInCrate": "LICENSE-MIT"
+        },
+        {
+          "license": "BSD-3-Clause",
+          "file": "license-838118388fe5c2e7f1db.txt",
+          "source": "https://docs.rs/crate/encoding_rs/0.8.42/source/LICENSE-WHATWG",
+          "sha256": "838118388fe5c2e7f1dbbaeed13e1c7f3ebf88be91319c7c1d77c18e987d1a50",
+          "pathInCrate": "LICENSE-WHATWG"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained.",
+      "evidence": [
+        {
+          "file": "evidence-cfc7749b96f63bd31c3c.txt",
+          "source": "https://docs.rs/crate/encoding_rs/0.8.42/source/LICENSE-APACHE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "pathInCrate": "LICENSE-APACHE"
+        },
+        {
+          "file": "evidence-11789f45bb180841cd36.txt",
+          "source": "https://docs.rs/crate/encoding_rs/0.8.42/source/COPYRIGHT",
+          "sha256": "11789f45bb180841cd362a5eee6789c68ddb573a11105e30768c308a6add0190",
+          "pathInCrate": "COPYRIGHT"
+        }
+      ]
+    },
+    "eventsource-stream@0.2.3": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "74fef4569247a5f429d9156b9d0a2599914385dd189c539334c625d8099d90ab",
+      "vcsRevision": "3d46f1c758f9ee4681e9da0427556d24c53f9c01",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-b3a669f64604f19acae6.txt",
+          "source": "https://docs.rs/crate/eventsource-stream/0.2.3/source/Cargo.toml",
+          "sha256": "b3a669f64604f19acae611ec2e7b1abb70560d920d23dab003e5090d023a8d83",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-f17f6cc26f19643dbada.txt",
+          "source": "https://docs.rs/crate/eventsource-stream/0.2.3/source/README.md",
+          "sha256": "f17f6cc26f19643dbadaaad9901d245d4645ef8fbac8266b33105392dd1f8601",
+          "pathInCrate": "README.md"
+        }
+      ]
+    },
+    "gl_generator@0.14.0": {
+      "declaredLicense": "Apache-2.0",
+      "crateChecksum": "1a95dfc23a2b4a9a2f5ab41d194f8bfda3cabec42af4e39f08c339eb2a0c124d",
+      "vcsRevision": "ea503e8d5fb6d73c6030e6191ce738cd3bf3433e",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "evidence-cfc7749b96f63bd31c3c.txt",
+          "source": "https://raw.githubusercontent.com/brendanzab/gl-rs/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "gpu-descriptor-types@0.2.0": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "fdf242682df893b86f33a73828fb09ca4b2d3bb6cc95249707fc684d27484b91",
+      "vcsRevision": "9f2fb9546591322e7b77ee1e79385e01effd85e4",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-54164c8c1352852cce6f.txt",
+          "source": "https://docs.rs/crate/gpu-descriptor-types/0.2.0/source/Cargo.toml",
+          "sha256": "54164c8c1352852cce6f2330030365868815deb9bd717b8d493071790cd72d7b",
+          "pathInCrate": "Cargo.toml"
+        }
+      ]
+    },
+    "gpu-descriptor@0.3.2": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "b89c83349105e3732062a895becfc71a8f921bb71ecbbdd8ff99263e3b53a0ca",
+      "vcsRevision": "bb28b4e55b742e0ea3e7a0968e7ee6287ba0e06a",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-8c72608cd345f059df31.txt",
+          "source": "https://docs.rs/crate/gpu-descriptor/0.3.2/source/Cargo.toml",
+          "sha256": "8c72608cd345f059df314860960da46978779233cedc3553db34c98a4e9fac88",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-23283d5bdd4ef362cc5f.txt",
+          "source": "https://docs.rs/crate/gpu-descriptor/0.3.2/source/README.md",
+          "sha256": "23283d5bdd4ef362cc5f848b03f58e0ad2354d4fbcfc477032c5db2cb0b6d9db",
+          "pathInCrate": "README.md"
+        }
+      ]
+    },
+    "gpui-kit-assets@0.6.6": {
+      "declaredLicense": "Apache-2.0",
+      "crateChecksum": "111d3d03a68454318a193f137419864ccebdc7d3dc0194b0b0b3f818a6bc3d55",
+      "vcsRevision": "9765ae2c9a5eccfa13891248a445991e6f6a09d8",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-d1b0449e5478c574ba4f.txt",
+          "source": "https://raw.githubusercontent.com/longbridge/gpui-kit/9765ae2c9a5eccfa13891248a445991e6f6a09d8/LICENSE-APACHE",
+          "sha256": "d1b0449e5478c574ba4f686c2656df7fe77d66821a61f8b6ed3378a58ed9a811"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained.",
+      "evidence": [
+        {
+          "file": "evidence-b495047bd93a9b069135.txt",
+          "source": "https://docs.rs/crate/gpui-kit-assets/0.6.6/source/LICENSE-LUCIDE",
+          "sha256": "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57",
+          "pathInCrate": "LICENSE-LUCIDE"
+        }
+      ]
+    },
+    "gpui-kit@0.6.6": {
+      "declaredLicense": "Apache-2.0",
+      "crateChecksum": "42732dc20f50926278b2abf7a99d427a7741ab28bca6bfb49685f9ce3a53a1c7",
+      "vcsRevision": "9765ae2c9a5eccfa13891248a445991e6f6a09d8",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-d1b0449e5478c574ba4f.txt",
+          "source": "https://raw.githubusercontent.com/longbridge/gpui-kit/9765ae2c9a5eccfa13891248a445991e6f6a09d8/LICENSE-APACHE",
+          "sha256": "d1b0449e5478c574ba4f686c2656df7fe77d66821a61f8b6ed3378a58ed9a811"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "graphql-introspection-query@0.2.0": {
+      "declaredLicense": "Apache-2.0 OR MIT",
+      "crateChecksum": "7f2a4732cf5140bd6c082434494f785a19cfb566ab07d1382c3671f5812fed6d",
+      "vcsRevision": "aa1209dc1cc83f71cbf29d12872a26a18433e28c",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-56da04ec9e925e3a9539.txt",
+          "source": "https://raw.githubusercontent.com/graphql-rust/graphql-client/aa1209dc1cc83f71cbf29d12872a26a18433e28c/LICENSE-MIT",
+          "sha256": "56da04ec9e925e3a953969482bb504ad86d4bd7453a99b6c48451e8a90273001"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "graphql_client@0.14.0": {
+      "declaredLicense": "Apache-2.0 OR MIT",
+      "crateChecksum": "a50cfdc7f34b7f01909d55c2dcb71d4c13cbcbb4a1605d6c8bd760d654c1144b",
+      "vcsRevision": "3090e0add5504ed31df74c32c2bda203793a890a",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-56da04ec9e925e3a9539.txt",
+          "source": "https://raw.githubusercontent.com/graphql-rust/graphql-client/3090e0add5504ed31df74c32c2bda203793a890a/LICENSE-MIT",
+          "sha256": "56da04ec9e925e3a953969482bb504ad86d4bd7453a99b6c48451e8a90273001"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "graphql_client_codegen@0.14.0": {
+      "declaredLicense": "Apache-2.0 OR MIT",
+      "crateChecksum": "5e27ed0c2cf0c0cc52c6bcf3b45c907f433015e580879d14005386251842fb0a",
+      "vcsRevision": "3090e0add5504ed31df74c32c2bda203793a890a",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-56da04ec9e925e3a9539.txt",
+          "source": "https://raw.githubusercontent.com/graphql-rust/graphql-client/3090e0add5504ed31df74c32c2bda203793a890a/LICENSE-MIT",
+          "sha256": "56da04ec9e925e3a953969482bb504ad86d4bd7453a99b6c48451e8a90273001"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "graphql_query_derive@0.14.0": {
+      "declaredLicense": "Apache-2.0 OR MIT",
+      "crateChecksum": "83febfa838f898cfa73dfaa7a8eb69ff3409021ac06ee94cfb3d622f6eeb1a97",
+      "vcsRevision": "3090e0add5504ed31df74c32c2bda203793a890a",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-56da04ec9e925e3a9539.txt",
+          "source": "https://raw.githubusercontent.com/graphql-rust/graphql-client/3090e0add5504ed31df74c32c2bda203793a890a/LICENSE-MIT",
+          "sha256": "56da04ec9e925e3a953969482bb504ad86d4bd7453a99b6c48451e8a90273001"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "harfrust@0.5.2": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "9da2e5ae821f6e96664977bf974d6d6a2d6682f9ccee23e62ec1d134246845f9",
+      "vcsRevision": "efdae3142ab76a2f1524d72cff9e3dfdc5afd7ca",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-3a7c3f0b887abb7c638f.txt",
+          "source": "https://raw.githubusercontent.com/harfbuzz/harfrust/efdae3142ab76a2f1524d72cff9e3dfdc5afd7ca/LICENSE",
+          "sha256": "3a7c3f0b887abb7c638faf022d29257418458614c6724b120ceeffb279f9c7d2"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "hexf-parse@0.2.1": {
+      "declaredLicense": "CC0-1.0",
+      "crateChecksum": "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df",
+      "vcsRevision": "4225763d744183d720f575ae96d04161b4d08ea0",
+      "licenses": [
+        {
+          "license": "CC0-1.0",
+          "file": "license-a2010f343487d3f7618a.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/CC0-1.0.txt",
+          "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-dd7274968556f3f3309d.txt",
+          "source": "https://docs.rs/crate/hexf-parse/0.2.1/source/Cargo.toml",
+          "sha256": "dd7274968556f3f3309df5615d94437ec4e4823777cc440f91177b2170cbe2a7",
+          "pathInCrate": "Cargo.toml"
+        }
+      ]
+    },
+    "jni-macros@0.22.4": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "a00109accc170f0bdb141fed3e393c565b6f5e072365c3bd58f5b062591560a3",
+      "vcsRevision": "33045a124105c939d1e2cbdcb5a39e5d868ffa03",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-fea1d5bf3dd71605ce5d.txt",
+          "source": "https://raw.githubusercontent.com/jni-rs/jni-rs/33045a124105c939d1e2cbdcb5a39e5d868ffa03/LICENSE-MIT",
+          "sha256": "fea1d5bf3dd71605ce5d7d2ff695c1837e914c77195e523a86b5391716477960"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "jni-sys-macros@0.4.1": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "38c0b942f458fe50cdac086d2f946512305e5631e720728f2a61aabcd47a6264",
+      "vcsRevision": "64d77b7a5f119d7b55b4e2c169a4668067ff59e6",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-1d85bd754b04ceec93e9.txt",
+          "source": "https://raw.githubusercontent.com/jni-rs/jni-sys/64d77b7a5f119d7b55b4e2c169a4668067ff59e6/LICENSE-MIT",
+          "sha256": "1d85bd754b04ceec93e98e890edd1fa3c6a22e81bcb32135806beeccefa51cd1"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "jni@0.22.4": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "5efd9a482cf3a427f00d6b35f14332adc7902ce91efb778580e180ff90fa3498",
+      "vcsRevision": "5ae9458a4ec44c5318f37ddc7569c1d4ae8a69e7",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-fea1d5bf3dd71605ce5d.txt",
+          "source": "https://raw.githubusercontent.com/jni-rs/jni-rs/5ae9458a4ec44c5318f37ddc7569c1d4ae8a69e7/LICENSE-MIT",
+          "sha256": "fea1d5bf3dd71605ce5d7d2ff695c1837e914c77195e523a86b5391716477960"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "keyed_priority_queue@0.4.2": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "4ee7893dab2e44ae5f9d0173f26ff4aa327c10b01b06a72b52dd9405b628640d",
+      "vcsRevision": "2656a970a1ff174010bb8ebfb676f922d2d59599",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-824f627ec8266fa82057.txt",
+          "source": "https://raw.githubusercontent.com/AngelicosPhosphoros/keyed_priority_queue/2656a970a1ff174010bb8ebfb676f922d2d59599/LICENSE.md",
+          "sha256": "824f627ec8266fa82057490c3d0982c9b327dca9de1c3c77ebb0128a13621a13"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "khronos_api@3.1.0": {
+      "declaredLicense": "Apache-2.0",
+      "crateChecksum": "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc",
+      "vcsRevision": "f150967b1c44ae888e6676f93f639ebc82771bdc",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "evidence-cfc7749b96f63bd31c3c.txt",
+          "source": "https://raw.githubusercontent.com/brendanzab/gl-rs/f150967b1c44ae888e6676f93f639ebc82771bdc/LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "leak@0.1.2": {
+      "declaredLicense": "Apache-2.0 OR MIT",
+      "crateChecksum": "bd100e01f1154f2908dfa7d02219aeab25d0b9c7fa955164192e3245255a0c73",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-8800b6172da0ce015fdc.txt",
+          "source": "https://docs.rs/crate/leak/0.1.2/source/Cargo.toml",
+          "sha256": "8800b6172da0ce015fdc69cbe3fdc48c22f4223babe254e207255c681c83e8dd",
+          "pathInCrate": "Cargo.toml"
+        }
+      ]
+    },
+    "leaky-cow@0.1.1": {
+      "declaredLicense": "MIT / Apache-2.0",
+      "crateChecksum": "40a8225d44241fd324a8af2806ba635fc7c8a7e9a7de4d5cf3ef54e71f5926fc",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-cd5e595a4b4eede02b0c.txt",
+          "source": "https://docs.rs/crate/leaky-cow/0.1.1/source/Cargo.toml",
+          "sha256": "cd5e595a4b4eede02b0c1b96bb86eb3860bf660fafd7ca6eb0f92b96d9e733f5",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-de022877415d090896cc.txt",
+          "source": "https://docs.rs/crate/leaky-cow/0.1.1/source/README.md",
+          "sha256": "de022877415d090896cc7050408bdd2973fd34816f654327b139e32b9e6ddf44",
+          "pathInCrate": "README.md"
+        }
+      ]
+    },
+    "lebe@0.5.3": {
+      "declaredLicense": "BSD-3-Clause",
+      "crateChecksum": "7a79a3332a6609480d7d0c9eab957bca6b455b91bb84e66d19f5ff66294b85b8",
+      "vcsRevision": "e2b5de9247fae60813646870d76295e9df6d02b8",
+      "licenses": [
+        {
+          "license": "BSD-3-Clause",
+          "file": "license-f1b2855ae21da69e0a02.txt",
+          "source": "https://docs.rs/crate/lebe/0.5.3/source/LICENSE-BSD-3-Clause",
+          "sha256": "f1b2855ae21da69e0a02499e13f57f3be92db7abbbffe9a89f33e04e9e21ec81",
+          "pathInCrate": "LICENSE-BSD-3-Clause"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "lyon@1.0.19": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "bd0578bdecb7d6d88987b8b2b1e3a4e2f81df9d0ece1078623324a567904e7b7",
+      "vcsRevision": "56219c95c658d4f39de7b190d98e57d5773ba241",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-80f275e90d799911ed38.txt",
+          "source": "https://raw.githubusercontent.com/nical/lyon/56219c95c658d4f39de7b190d98e57d5773ba241/LICENSE-MIT",
+          "sha256": "80f275e90d799911ed3830a7f242a2ef5a4ade2092fe0aa07bfb2d2cf2f2b95e"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "lyon_algorithms@1.0.22": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "f3a6b9d4e8b48acd531fbf1241ad9b270df6e60b6b92bdea1469f4f40899d805",
+      "vcsRevision": "db98d26a1a90076a7a894262dcb51117eef643c8",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-80f275e90d799911ed38.txt",
+          "source": "https://raw.githubusercontent.com/nical/lyon/db98d26a1a90076a7a894262dcb51117eef643c8/LICENSE-MIT",
+          "sha256": "80f275e90d799911ed3830a7f242a2ef5a4ade2092fe0aa07bfb2d2cf2f2b95e"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "lyon_geom@1.0.20": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "d82dd26aa4dc0b5b70b9115de59824842bcb43cf4a28e1b1e6d0ad148c93f93e",
+      "vcsRevision": "db98d26a1a90076a7a894262dcb51117eef643c8",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-80f275e90d799911ed38.txt",
+          "source": "https://raw.githubusercontent.com/nical/lyon/db98d26a1a90076a7a894262dcb51117eef643c8/LICENSE-MIT",
+          "sha256": "80f275e90d799911ed3830a7f242a2ef5a4ade2092fe0aa07bfb2d2cf2f2b95e"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "lyon_path@1.0.19": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "5c463f9c428b7fc5ec885dcd39ce4aa61e29111d0e33483f6f98c74e89d8621e",
+      "vcsRevision": "56219c95c658d4f39de7b190d98e57d5773ba241",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-80f275e90d799911ed38.txt",
+          "source": "https://raw.githubusercontent.com/nical/lyon/56219c95c658d4f39de7b190d98e57d5773ba241/LICENSE-MIT",
+          "sha256": "80f275e90d799911ed3830a7f242a2ef5a4ade2092fe0aa07bfb2d2cf2f2b95e"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "lyon_tessellation@1.0.23": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "fd4872650e70dc907dd4f7ebc449d7d657a0d2658e423b2e724970870bbbf75b",
+      "vcsRevision": "db98d26a1a90076a7a894262dcb51117eef643c8",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-80f275e90d799911ed38.txt",
+          "source": "https://raw.githubusercontent.com/nical/lyon/db98d26a1a90076a7a894262dcb51117eef643c8/LICENSE-MIT",
+          "sha256": "80f275e90d799911ed3830a7f242a2ef5a4ade2092fe0aa07bfb2d2cf2f2b95e"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "mac-notification-sys@0.6.15": {
+      "declaredLicense": "MIT/Apache-2.0",
+      "crateChecksum": "fd604973958ddcc11b561193c0fb96ba146506ef2f231ef2e7c35fd2cbc9beca",
+      "vcsRevision": "deb559683962d314a7693478476bf8d052efa84e",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-1299b4d9d15e9d67e4ac.txt",
+          "source": "https://raw.githubusercontent.com/h4llow3En/mac-notification-sys/deb559683962d314a7693478476bf8d052efa84e/LICENSE-MIT",
+          "sha256": "1299b4d9d15e9d67e4ac0e7d47ae9404887ca3cf0764aadeec7588d5a6e8e0cc"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "mac@0.1.1": {
+      "declaredLicense": "MIT/Apache-2.0",
+      "crateChecksum": "c41e0c4fef86961ac6d6f8a82609f55f31b05e4fce149ac5710e439df7619ba4",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-6d465c5e5a4b3e197049.txt",
+          "source": "https://docs.rs/crate/mac/0.1.1/source/Cargo.toml",
+          "sha256": "6d465c5e5a4b3e197049e9fb7393b2f996c1c654e6ded700afce046fac2f7969",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-8edb7a912d295acf1e1c.txt",
+          "source": "https://docs.rs/crate/mac/0.1.1/source/README.md",
+          "sha256": "8edb7a912d295acf1e1cfeafdd19a6813a63b301c7bbfda3c67f65509bd8d8cc",
+          "pathInCrate": "README.md"
+        }
+      ]
+    },
+    "malloc_buf@0.0.6": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "62bb907fe88d54d8d9ce32a3cceab4218ed2f6b7d35617cafe9adf84e43919cb",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-6d7c9e9d7d12c8d3753b.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/MIT.txt",
+          "sha256": "6d7c9e9d7d12c8d3753bdb24417b84819ba4d6c2f025c37948113d86dc81eef9",
+          "transform": "spdx-mit-permission-body"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. For MIT, only the generic SPDX template copyright line is omitted; the permission/disclaimer text is unchanged. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-d87624d9d117489bd49d.txt",
+          "source": "https://docs.rs/crate/malloc_buf/0.0.6/source/Cargo.toml",
+          "sha256": "d87624d9d117489bd49dbaeb70077a0721e00ac2a76eb371faec818a92da5661",
+          "pathInCrate": "Cargo.toml"
+        }
+      ]
+    },
+    "mongodb-internal-macros@3.9.1": {
+      "declaredLicense": "Apache-2.0",
+      "crateChecksum": "504024bbb83ab1bf1512007f7288b54d3a6343043f3f619c26a153346773598d",
+      "vcsRevision": "16bc932cf4d8a161a49e8161b2158228a6ca8956",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-0d6fc0c55c9aa0369217.txt",
+          "source": "https://raw.githubusercontent.com/mongodb/mongo-rust-driver/16bc932cf4d8a161a49e8161b2158228a6ca8956/LICENSE",
+          "sha256": "0d6fc0c55c9aa03692171f5373ba6d878aca44a77438ab4fafd3e63f43b816ca"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "mongodb@3.9.1": {
+      "declaredLicense": "Apache-2.0",
+      "crateChecksum": "af84443ae9878f59a6818686f339064479f42cdf293c4c637d8fc9c0a8c5eed6",
+      "vcsRevision": "16bc932cf4d8a161a49e8161b2158228a6ca8956",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-0d6fc0c55c9aa0369217.txt",
+          "source": "https://raw.githubusercontent.com/mongodb/mongo-rust-driver/16bc932cf4d8a161a49e8161b2158228a6ca8956/LICENSE",
+          "sha256": "0d6fc0c55c9aa03692171f5373ba6d878aca44a77438ab4fafd3e63f43b816ca"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "mysql-common-derive@0.32.2": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "a4db8a44120571277accfaa3f3d91e7d3989d601d817c2fc01a9391b86135666",
+      "vcsRevision": "5d595826c93fd614b713cb7888a2055206ce40e4",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-c6ffbb829ec778804591.txt",
+          "source": "https://raw.githubusercontent.com/blackbeam/rust_mysql_common/5d595826c93fd614b713cb7888a2055206ce40e4/LICENSE-MIT",
+          "sha256": "c6ffbb829ec7788045912746ad75ffc963f2da2f2596c7e558b8c8292add4950"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "napi-build@2.6.0": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "b899b545d3aa6dca985939059f258c5488d34e4ecf39c274e20009748f4b846d",
+      "vcsRevision": "a94cef33f62e74682963dd085e283f52dcec2600",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-3f1ce66533302df3a32e.txt",
+          "source": "https://raw.githubusercontent.com/napi-rs/napi-rs/a94cef33f62e74682963dd085e283f52dcec2600/LICENSE",
+          "sha256": "3f1ce66533302df3a32edbfdfc0b78f0dd34659e4c1f5817162e5ea3c2297215"
+        }
+      ],
+      "reason": "Verbatim license omitted from the published crate; archived from its exact .cargo_vcs_info.json upstream revision."
+    },
+    "napi-derive-backend@7.0.0": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "d1fe28c64d8fc12e69f9b817d0febdbe7914555760f1e353106281b8ff99cc90",
+      "vcsRevision": "f89400d99b136c5c8a27818654b91256832b5bd6",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-3f1ce66533302df3a32e.txt",
+          "source": "https://raw.githubusercontent.com/napi-rs/napi-rs/f89400d99b136c5c8a27818654b91256832b5bd6/LICENSE",
+          "sha256": "3f1ce66533302df3a32edbfdfc0b78f0dd34659e4c1f5817162e5ea3c2297215"
+        }
+      ],
+      "reason": "Verbatim license omitted from the published crate; archived from its exact .cargo_vcs_info.json upstream revision."
+    },
+    "napi-derive@3.7.0": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "d32eb00f92f84cf462fc328f49082b29c2a7d2eebeb1d447d19c1f9fdd9f89ee",
+      "vcsRevision": "f89400d99b136c5c8a27818654b91256832b5bd6",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-3f1ce66533302df3a32e.txt",
+          "source": "https://raw.githubusercontent.com/napi-rs/napi-rs/f89400d99b136c5c8a27818654b91256832b5bd6/LICENSE",
+          "sha256": "3f1ce66533302df3a32edbfdfc0b78f0dd34659e4c1f5817162e5ea3c2297215"
+        }
+      ],
+      "reason": "Verbatim license omitted from the published crate; archived from its exact .cargo_vcs_info.json upstream revision."
+    },
+    "napi-sys@3.4.1": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "d153beb7d5c973f4b9395be8a83054a28968b61188f1dd1a2cc2321af22daea2",
+      "vcsRevision": "d9cb526c15e63ba30e06b4d169068c9854180595",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-3f1ce66533302df3a32e.txt",
+          "source": "https://raw.githubusercontent.com/napi-rs/napi-rs/d9cb526c15e63ba30e06b4d169068c9854180595/LICENSE",
+          "sha256": "3f1ce66533302df3a32edbfdfc0b78f0dd34659e4c1f5817162e5ea3c2297215"
+        }
+      ],
+      "reason": "Verbatim license omitted from the published crate; archived from its exact .cargo_vcs_info.json upstream revision."
+    },
+    "napi@3.16.1": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "907ff7366fb7182e28edd0f08ef8ac5d6b13b8d65a3c0b3a10bf3ac092437d6b",
+      "vcsRevision": "417375ad5ef1d8cb4c49edf13d2cc6c0204bb5b1",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-3f1ce66533302df3a32e.txt",
+          "source": "https://raw.githubusercontent.com/napi-rs/napi-rs/417375ad5ef1d8cb4c49edf13d2cc6c0204bb5b1/LICENSE",
+          "sha256": "3f1ce66533302df3a32edbfdfc0b78f0dd34659e4c1f5817162e5ea3c2297215"
+        }
+      ],
+      "reason": "Verbatim license omitted from the published crate; archived from its exact .cargo_vcs_info.json upstream revision."
+    },
+    "ndk-context@0.1.1": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b",
+      "vcsRevision": "10f2ba388fca20f7349996ebae26ccda7a6fda5c",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-508a77d2e7b51d98adee.txt",
+          "source": "https://raw.githubusercontent.com/rust-windowing/android-ndk-rs/10f2ba388fca20f7349996ebae26ccda7a6fda5c/LICENSE-MIT",
+          "sha256": "508a77d2e7b51d98adeed32648ad124b7b30241a8e70b2e72c99f92d8e5874d1"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "ndk-sys@0.6.0+11769913": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "ee6cda3051665f1fb8d9e08fc35c96d5a244fb1be711a03b71118828afc9a873",
+      "vcsRevision": "49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-508a77d2e7b51d98adee.txt",
+          "source": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/LICENSE-MIT",
+          "sha256": "508a77d2e7b51d98adeed32648ad124b7b30241a8e70b2e72c99f92d8e5874d1"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "notify@7.0.0": {
+      "declaredLicense": "CC0-1.0",
+      "crateChecksum": "c533b4c39709f9ba5005d8002048266593c1cfaf3c5f0739d5b8ab0c6c504009",
+      "vcsRevision": "a18addef1d4dff6f9a54d9234275d2764dffe72a",
+      "licenses": [
+        {
+          "license": "CC0-1.0",
+          "file": "license-e0456cbab4f7b5e7203e.txt",
+          "source": "https://docs.rs/crate/notify/7.0.0/source/LICENSE-CC0",
+          "sha256": "e0456cbab4f7b5e7203e678faff37eadbdfef02e822db3b7a52a1dd9d3dc514a",
+          "pathInCrate": "LICENSE-CC0"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "objc-sys@0.3.5": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "cdb91bdd390c7ce1a8607f35f3ca7151b65afc0ff5ff3b34fa350f7d7c7e4310",
+      "vcsRevision": "4fc083f1c6d6784577e38b0ee8dbd344481e2fd2",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-e353f37b12aefbb9f9b2.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/4fc083f1c6d6784577e38b0ee8dbd344481e2fd2/LICENSE.txt",
+          "sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "objc2-app-kit@0.2.2": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "e4e89ad9e3d7d297152b17d39ed92cd50ca8063a89a9fa569046d41568891eff",
+      "vcsRevision": "e282618be4c3a3b9542957e0c8540e9588472ce8",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-e353f37b12aefbb9f9b2.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/e282618be4c3a3b9542957e0c8540e9588472ce8/LICENSE.txt",
+          "sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "objc2-app-kit@0.3.2": {
+      "declaredLicense": "Zlib OR Apache-2.0 OR MIT",
+      "crateChecksum": "d49e936b501e5c5bf01fda3a9452ff86dc3ea98ad5f283e1455153142d97518c",
+      "vcsRevision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-11a761a52774ed9738fb.txt",
+          "source": "https://docs.rs/crate/objc2-app-kit/0.3.2/source/Cargo.toml",
+          "sha256": "11a761a52774ed9738fb854ba3eecb48fa360b6ce43dddc00c338346853717b5",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-da145d375986071fdf83.txt",
+          "source": "https://docs.rs/crate/objc2-app-kit/0.3.2/source/README.md",
+          "sha256": "da145d375986071fdf836604db8c6e99438bb484ad51b8775455635e36fc2ce3",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-7f976f7e9cb2d87df723.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ]
+    },
+    "objc2-cloud-kit@0.3.2": {
+      "declaredLicense": "Zlib OR Apache-2.0 OR MIT",
+      "crateChecksum": "73ad74d880bb43877038da939b7427bba67e9dd42004a18b809ba7d87cee241c",
+      "vcsRevision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-64e059344995e74ca1d2.txt",
+          "source": "https://docs.rs/crate/objc2-cloud-kit/0.3.2/source/Cargo.toml",
+          "sha256": "64e059344995e74ca1d22cee17edd17dde101cc3e37eb4bd7c7967a54f54a6f5",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-bf35fcf69351a2b3e027.txt",
+          "source": "https://docs.rs/crate/objc2-cloud-kit/0.3.2/source/README.md",
+          "sha256": "bf35fcf69351a2b3e027b326a898eda139a9d6801061b29713d138b0c34e452d",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-7f976f7e9cb2d87df723.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ]
+    },
+    "objc2-core-data@0.3.2": {
+      "declaredLicense": "Zlib OR Apache-2.0 OR MIT",
+      "crateChecksum": "0b402a653efbb5e82ce4df10683b6b28027616a2715e90009947d50b8dd298fa",
+      "vcsRevision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-cac3cd4dd382310e930b.txt",
+          "source": "https://docs.rs/crate/objc2-core-data/0.3.2/source/Cargo.toml",
+          "sha256": "cac3cd4dd382310e930b39f922ea650c83688bbb65a680b5b8fa76d9e2db674c",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-b8530041248261c908b3.txt",
+          "source": "https://docs.rs/crate/objc2-core-data/0.3.2/source/README.md",
+          "sha256": "b8530041248261c908b3261bfeeaa2df920455da5e4189803a425055fa35b5e8",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-7f976f7e9cb2d87df723.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ]
+    },
+    "objc2-core-foundation@0.3.2": {
+      "declaredLicense": "Zlib OR Apache-2.0 OR MIT",
+      "crateChecksum": "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536",
+      "vcsRevision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-c0f54260fa1396923f2d.txt",
+          "source": "https://docs.rs/crate/objc2-core-foundation/0.3.2/source/Cargo.toml",
+          "sha256": "c0f54260fa1396923f2db4edf1e2d54e8ab09dea214af4b8ce37aaefa7185e60",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-c02a9b113d8855df956d.txt",
+          "source": "https://docs.rs/crate/objc2-core-foundation/0.3.2/source/README.md",
+          "sha256": "c02a9b113d8855df956d9d854321c5bfef3c2921131070dc0c64870053b42459",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-7f976f7e9cb2d87df723.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ]
+    },
+    "objc2-core-graphics@0.3.2": {
+      "declaredLicense": "Zlib OR Apache-2.0 OR MIT",
+      "crateChecksum": "e022c9d066895efa1345f8e33e584b9f958da2fd4cd116792e15e07e4720a807",
+      "vcsRevision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-9756d343dc626faf07cd.txt",
+          "source": "https://docs.rs/crate/objc2-core-graphics/0.3.2/source/Cargo.toml",
+          "sha256": "9756d343dc626faf07cdef1cdef29a2b3efed0f6a2fc44ae35fd828e2f482dc1",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-6361def881598a3b6d19.txt",
+          "source": "https://docs.rs/crate/objc2-core-graphics/0.3.2/source/README.md",
+          "sha256": "6361def881598a3b6d19e7e0d45d77aa5f8c87980db0c36d895cc33bb83f10bf",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-7f976f7e9cb2d87df723.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ]
+    },
+    "objc2-core-image@0.3.2": {
+      "declaredLicense": "Zlib OR Apache-2.0 OR MIT",
+      "crateChecksum": "e5d563b38d2b97209f8e861173de434bd0214cf020e3423a52624cd1d989f006",
+      "vcsRevision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-11e6de07b724221273af.txt",
+          "source": "https://docs.rs/crate/objc2-core-image/0.3.2/source/Cargo.toml",
+          "sha256": "11e6de07b724221273af1609c9833d06c9c7623354ee7f5821da0846f0b988b8",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-0aeee0313c19d398e809.txt",
+          "source": "https://docs.rs/crate/objc2-core-image/0.3.2/source/README.md",
+          "sha256": "0aeee0313c19d398e809873dd365d3a02fbf2ef2074d5d7e5fae3b06ff2cdda2",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-7f976f7e9cb2d87df723.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ]
+    },
+    "objc2-core-location@0.3.2": {
+      "declaredLicense": "Zlib OR Apache-2.0 OR MIT",
+      "crateChecksum": "ca347214e24bc973fc025fd0d36ebb179ff30536ed1f80252706db19ee452009",
+      "vcsRevision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-2fc0be2a0e3174364237.txt",
+          "source": "https://docs.rs/crate/objc2-core-location/0.3.2/source/Cargo.toml",
+          "sha256": "2fc0be2a0e31743642374152685fd7cbb3416568ffe50abe28da4239b151d5c4",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-3f518095b802873d6a85.txt",
+          "source": "https://docs.rs/crate/objc2-core-location/0.3.2/source/README.md",
+          "sha256": "3f518095b802873d6a85c5fb7d6ebd82e861d188f349f9139d3ba9704c594358",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-7f976f7e9cb2d87df723.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ]
+    },
+    "objc2-core-media@0.3.2": {
+      "declaredLicense": "Zlib OR Apache-2.0 OR MIT",
+      "crateChecksum": "05ec576860167a15dd9fce7fbee7512beb4e31f532159d3482d1f9c6caedf31d",
+      "vcsRevision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-6fc9ece7e51d21c28842.txt",
+          "source": "https://docs.rs/crate/objc2-core-media/0.3.2/source/Cargo.toml",
+          "sha256": "6fc9ece7e51d21c2884220bf7f53f88985e080286c4a6202c624eff05d0c56f5",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-ac16063358afa8c2c6ba.txt",
+          "source": "https://docs.rs/crate/objc2-core-media/0.3.2/source/README.md",
+          "sha256": "ac16063358afa8c2c6ba7c9e985ed2f53f705714ceacde55c3f3c045cce94254",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-7f976f7e9cb2d87df723.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ]
+    },
+    "objc2-core-text@0.3.2": {
+      "declaredLicense": "Zlib OR Apache-2.0 OR MIT",
+      "crateChecksum": "0cde0dfb48d25d2b4862161a4d5fcc0e3c24367869ad306b0c9ec0073bfed92d",
+      "vcsRevision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-ee9c5dd4f36414afdf97.txt",
+          "source": "https://docs.rs/crate/objc2-core-text/0.3.2/source/Cargo.toml",
+          "sha256": "ee9c5dd4f36414afdf971820df60d8b4ea4f0767f93c6ea7fdbcf71e6cbab250",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-055ed475047a90839828.txt",
+          "source": "https://docs.rs/crate/objc2-core-text/0.3.2/source/README.md",
+          "sha256": "055ed475047a908398289da206178ad9c0e76224b6f55dbea3613227b1c070bf",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-7f976f7e9cb2d87df723.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ]
+    },
+    "objc2-core-video@0.3.2": {
+      "declaredLicense": "Zlib OR Apache-2.0 OR MIT",
+      "crateChecksum": "d425caf1df73233f29fd8a5c3e5edbc30d2d4307870f802d18f00d83dc5141a6",
+      "vcsRevision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-9d19223267d245d2258a.txt",
+          "source": "https://docs.rs/crate/objc2-core-video/0.3.2/source/Cargo.toml",
+          "sha256": "9d19223267d245d2258aa63244090345c16e0099e6e828841abd72e2e1e4d880",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-0c1eb9e88be7d15cd7af.txt",
+          "source": "https://docs.rs/crate/objc2-core-video/0.3.2/source/README.md",
+          "sha256": "0c1eb9e88be7d15cd7afd41621a811ac03acaadaa6fbf7cf88d0f4715cbe2b74",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-7f976f7e9cb2d87df723.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ]
+    },
+    "objc2-encode@4.1.0": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "ef25abbcd74fb2609453eb695bd2f860d389e457f67dc17cafc8b8cbc89d0c33",
+      "vcsRevision": "8d214f5477365ffcbcbb7de058c86ed9a518efb7",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-6d7c9e9d7d12c8d3753b.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/MIT.txt",
+          "sha256": "6d7c9e9d7d12c8d3753bdb24417b84819ba4d6c2f025c37948113d86dc81eef9",
+          "transform": "spdx-mit-permission-body"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. For MIT, only the generic SPDX template copyright line is omitted; the permission/disclaimer text is unchanged. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-cf9a8cc812710344d7fe.txt",
+          "source": "https://docs.rs/crate/objc2-encode/4.1.0/source/Cargo.toml",
+          "sha256": "cf9a8cc812710344d7fe618a5e615530baeeceae5c2826b9d5bb557dc419f159",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-e980a74b88a62193f790.txt",
+          "source": "https://docs.rs/crate/objc2-encode/4.1.0/source/README.md",
+          "sha256": "e980a74b88a62193f7908df3c27e7915f38559870f5e033ddb77fbed65e024a5",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-7f976f7e9cb2d87df723.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/8d214f5477365ffcbcbb7de058c86ed9a518efb7/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ]
+    },
+    "objc2-foundation@0.2.2": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "0ee638a5da3799329310ad4cfa62fbf045d5f56e3ef5ba4149e7452dcf89d5a8",
+      "vcsRevision": "e282618be4c3a3b9542957e0c8540e9588472ce8",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-e353f37b12aefbb9f9b2.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/e282618be4c3a3b9542957e0c8540e9588472ce8/LICENSE.txt",
+          "sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "objc2-foundation@0.3.2": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "e3e0adef53c21f888deb4fa59fc59f7eb17404926ee8a6f59f5df0fd7f9f3272",
+      "vcsRevision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-6d7c9e9d7d12c8d3753b.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/MIT.txt",
+          "sha256": "6d7c9e9d7d12c8d3753bdb24417b84819ba4d6c2f025c37948113d86dc81eef9",
+          "transform": "spdx-mit-permission-body"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. For MIT, only the generic SPDX template copyright line is omitted; the permission/disclaimer text is unchanged. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-eabbe24e325c7b474c6f.txt",
+          "source": "https://docs.rs/crate/objc2-foundation/0.3.2/source/Cargo.toml",
+          "sha256": "eabbe24e325c7b474c6f5de2e955f4f942ecd385608e4b6609b89a1f68ef39cc",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-50be6f8e1214bd644cdc.txt",
+          "source": "https://docs.rs/crate/objc2-foundation/0.3.2/source/README.md",
+          "sha256": "50be6f8e1214bd644cdc32c9610278c004205cdddbe2aaed7887d8bad48dd6c5",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-7f976f7e9cb2d87df723.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ]
+    },
+    "objc2-io-kit@0.3.2": {
+      "declaredLicense": "Zlib OR Apache-2.0 OR MIT",
+      "crateChecksum": "33fafba39597d6dc1fb709123dfa8289d39406734be322956a69f0931c73bb15",
+      "vcsRevision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-116aba27ef95c53958cf.txt",
+          "source": "https://docs.rs/crate/objc2-io-kit/0.3.2/source/Cargo.toml",
+          "sha256": "116aba27ef95c53958cf8373de72ee6e939c5042d992d3c3c9936c6dd3e51071",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-64c30d7808e763add513.txt",
+          "source": "https://docs.rs/crate/objc2-io-kit/0.3.2/source/README.md",
+          "sha256": "64c30d7808e763add513e0ee114c695bc58624d7ab987c228d19ee242a4c9f3b",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-7f976f7e9cb2d87df723.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ]
+    },
+    "objc2-metal@0.3.2": {
+      "declaredLicense": "Zlib OR Apache-2.0 OR MIT",
+      "crateChecksum": "a0125f776a10d00af4152d74616409f0d4a2053a6f57fa5b7d6aa2854ac04794",
+      "vcsRevision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-8ea9d2d00d2e462d2f1e.txt",
+          "source": "https://docs.rs/crate/objc2-metal/0.3.2/source/Cargo.toml",
+          "sha256": "8ea9d2d00d2e462d2f1e0a5bb242ccc8753c2bcd3441edd1d2cf05cba69092ff",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-d55a05ffe37725dade51.txt",
+          "source": "https://docs.rs/crate/objc2-metal/0.3.2/source/README.md",
+          "sha256": "d55a05ffe37725dade5124e86a457b5d3c83bbdada1868233ede24a3dec8dbd9",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-7f976f7e9cb2d87df723.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ]
+    },
+    "objc2-open-directory@0.3.2": {
+      "declaredLicense": "Zlib OR Apache-2.0 OR MIT",
+      "crateChecksum": "bb82bed227edf5201dfedf072bba4015a33d3d4a98519837295a90f0a23f676d",
+      "vcsRevision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-781b09931504d2686f54.txt",
+          "source": "https://docs.rs/crate/objc2-open-directory/0.3.2/source/Cargo.toml",
+          "sha256": "781b09931504d2686f543400f4941a8e6a09df330e3e99f1e1c375e00e947c5b",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-2cef613ac1602bf07cb9.txt",
+          "source": "https://docs.rs/crate/objc2-open-directory/0.3.2/source/README.md",
+          "sha256": "2cef613ac1602bf07cb98bcc1a31c92b4c4fbab4c769c0ac6b294538dcaf8536",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-7f976f7e9cb2d87df723.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ]
+    },
+    "objc2-quartz-core@0.3.2": {
+      "declaredLicense": "Zlib OR Apache-2.0 OR MIT",
+      "crateChecksum": "96c1358452b371bf9f104e21ec536d37a650eb10f7ee379fff67d2e08d537f1f",
+      "vcsRevision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-7af27150fadd5ac0b3e8.txt",
+          "source": "https://docs.rs/crate/objc2-quartz-core/0.3.2/source/Cargo.toml",
+          "sha256": "7af27150fadd5ac0b3e86ec173b4e3e2b0dd42d614de963a0c9f0bf55cc7b4d9",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-655e91cca9d73db675f3.txt",
+          "source": "https://docs.rs/crate/objc2-quartz-core/0.3.2/source/README.md",
+          "sha256": "655e91cca9d73db675f3ceb77d74c77a2261425c9b250a904f732704abcd4650",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-7f976f7e9cb2d87df723.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ]
+    },
+    "objc2-screen-capture-kit@0.3.2": {
+      "declaredLicense": "Zlib OR Apache-2.0 OR MIT",
+      "crateChecksum": "74b7c5390f477482f001bc354d6571a70db7e4f8d5288e860c45521fbce11394",
+      "vcsRevision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-41ec980d3c2b4d68e7ca.txt",
+          "source": "https://docs.rs/crate/objc2-screen-capture-kit/0.3.2/source/Cargo.toml",
+          "sha256": "41ec980d3c2b4d68e7cab2cad31c54131610be26dff48ced2e62aa4a8201bc9e",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-7c5d495d3f42d8535758.txt",
+          "source": "https://docs.rs/crate/objc2-screen-capture-kit/0.3.2/source/README.md",
+          "sha256": "7c5d495d3f42d853575876baa814a9a7f030436e9584edcabffaf6090cd25c45",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-7f976f7e9cb2d87df723.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ]
+    },
+    "objc2-system-configuration@0.3.2": {
+      "declaredLicense": "Zlib OR Apache-2.0 OR MIT",
+      "crateChecksum": "7216bd11cbda54ccabcab84d523dc93b858ec75ecfb3a7d89513fa22464da396",
+      "vcsRevision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-e4084b8f1faf137af715.txt",
+          "source": "https://docs.rs/crate/objc2-system-configuration/0.3.2/source/Cargo.toml",
+          "sha256": "e4084b8f1faf137af7157ac87c9c0d3521753002ccf4dbfa6cdcf41432bea56b",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-4916e3fca1c9674d2235.txt",
+          "source": "https://docs.rs/crate/objc2-system-configuration/0.3.2/source/README.md",
+          "sha256": "4916e3fca1c9674d2235eb612782365a95bfb2ec511df5cb84c3e2edc6294fd9",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-7f976f7e9cb2d87df723.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ]
+    },
+    "objc2-user-notifications@0.3.2": {
+      "declaredLicense": "Zlib OR Apache-2.0 OR MIT",
+      "crateChecksum": "9df9128cbbfef73cda168416ccf7f837b62737d748333bfe9ab71c245d76613e",
+      "vcsRevision": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-77124f44646539c01cbf.txt",
+          "source": "https://docs.rs/crate/objc2-user-notifications/0.3.2/source/Cargo.toml",
+          "sha256": "77124f44646539c01cbf5e523fe51b3fef7892c114f06ee9b98df9cd88cf5236",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-b45e89caebbf87207861.txt",
+          "source": "https://docs.rs/crate/objc2-user-notifications/0.3.2/source/README.md",
+          "sha256": "b45e89caebbf8720786100a043310ea7bdc7ffa28b463ab2081ce518d9ca57a9",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-7f976f7e9cb2d87df723.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ]
+    },
+    "objc2@0.5.3": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "19d5490aaf8f1d7cf7688dfa9b0ce07900e168852c45cd2c03f534dfd27cfd0b",
+      "vcsRevision": "5237cbf081d04ef75a1f6a207b4018e7c1ae7438",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-e353f37b12aefbb9f9b2.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/5237cbf081d04ef75a1f6a207b4018e7c1ae7438/LICENSE.txt",
+          "sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "objc2@0.6.5": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "08849bbd4767dfae9457696856ae1c84fe4e0281bbe4a7abff2d0e06fb7981f8",
+      "vcsRevision": "d7d2fa23ceaa5e6096c923b081040e5d81b3b9df",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-6d7c9e9d7d12c8d3753b.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/MIT.txt",
+          "sha256": "6d7c9e9d7d12c8d3753bdb24417b84819ba4d6c2f025c37948113d86dc81eef9",
+          "transform": "spdx-mit-permission-body"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. For MIT, only the generic SPDX template copyright line is omitted; the permission/disclaimer text is unchanged. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-5556dba493fc18e98ebf.txt",
+          "source": "https://docs.rs/crate/objc2/0.6.5/source/Cargo.toml",
+          "sha256": "5556dba493fc18e98ebf82f587011f76df6c8c26532613e4c8f904ee586d7cf0",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-5da56f1508a87b982a23.txt",
+          "source": "https://docs.rs/crate/objc2/0.6.5/source/README.md",
+          "sha256": "5da56f1508a87b982a23e6bad2ff09b329f7fcf9181ea15eac17788f8d1c6824",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-7f976f7e9cb2d87df723.txt",
+          "source": "https://raw.githubusercontent.com/madsmtm/objc2/d7d2fa23ceaa5e6096c923b081040e5d81b3b9df/LICENSE.md",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ]
+    },
+    "pathfinder_geometry@0.5.1": {
+      "declaredLicense": "MIT/Apache-2.0",
+      "crateChecksum": "0b7b7e7b4ea703700ce73ebf128e1450eb69c3a8329199ffbfb9b2a0418e5ad3",
+      "vcsRevision": "a5e98fac00f433fe2ff4b2135383d82491b8bfc5",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-141871f41ab4ac7af854.txt",
+          "source": "https://docs.rs/crate/pathfinder_geometry/0.5.1/source/Cargo.toml",
+          "sha256": "141871f41ab4ac7af854e54f1f637fb168ffbc97fdb57c60608f11b8eb95f1d7",
+          "pathInCrate": "Cargo.toml"
+        }
+      ]
+    },
+    "pathfinder_simd@0.5.6": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "4500030c302e4af1d423f36f3b958d1aecb6c04184356ed5a833bf6b60435777",
+      "vcsRevision": "6c3c0466f451c5bd2007087728cd168798cd64e8",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-0621878e61f0d0fda054.txt",
+          "source": "https://raw.githubusercontent.com/servo/pathfinder/6c3c0466f451c5bd2007087728cd168798cd64e8/LICENSE-MIT",
+          "sha256": "0621878e61f0d0fda054bcbe02df75192c28bde1ecc8289cbd86aeba2dd72720"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "profiling-procmacros@1.0.18": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "4488a4a36b9a4ba6b9334a32a39971f77c1436ec82c38707bce707699cc3bbcb",
+      "vcsRevision": "8271551172eb6fa4cba47369aedd93790c623df9",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-c8167fdeeed46d3f244d.txt",
+          "source": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-MIT",
+          "sha256": "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "profiling@1.0.18": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5",
+      "vcsRevision": "8271551172eb6fa4cba47369aedd93790c623df9",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-c8167fdeeed46d3f244d.txt",
+          "source": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-MIT",
+          "sha256": "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "pulp-wasm-simd-flag@0.1.1": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "1d8f70e07b9c3962945a74e59ca1c511bba65b6419468acc217c457d93f3c740",
+      "vcsRevision": "5eb07fd7b68edf0a5e19f71737d315f72a510295",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-d64f878c89bd5f1e5ada.txt",
+          "source": "https://raw.githubusercontent.com/sarah-quinones/pulp/5eb07fd7b68edf0a5e19f71737d315f72a510295/LICENSE",
+          "sha256": "d64f878c89bd5f1e5ada7e4aad57690b122727cf5229b7b87ea1980c188da1d9"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "r-efi@5.3.0": {
+      "declaredLicense": "MIT OR Apache-2.0 OR LGPL-2.1-or-later",
+      "crateChecksum": "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f",
+      "vcsRevision": "97b55bed1c2c91dcbf787674849f05337ff80b33",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-ff92bed461f50338dd70.txt",
+          "source": "https://docs.rs/crate/r-efi/5.3.0/source/AUTHORS",
+          "sha256": "ff92bed461f50338dd703a9ba9aee496a425957873df1d91192776e4bdf5dda7",
+          "pathInCrate": "AUTHORS"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "r-efi@6.0.0": {
+      "declaredLicense": "MIT OR Apache-2.0 OR LGPL-2.1-or-later",
+      "crateChecksum": "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf",
+      "vcsRevision": "7e1b0322d31d625f81a5656096330934f9cd835d",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-d027e91dbc9cdbb2f119.txt",
+          "source": "https://docs.rs/crate/r-efi/6.0.0/source/AUTHORS",
+          "sha256": "d027e91dbc9cdbb2f1190068e498bd6b61cff022b6a032b191021ba658d96111",
+          "pathInCrate": "AUTHORS"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "rsqlite-vfs@0.1.1": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "c51c9ae4df8a7fba42103df5c621fa3c37eccf3a3c650879e90fc48b11cc192c",
+      "vcsRevision": "1bb309784f25c401ddf95131dcde4c4cdad7aee7",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-6d7c9e9d7d12c8d3753b.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/MIT.txt",
+          "sha256": "6d7c9e9d7d12c8d3753bdb24417b84819ba4d6c2f025c37948113d86dc81eef9",
+          "transform": "spdx-mit-permission-body"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. For MIT, only the generic SPDX template copyright line is omitted; the permission/disclaimer text is unchanged. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-2134b8f37e904ca9ed6a.txt",
+          "source": "https://docs.rs/crate/rsqlite-vfs/0.1.1/source/Cargo.toml",
+          "sha256": "2134b8f37e904ca9ed6ae7fb8ffde7e6e93089188dd2378670ccd0af0c468861",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-37e5e5e00bc401f2fb0a.txt",
+          "source": "https://docs.rs/crate/rsqlite-vfs/0.1.1/source/README.md",
+          "sha256": "37e5e5e00bc401f2fb0a60c52458bfa7bb8aea794abfacf0d159c04b0e2472f3",
+          "pathInCrate": "README.md"
+        }
+      ]
+    },
+    "rust-i18n-macro@4.2.4": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "d54a28dd9d46108d56b9f0c85b220908844233e561c03087890325104f90f2c6",
+      "vcsRevision": "5f3ea5ba03395f2f2908e3587e01788cfdfd3555",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-d6fde6c28ecbccfc7f6d.txt",
+          "source": "https://raw.githubusercontent.com/longbridge/rust-i18n/5f3ea5ba03395f2f2908e3587e01788cfdfd3555/LICENSE",
+          "sha256": "d6fde6c28ecbccfc7f6d97c0badbb14bbea2cc8f5e81a8c1537204bdfed9a6d5"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "rust-i18n-support@4.2.4": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "e806c2a9701cbd6043992cd935c30cb1fdb128fa15e7b506f3b46f97045737c0",
+      "vcsRevision": "5f3ea5ba03395f2f2908e3587e01788cfdfd3555",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-d6fde6c28ecbccfc7f6d.txt",
+          "source": "https://raw.githubusercontent.com/longbridge/rust-i18n/5f3ea5ba03395f2f2908e3587e01788cfdfd3555/LICENSE",
+          "sha256": "d6fde6c28ecbccfc7f6d97c0badbb14bbea2cc8f5e81a8c1537204bdfed9a6d5"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "rustls-platform-verifier-android@0.2.0": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "eec689c0bc40ff2458a5977b6619cb718087084a18e02a131c599b62d05e1a5f",
+      "vcsRevision": "252e25161a91af476cbea620e29d277592d27ec7",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-1c7cf76689c837a68ed8.txt",
+          "source": "https://raw.githubusercontent.com/rustls/rustls-platform-verifier/252e25161a91af476cbea620e29d277592d27ec7/LICENSE-MIT",
+          "sha256": "1c7cf76689c837a68ed8d704994e52a0f2940c087958f860d17f3186afbdcc0c"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "schemafy_core@0.6.0": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "2bec29dddcfe60f92f3c0d422707b8b56473983ef0481df8d5236ed3ab8fdf24",
+      "vcsRevision": "67474df5e88cbf65490e90f894c73d71c7b3e021",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-a11232911aa0d746688b.txt",
+          "source": "https://raw.githubusercontent.com/Marwes/schemafy/67474df5e88cbf65490e90f894c73d71c7b3e021/LICENSE",
+          "sha256": "a11232911aa0d746688b560af367728021184084eeb6328a1922d60925c5eda0"
+        }
+      ],
+      "reason": "Verbatim license omitted from the published crate; archived from its exact .cargo_vcs_info.json upstream revision."
+    },
+    "schemafy_lib@0.6.0": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "af3d87f1df246a9b7e2bfd1f4ee5f88e48b11ef9cfc62e63f0dead255b1a6f5f",
+      "vcsRevision": "67474df5e88cbf65490e90f894c73d71c7b3e021",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-a11232911aa0d746688b.txt",
+          "source": "https://raw.githubusercontent.com/Marwes/schemafy/67474df5e88cbf65490e90f894c73d71c7b3e021/LICENSE",
+          "sha256": "a11232911aa0d746688b560af367728021184084eeb6328a1922d60925c5eda0"
+        }
+      ],
+      "reason": "Verbatim license omitted from the published crate; archived from its exact .cargo_vcs_info.json upstream revision."
+    },
+    "seahash@4.1.0": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "1c107b6f4780854c8b126e228ea8869f4d7b71260f962fefb57b996b8959ba6b",
+      "vcsRevision": "94b632aeac099031c373599313d5b5f0acbbaec0",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-6d7c9e9d7d12c8d3753b.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/MIT.txt",
+          "sha256": "6d7c9e9d7d12c8d3753bdb24417b84819ba4d6c2f025c37948113d86dc81eef9",
+          "transform": "spdx-mit-permission-body"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. For MIT, only the generic SPDX template copyright line is omitted; the permission/disclaimer text is unchanged. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-1d610f6d1bce065add6e.txt",
+          "source": "https://docs.rs/crate/seahash/4.1.0/source/Cargo.toml",
+          "sha256": "1d610f6d1bce065add6ec5f2fb764e97eeda505afbe26271acc5f3d73a8c410a",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-38357210ef69a97bf985.txt",
+          "source": "https://docs.rs/crate/seahash/4.1.0/source/README.md",
+          "sha256": "38357210ef69a97bf9858ff22661cb1c2384179f5e6b73143cb33193e36c6473",
+          "pathInCrate": "README.md"
+        }
+      ]
+    },
+    "spirv@0.4.0+sdk-1.4.341.0": {
+      "declaredLicense": "Apache-2.0",
+      "crateChecksum": "d9571ea910ebd84c86af4b3ed27f9dbdc6ad06f17c5f96146b2b671e2976744f",
+      "vcsRevision": "8afc3d0ac8e158128cd1410bb2e4b4c26ab11bb4",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "evidence-cfc7749b96f63bd31c3c.txt",
+          "source": "https://raw.githubusercontent.com/gfx-rs/rspirv/8afc3d0ac8e158128cd1410bb2e4b4c26ab11bb4/LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "svg_fmt@0.4.5": {
+      "declaredLicense": "MIT/Apache-2.0",
+      "crateChecksum": "0193cc4331cfd2f3d2011ef287590868599a2f33c3e69bc22c1a3d3acf9e02fb",
+      "vcsRevision": "93f414cd572b5c2781df93dbdc068ed13443d05a",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-7e98bed7f100747aaae7.txt",
+          "source": "https://raw.githubusercontent.com/nical/rust_debug/93f414cd572b5c2781df93dbdc068ed13443d05a/LICENSE",
+          "sha256": "7e98bed7f100747aaae7d82ab94fbe6b76fd6b84b09a3aaa413bff8196d0fbb1"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "taffy@0.13.0": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "c034e05f6ee85a12daa63863c2245797715075c70649947aa0da54f3f2ab1d0f",
+      "vcsRevision": "45a56299d366ddb383e593a1f0372158d00e8530",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-f97daf1a0124413dccf3.txt",
+          "source": "https://raw.githubusercontent.com/DioxusLabs/taffy/45a56299d366ddb383e593a1f0372158d00e8530/LICENSE",
+          "sha256": "f97daf1a0124413dccf399a4e6626b4b74acd05282f80b6d64ac82225650b77a"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "tiktoken-rs@0.12.1": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "2aeff724640cfe13037336ddf35befdffd2909cbdb65cf041cc8a4cf8c584cfa",
+      "vcsRevision": "72a5a800651a1cea1ad609292446ba02c80e3bcd",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-f7c6ddf9d84fd7b8ad59.txt",
+          "source": "https://raw.githubusercontent.com/zurawiki/tiktoken-rs/72a5a800651a1cea1ad609292446ba02c80e3bcd/LICENSE",
+          "sha256": "f7c6ddf9d84fd7b8ad5917e4074d4c05e4c1dfb752a28a0058f06bd0f5e2edcc"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "tokei@14.0.0": {
+      "declaredLicense": "MIT OR Apache-2.0",
+      "crateChecksum": "e4de7875c0c312f30e090edb0da5df9f6586033132d36d94c8f9133e82826797",
+      "vcsRevision": "8cdd6fa3a54f8cd69442d2f00effb29aa3110353",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-af551541be6871cbb6aa.txt",
+          "source": "https://docs.rs/crate/tokei/14.0.0/source/Cargo.toml",
+          "sha256": "af551541be6871cbb6aa74608401cf2a629e1c2d2956a059e4143f2743e50ad0",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-8fdaf72495ba8694e2c5.txt",
+          "source": "https://docs.rs/crate/tokei/14.0.0/source/README.md",
+          "sha256": "8fdaf72495ba8694e2c5b3cd95a7bb54609e0a86511d5c0dc21017a192f58eba",
+          "pathInCrate": "README.md"
+        }
+      ]
+    },
+    "vsimd@0.8.0": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64",
+      "vcsRevision": "d74c030d9dc4f3cae02146d1f497ff62726ef09a",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-71674605ec4c087fe9eb.txt",
+          "source": "https://raw.githubusercontent.com/Nugine/simd/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE",
+          "sha256": "71674605ec4c087fe9eb534e3e4f9e26eb2e4aabcd76a29fd156c6a844d44b3d"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "wasite@1.0.2": {
+      "declaredLicense": "Apache-2.0 OR BSL-1.0 OR MIT",
+      "crateChecksum": "66fe902b4a6b8028a753d5424909b764ccf79b7a209eac9bf97e59cda9f71a42",
+      "vcsRevision": "3f7d6ad926848cd52c8d2142fdb2f43ab01ae8ec",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-dab3dfa2ffc2b5c938f2.txt",
+          "source": "https://docs.rs/crate/wasite/1.0.2/source/Cargo.toml",
+          "sha256": "dab3dfa2ffc2b5c938f2b95b3fcf506205b966bdd884143c715cabd7b76d2bb3",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-ab0b33a8c5c0f12a3ce8.txt",
+          "source": "https://docs.rs/crate/wasite/1.0.2/source/README.md",
+          "sha256": "ab0b33a8c5c0f12a3ce8ea83bef620247cb6be6ed966b462f27a7772cba8ab4d",
+          "pathInCrate": "README.md"
+        }
+      ]
+    },
+    "winapi-i686-pc-windows-gnu@0.4.0": {
+      "declaredLicense": "MIT/Apache-2.0",
+      "crateChecksum": "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-9652222664ffc7e2a26f.txt",
+          "source": "https://docs.rs/crate/winapi-i686-pc-windows-gnu/0.4.0/source/Cargo.toml",
+          "sha256": "9652222664ffc7e2a26fdcdebdce0917a455b39d8fbcbf451bf0b011a3067bf7",
+          "pathInCrate": "Cargo.toml"
+        }
+      ]
+    },
+    "winapi-x86_64-pc-windows-gnu@0.4.0": {
+      "declaredLicense": "MIT/Apache-2.0",
+      "crateChecksum": "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-a88605a11db5def9b6cf.txt",
+          "source": "https://docs.rs/crate/winapi-x86_64-pc-windows-gnu/0.4.0/source/Cargo.toml",
+          "sha256": "a88605a11db5def9b6cf73398e83b3edb72228cb43ea935729fac5cd33cec22c",
+          "pathInCrate": "Cargo.toml"
+        }
+      ]
+    },
+    "xim-ctext@0.3.0": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "2ac61a7062c40f3c37b6e82eeeef835d5cc7824b632a72784a89b3963c33284c",
+      "vcsRevision": "65f77e44524ba487285a63aac4080faf2c05b4ed",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-efa1224931b98468f500.txt",
+          "source": "https://raw.githubusercontent.com/Riey/xim-rs/65f77e44524ba487285a63aac4080faf2c05b4ed/LICENSE",
+          "sha256": "efa1224931b98468f5005f77285457f8d2eab0a77a15941aa10abbab1ae9a74e"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "xim-parser@0.2.2": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "5dcee45f89572d5a65180af3a84e7ddb24f5ea690a6d3aa9de231281544dd7b7",
+      "vcsRevision": "7300de35a111de2df1a694bf70454532a8419685",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-efa1224931b98468f500.txt",
+          "source": "https://raw.githubusercontent.com/Riey/xim-rs/7300de35a111de2df1a694bf70454532a8419685/LICENSE",
+          "sha256": "efa1224931b98468f5005f77285457f8d2eab0a77a15941aa10abbab1ae9a74e"
+        }
+      ],
+      "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
+    },
+    "zune-core@0.4.12": {
+      "declaredLicense": "MIT OR Apache-2.0 OR Zlib",
+      "crateChecksum": "3f423a2c17029964870cfaabb1f13dfab7d092a62a29a89264f4d36990ca414a",
+      "vcsRevision": "f8fbb123d5ed04441e8324a555bfcda0cb1bd28f",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-65d39b608d230ee0a4d3.txt",
+          "source": "https://docs.rs/crate/zune-core/0.4.12/source/Cargo.toml",
+          "sha256": "65d39b608d230ee0a4d39d4de9388d695f2117322aff7005243d5b8e742a6526",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-1adae359f289c130fe2b.txt",
+          "source": "https://docs.rs/crate/zune-core/0.4.12/source/README.md",
+          "sha256": "1adae359f289c130fe2b098b412820d7da9924cb1bc52aeee8707971bab412b2",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-c6dff146a9f31848ac29.txt",
+          "source": "https://raw.githubusercontent.com/etemesi254/zune-image/f8fbb123d5ed04441e8324a555bfcda0cb1bd28f/LICENSE.md",
+          "sha256": "c6dff146a9f31848ac296faa5a08a4253caf2c384c86f906dc99e7fc0a39cc8c"
+        }
+      ]
+    },
+    "zune-inflate@0.2.54": {
+      "declaredLicense": "MIT OR Apache-2.0 OR Zlib",
+      "crateChecksum": "73ab332fe2f6680068f3582b16a24f90ad7096d5d39b974d1c0aff0125116f02",
+      "vcsRevision": "69502ce83fdfecdd0beefd677e2abb3781b29d98",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-f3da162dd3818fcdf23c.txt",
+          "source": "https://docs.rs/crate/zune-inflate/0.2.54/source/Cargo.toml",
+          "sha256": "f3da162dd3818fcdf23c9ce34930d66064106873a692d6994abd49b80e60ea66",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-ad9675f80fd32f89ceab.txt",
+          "source": "https://docs.rs/crate/zune-inflate/0.2.54/source/README.md",
+          "sha256": "ad9675f80fd32f89ceabc856d8e5c4fea145aa8bbbf2cba423fdb3687ac634d9",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-e870d7fd7819a9f0453c.txt",
+          "source": "https://raw.githubusercontent.com/etemesi254/zune-image/69502ce83fdfecdd0beefd677e2abb3781b29d98/LICENSE.md",
+          "sha256": "e870d7fd7819a9f0453c62798cb52ae95d148a8c91dc2de1d983f997143c72de"
+        }
+      ]
+    },
+    "zune-jpeg@0.4.21": {
+      "declaredLicense": "MIT OR Apache-2.0 OR Zlib",
+      "crateChecksum": "29ce2c8a9384ad323cf564b67da86e21d3cfdff87908bc1223ed5c99bc792713",
+      "vcsRevision": "fa2c767a01d7d9373911d0bf63e0588553d67e0e",
+      "licenses": [
+        {
+          "license": "Apache-2.0",
+          "file": "license-074e6e32c86a4c0ef8b3.txt",
+          "source": "https://raw.githubusercontent.com/spdx/license-list-data/8a04f0303d95c4f932210b118588c662665bd383/text/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        }
+      ],
+      "reason": "The published crate omits the selected full license text. Supply the pinned official SPDX reference text under the exact declared license, retaining exact-crate licensing/author evidence. No copyright owner or year is inferred. This selects an allowed OR alternative, not a waiver of an AND obligation.",
+      "evidence": [
+        {
+          "file": "evidence-8fa62897326b6111c957.txt",
+          "source": "https://docs.rs/crate/zune-jpeg/0.4.21/source/Cargo.toml",
+          "sha256": "8fa62897326b6111c957b7ece926e19dc460b017da2ee58f651b0e9c4e79fd52",
+          "pathInCrate": "Cargo.toml"
+        },
+        {
+          "file": "evidence-d58a4403ff2b9f7eba16.txt",
+          "source": "https://docs.rs/crate/zune-jpeg/0.4.21/source/README.md",
+          "sha256": "d58a4403ff2b9f7eba16f1284a9b4a4c7125bc92dacd8f0fac1ee112e3a8b8ee",
+          "pathInCrate": "README.md"
+        },
+        {
+          "file": "evidence-c6dff146a9f31848ac29.txt",
+          "source": "https://raw.githubusercontent.com/etemesi254/zune-image/fa2c767a01d7d9373911d0bf63e0588553d67e0e/LICENSE.md",
+          "sha256": "c6dff146a9f31848ac296faa5a08a4253caf2c384c86f906dc99e7fc0a39cc8c"
+        }
+      ]
+    }
+  }
+}

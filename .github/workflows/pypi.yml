@@ -90,9 +90,9 @@ jobs:
           done
 
           mkdir -p extracted/bin
-          for bin in $(find extracted -type f \( -name "kingfisher" -o -name "kingfisher.exe" \)); do
+          while IFS= read -r -d '' bin; do
             chmod +x "$bin" || true
-          done
+          done < <(find extracted -type f \( -name "kingfisher" -o -name "kingfisher.exe" \) -print0)
 
       - name: Install build tooling
         run: "python -m pip install --upgrade --only-binary :all: --require-hashes -r .github/requirements/pypi-build.txt"

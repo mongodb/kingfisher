@@ -198,10 +198,14 @@ async fn git_clone_and_update_deadlines_require_explicit_opt_out() -> Result<()>
         for no_timeouts in [false, true] {
             let temp = tempfile::tempdir()?;
             let server = MockServer::start().await;
+            // Git startup can exhaust a bounded deadline before sending a request.
+            // Disabling timeouts must still deliver every delayed request to the server.
+            let expected_requests = if update { 2 } else { 1 };
+            let minimum_requests = if no_timeouts { expected_requests } else { 0 };
             Mock::given(method("GET"))
                 .and(path("/stalled.git/info/refs"))
                 .respond_with(ResponseTemplate::new(404).set_delay(Duration::from_millis(1500)))
-                .expect(if update { 2 } else { 1 })
+                .expect(minimum_requests..=expected_requests)
                 .mount(&server)
                 .await;
             let url = format!("{}/stalled.git", server.uri());

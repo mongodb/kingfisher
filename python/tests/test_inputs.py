@@ -265,10 +265,13 @@ def test_nested_archives_budgets_and_safe_paths(scanner, tmp_path):
     with pytest.raises(RuntimeError):
         list(expand_archives([ScanInput("broken.zip", b"invalid")]))
     assert list(expand_archives([ScanInput("empty.zip", zip_bytes([]))])) == []
-    archive = tmp_path / "safe.zip"
-    archive.write_bytes(zip_bytes([("../escape.txt", TOKEN), ("/absolute.txt", TOKEN), ("safe.txt", TOKEN)]))
-    safe, = expand_archives([ScanInput.from_file(archive)])
-    assert safe.path.endswith("!safe.txt") and safe.data == TOKEN
+    archive = tmp_path / "unsafe.zip"
+    archive.write_bytes(zip_bytes([
+        ("safe.txt", TOKEN), ("../escape.txt", TOKEN), ("/absolute.txt", TOKEN),
+    ]))
+    expanded = expand_archives([ScanInput.from_file(archive)], temp_dir=tmp_path)
+    with pytest.raises(RuntimeError, match="unsafe"):
+        next(expanded)  # The safe first member must not escape the failed root.
     assert not (tmp_path / "escape.txt").exists()
     for option in (
         {"depth": -1}, {"depth": 33}, {"depth": True}, {"max_bytes": 0},

@@ -1,6 +1,6 @@
 [package]
 name = "kingfisher-python"
-version = "1.6.1"
+version = "1.6.2"
 description = "Native Python bindings for Kingfisher"
 repository.workspace = true
 edition.workspace = true

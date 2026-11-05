@@ -1,6 +1,6 @@
 ---
 title: "Architecture"
-description: "Kingfisher architecture: CLI orchestration, shared detection, Rust/Python embedding, execution controls, validation, and reporting."
+description: "Kingfisher architecture: CLI orchestration, shared detection, Rust/Python/Node embedding, execution controls, validation, and reporting."
 ---
 
 # Kingfisher Architecture
@@ -11,7 +11,7 @@ It shows:
 
 - a high-level component map of the main crates, modules, command paths, and outputs
 - the execution flow for `kingfisher scan`
-- shared detection, Rust/Python embedding, and optional detection settings
+- shared detection, Rust/Python/Node embedding, and optional detection settings
 
 ## Component Map
 
@@ -61,11 +61,16 @@ flowchart LR
         Rules[kingfisher-rules]
         ScannerLib[kingfisher-scanner]
         PythonNative[kingfisher-python]
+        NodeNative[kingfisher-node]
     end
 
     RustClient[Rust embedder] --> ScannerLib
     PythonClient[kingfisher_sdk] --> PythonNative --> ScannerLib
     PythonNative --> Rules
+    PythonNative --> Core
+    NodeClient[JavaScript and TypeScript APIs] --> NodeNative --> ScannerLib
+    NodeNative --> Rules
+    NodeNative --> Core
 
     subgraph Engines[Engines]
         Vector[vectorscan]
@@ -124,6 +129,8 @@ flowchart LR
 - `crates/kingfisher-rules/src/rules_database.rs`: compiled rule catalog, confirmation regexes, lazily cached endpoint regexes and byte-length bounds, source-path prefilters, and compiled finding filters.
 - `crates/kingfisher-python/src/`: PyO3 ownership and conversions, native input/Git adapters, execution controls, and bindings to shared detection, extraction, validation, and revocation.
 - `python/kingfisher_sdk/`: Python argument checks and composition, including `ScanInput` enumeration, explicit content transforms, `Scanner`/`DetectionScanner`, and separate validation, revocation, and reporting interfaces.
+- `crates/kingfisher-node/src/`: napi-rs/Node-API conversion and ownership bridge, async execution controls, and bindings to the same core, rules, scanner, input/Git, extraction, validation, and revocation capabilities.
+- `javascript/`: CJS/ESM facade and TypeScript declarations, composable `ScanInput`/async-iterator pipelines, explicit transforms and provider operations, tests, runnable examples, and native npm packaging. See the [Node SDK guide](../reference/javascript-bindings.md).
 - `src/reporter.rs` and `src/reporter/*`: report rendering for pretty, JSON, BSON, TOON, SARIF, and HTML outputs, plus the data model used by the viewer.
 - `src/direct_validate.rs`: direct validation of a known secret without going through pattern matching. Supports HTTP, gRPC, plus schema-level typed validators such as AWS, AzureStorage, CredentialUri, GCP, JDBC, MongoDB, MySQL, PostgreSQL, JWT, and Coinbase, and delegates ad-hoc `Raw` validators to `crates/kingfisher-scanner/src/validation/raw.rs`.
 - `src/direct_revoke.rs`: direct revocation of a known secret without going through the scan pipeline. Uses Liquid templates for revocation configurations and supports multi-step HTTP revocation flows.
@@ -141,10 +148,17 @@ flowchart LR
 
 The CLI matcher and embeddable scanner have separate orchestration around shared
 matching primitives, parsers, component-window predicates, credential-URI fallback
-suppression, and catalog deduplication. Python calls the embeddable scanner through
-PyO3 in process, reuses compiled rules and scanner resources, and releases the GIL
-for native scanning. The CLI continues to own source discovery, scan-wide storage,
-provider coordination, and report rendering.
+suppression, and catalog deduplication. Python calls through PyO3; Node calls through
+napi-rs/Node-API. Both run in process using the same core, rule catalog, and scanner
+resources. Python releases the GIL for native scanning; async Node operations keep
+native work off the event loop. The Node SDK is not a Python or CLI wrapper. The CLI
+continues to own its source discovery, scan-wide storage, provider coordination,
+and report rendering.
+
+The JavaScript/TypeScript SDK **0.1.0** is a preview of npm support, versioned
+independently of the CLI, Python SDK, and Rust crates. See the
+[Node SDK guide](../reference/javascript-bindings.md) for its supported APIs and runtime platforms and
+the [Rust library guide](../reference/library.md) for shared capabilities.
 
 Embedding keeps the stages composable:
 
@@ -160,17 +174,20 @@ flowchart LR
 Enumeration selects inputs and retains source provenance. Archive expansion and
 SQLite/bytecode extraction are explicit transforms; their findings refer to the
 extracted content. Detection scans supplied content offline. Validation and
-revocation remain separate operations. Python keeps findings grouped with their
-logical input path and provenance; invisible component helpers remain available
-until dependent operations finish. See the [Python SDK guide](../reference/python-bindings.md).
+revocation remain separate operations. Python and Node keep findings grouped with
+their logical input path and provenance; invisible component helpers remain
+available until dependent operations finish. Original findings and validation
+snapshots retain operational state. Python/Node default reports are redacted;
+do not reconstruct validation or revocation inputs from serialized reports.
+See the [Python SDK guide](../reference/python-bindings.md) and [Node SDK guide](../reference/javascript-bindings.md).
 
 `pattern_requirements` are enforced by a shared primitive in raw and Base64
 matching, including character counts, substring exclusions and Liquid checksums.
 With `validation` enabled, typed credential URI syntax checks also share the CLI
 primitive and remain offline. `ScanOutput`/`ScanContext` preserve compact full-match
 spans and assignment/scope metadata for exact component windows and candidate
-ranking without retaining input payloads. Python carries this metadata with its
-native findings automatically; Rust callers can use `scan_blob_with_context`
+ranking without retaining input payloads. Python and Node carry this metadata with
+their native findings automatically; Rust callers can use `scan_blob_with_context`
 and `Validator::with_scan_context` without changing existing finding fields.
 Explicit component-verification opt-ins share fixed-origin eligibility and bounded
 scheduling with the CLI. Per-batch resolved-input caching coalesces repeated SDK
@@ -182,15 +199,16 @@ Detection settings are ordinary options controlling matching, decoding, and
 candidate filtering. Rust exposes `context::DetectionOptions` through
 `scan_blob_at_path_with_options` and
 `scan_blob_at_path_with_options_and_control`. Python exposes the same settings
-through immutable `DetectionPolicy` objects passed to `Scanner(policy=...)`;
-`DetectionScanner` is a compatibility facade over the same constructor. Existing
-`Scanner` entry points retain their defaults;
+through immutable `DetectionPolicy` objects passed to `Scanner(policy=...)`.
+Node exposes `DetectionPolicy` through `Scanner.create({ policy })` and a thin
+`DetectionScanner.create()` facade; Python's `DetectionScanner` is likewise a
+compatibility facade. Existing `Scanner` entry points retain their defaults;
 enabling a Cargo feature alone does not opt a scan into different behavior.
 
 | Behavior | Existing `Scanner` defaults | Default detection options / `DetectionScanner` |
 | --- | --- | --- |
 | Initial raw confirmation window | 64 KiB | 4 KiB, matching the CLI |
-| Component proximity anchor | Selected secret span for vector-only Rust; full match with `ScanContext` or Python | Full regex-match span |
+| Component proximity anchor | Selected secret span for vector-only Rust; full match with `ScanContext`, Python, or Node | Full regex-match span |
 | Per-rule secret containment suppression | Disabled | Enabled |
 | Overlapping Betterleaks credential-URI fallback suppression | Disabled | Enabled |
 | Base64 decoding depth | One layer | Two layers |
@@ -227,13 +245,15 @@ credential. `ScanControl` provides cooperative deadlines and cancellation betwee
 matching/filtering operations and in Vectorscan callbacks. Individual native
 operations, reads, and decoding cannot be preempted. Failed or interrupted scans
 return errors without partial findings or dedup commits. Python maps deadline
-expiry to `TimeoutError` and cancellation to `RuntimeError`; previously yielded
-input groups remain with the caller.
+expiry to `TimeoutError` and cancellation to `RuntimeError`. Node exposes
+`TimeoutError` (`ERR_KINGFISHER_TIMEOUT`) and `AbortError`
+(`ERR_KINGFISHER_CANCELLED`); cancellation remains cooperative, not hard preemption.
+Previously yielded input groups remain with the caller.
 
 Cross-call deduplication keys the blob ID and logical path, excluding detection
 options. Reuse a scanner for one set of settings when deduplication is enabled.
-An in-flight scan can commit after `reset_dedup()`; finish concurrent scans before
-resetting for a new batch.
+An in-flight Python scan can commit after `reset_dedup()`; finish concurrent scans
+before resetting for a new batch. Node's `resetDedup()` rejects while scans are active.
 
 ### Implementation And Feature Boundaries
 

@@ -37,8 +37,12 @@ workflows: `kingfisher scan <target> --format toon --no-update-check`.
 - [Rust integration recipes: scanning + validation](https://mongodb.github.io/kingfisher/reference/library/#integration-recipes-for-rust-projects-and-llm-agents)
 - [Runnable Rust example sources](https://github.com/mongodb/kingfisher/tree/main/crates/kingfisher-scanner/examples)
 - [Rust library API](https://mongodb.github.io/kingfisher/reference/library/)
-- [Python SDK: in-process scanning, validation, and revocation](https://github.com/mongodb/kingfisher/blob/main/docs/PYPI.md)
+- [Python SDK: in-process scanning, validation, and revocation](https://mongodb.github.io/kingfisher/reference/python-bindings/)
 - [Runnable Python example sources](https://github.com/mongodb/kingfisher/tree/main/python/examples)
+- [JavaScript/TypeScript SDK: composable in-process Node APIs (0.1.0 npm support preview)](https://mongodb.github.io/kingfisher/reference/javascript-bindings/)
+- [Runnable Node SDK example sources](https://github.com/mongodb/kingfisher/tree/main/javascript/examples)
+- [Node SDK step-by-step recipes: inputs, side effects, expected output and adaptation](https://github.com/mongodb/kingfisher/blob/main/javascript/examples/README.md)
+- [npm SDK publishing setup](https://github.com/mongodb/kingfisher/blob/main/docs/PUBLISHING.md#npm-publishing-with-github-actions)
 - [Architecture](https://mongodb.github.io/kingfisher/reference/architecture/)
 - [Project background](https://mongodb.github.io/kingfisher/reference/project/)
 

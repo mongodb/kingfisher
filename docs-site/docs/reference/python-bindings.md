@@ -23,7 +23,13 @@ requires CPython 3.10+ with the standard GIL build. Wheels target Linux x64/ARM6
 (glibc 2.28+), macOS x64/ARM64 (11+), and native Windows x64/ARM64. PyPy,
 free-threaded Python and musl wheels are not currently part of the release matrix.
 
-The prepared SDK release is **1.6.1**, a backward-compatible patch release.
+The prepared SDK release is **1.6.2**, a backward-compatible patch release.
+
+CLI and low-level Rust validation responses can include
+[allowlisted identity metadata](../rules/overview.md#validation-response-identity-metadata)
+without additional requests. Python validation result representations and
+serialization remain unchanged and omit provider responses and private evidence.
+Use the SDK's explicit analysis API for identity or permission details.
 The SDK includes offline revocation preparation, structured input
 diagnostics, result-based and batch revocation, validation variables and SMTP
 support, opt-in CLI detection policies, SQLite/bytecode extraction, richer Git
@@ -451,17 +457,19 @@ After archive expansion, Git metadata still identifies the original container bl
 while each finding's blob ID identifies its scanned content. Archive paths use
 `outer.zip!member`; single compressed streams use `outer.gz!content`. Repeated ZIP/TAR
 member names produce separate inputs with the same logical path and their own
-bytes. Depth 0
-keeps containers raw; maximum depth is 32. Unsafe entry paths are skipped and
-extraction uses temporary directories under optional `temp_dir`
+bytes. Depth 0 keeps containers raw; maximum depth is 32. Budgeted TAR/ZIP/ASAR
+expansion rejects malformed or unsafe members and staging I/O errors for the whole
+root, before yielding any of its members. Extraction uses temporary directories
+under optional `temp_dir`
 (default system temporary storage). Choose a protected `temp_dir` parent on every
 platform. SDK staging directories use owner-only Unix mode 0700, which the umask
 may restrict further; Windows inherits the parent DACL. Small ZIPs decode in memory.
 Cleanup is attempted on completion; temporary plaintext may survive a crash or
 cleanup failure. Applications can select encrypted or memory-backed storage.
-Expansion is best effort: shared
-extractors also skip unreadable entries and enforce their own per-format limits.
-It is not a guarantee of complete archive coverage.
+Other shared format extractors retain their own per-format limits and may skip
+unreadable entries; successful expansion is not a guarantee of complete archive
+coverage. Scanner 3.0.2 / Python SDK 1.6.2 tighten strict budgeted archive failures
+without changing API signatures or the CLI's legacy best-effort defaults.
 
 `filesystem(max_file_size=...)` silently skips oversized files and does not emit
 `GitInputWarning`; Git blob-size skips are reported explicitly.
@@ -470,8 +478,9 @@ Filesystem and Git iterators accept `timeout` and `cancellation`. Their deadline
 cover iterator lifetime, including consumer time. `expand_archives` accepts the
 same controls and expands one root fully before yielding its members; timeout and
 byte/entry budgets apply per root, cumulatively across nested layers. Entry
-budgets count inspected members, including unsafe paths; TAR/ZIP also count directories,
-ASAR counts indexed files, and HWP counts streams. Normal
+budgets count inspected members, not only emitted files: TAR/ZIP include directories,
+ASAR counts indexed files, and HWP counts streams. Unsafe TAR/ZIP/ASAR paths fail
+the entire root, rather than being skipped. Normal
 inputs become byte inputs and are subject to `max_bytes` too. These budgets bound
 returned content and cap extraction streams with the remaining budget, including
 compressed TAR headers and padding. Nested layers share one byte/entry budget;
@@ -1485,7 +1494,7 @@ in sync. The read-only preflight runs **before** wheel/source jobs:
 For a read-only local/orchestrator check (Python 3.11+), run:
 
 ```bash
-python3 scripts/check-sdk-release.py --require-new --expected-version 1.6.1
+python3 scripts/check-sdk-release.py --require-new --expected-version 1.6.2
 ```
 
 Omit `--expected-version` to infer the prepared manifest version. The command
@@ -1500,7 +1509,7 @@ that `HEAD` is the current upstream `main` commit, and use the exact version/SHA
 gh workflow run python-sdk.yml --ref main \
   -f publish=true \
   -f expected_sha="$(git rev-parse HEAD)" \
-  -f expected_version=1.6.1
+  -f expected_version=1.6.2
 ```
 
 `publish` defaults to `false`. Publication requires both safety inputs: the full

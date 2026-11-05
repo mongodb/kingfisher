@@ -73,6 +73,7 @@ From a clean checkout of the reviewed commit on the public repository's current 
 ```bash
 make release crates
 make release kingfisher-secret-scanner
+make release npm
 ```
 
 These commands infer the committed manifest versions; do not pass `VERSION`. They do not
@@ -80,9 +81,10 @@ edit version numbers, commit changes, move tags, or publish from an unmerged wor
 Prepare any needed version bump first, update the lockfile/provenance, commit, and merge it.
 `make release VERSION=X.Y.Z` remains the separate full CLI release command.
 
-Both package commands check GitHub authentication, the public upstream/merged commit,
-workflow availability and supported inputs, and registry state before starting release work.
-They pin the expected commit so an advancing `main` cannot silently publish different code.
+All package commands check GitHub authentication, the public upstream/current `main`
+commit, and workflow availability. They pin the expected commit so an advancing `main`
+cannot silently publish different code. Python/crates additionally check supported dispatch
+inputs and registry state before starting release work; npm registry/artifact checks stay in CI.
 Registry lookup failures are errors, not evidence that a version is available. Existing PyPI
 SDK versions and an all-already-published crates plan are errors; unchanged published crate
 dependencies can still be skipped, but changed contents at the same version are rejected.
@@ -103,11 +105,20 @@ verbose tool/authentication logs remain private. No release is dispatched after 
   through the protected `pypi-sdk` environment. An existing version fails before those builds;
   missing-artifact staging and `skip-existing` remain final race/retry safeguards, not permission
   to replace an existing release. Ordinary versioned main merges still publish automatically.
+- **npm SDK:** infers the independent version from `javascript/package.json`, checks the
+  matching Node/native manifests and lockfiles, and pushes only an annotated
+  `npm-v<SDK-version>` tag. All six builds and sealed-package verification must pass before
+  approving the protected `npm` deployment. It never runs local `npm publish`. Existing
+  public tags are rejected; recover via the original run's failed publication job, not a new
+  tag. A failed push may reuse a same-commit annotated local tag. To select a public remote
+  named `upstream`, use `make release npm RELEASE_REMOTE=upstream`.
 
-The `crates-io` and `pypi-sdk` environments and registry Trusted Publishers/API-token permissions
-must already be configured. Read-only local checks cannot prove external registry authorization
-or prevent a later outage/race; the protected publish jobs remain authoritative. See the
-[crate publishing guide](../docs/PUBLISHING.md) and [SDK publishing guide](../docs/PYPI.md).
+The `crates-io`, `pypi-sdk`, and `npm` environments and registry Trusted Publishers/API-token
+permissions must already be configured. Read-only local checks cannot prove external registry
+authorization or prevent a later outage/race; the protected publish jobs remain authoritative.
+See the [crate publishing guide](../docs/PUBLISHING.md),
+[Python SDK publishing guide](../docs/PYPI.md), and
+[npm publishing guide](../docs/PUBLISHING.md#npm-publishing-with-github-actions).
 
 ## Run through GitHub Actions
 

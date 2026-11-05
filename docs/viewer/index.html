@@ -3173,7 +3173,7 @@
     <section id="upload-section" class="workspace-intake" aria-label="Report files">
       <div id="drop-zone" class="workspace-drop" role="button" tabindex="0" aria-controls="file-input" aria-describedby="upload-instructions">
         <span class="workspace-drop__icon" aria-hidden="true">↳</span>
-        <span><strong id="intake-label">Your investigation starts with a report.</strong> <span id="upload-instructions">Drop JSON, JSONL, or SARIF here, or choose a file.</span></span>
+        <span><strong id="intake-label">Your investigation starts with a report.</strong> <span id="upload-instructions">Drop reports from Kingfisher, Gitleaks, or TruffleHog here, or choose a file (JSON, JSONL, or SARIF).</span></span>
         <span class="workspace-drop__format">Processed locally</span>
       </div>
       <input type="file" id="file-input" name="reports" hidden accept=".json,.jsonl,.sarif" multiple aria-label="Choose report files">
@@ -8619,7 +8619,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
       setText("workspace-state", loaded ? "Snapshot open" : "Ready to investigate");
       setText("workspace-state-note", loaded ? "Read-only investigation · Evidence describes the collection time, not current effective access." : "Credential exposure, identity context, and the evidence behind access. Files stay in this browser.");
       setText("intake-label", loaded ? "Add context to this investigation." : "Your investigation starts with a report.");
-      setText("upload-instructions", loaded ? "Drop more reports here to merge them, or use Open report to replace the snapshot." : "Drop JSON, JSONL, or SARIF here, or choose a file.");
+      setText("upload-instructions", loaded ? "Drop Kingfisher, Gitleaks, or TruffleHog reports here to merge, or use Open report to replace." : "Drop reports from Kingfisher, Gitleaks, or TruffleHog here, or choose a file (JSON, JSONL, or SARIF).");
       const clearButton = document.getElementById("reset-btn");
       if (clearButton) clearButton.disabled = !loaded;
       const active = findings.filter((record) => normalizeValidationStatus(record.finding?.validation?.status || "") === "active").length;

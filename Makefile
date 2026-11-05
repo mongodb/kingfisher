@@ -11,10 +11,10 @@ export KINGFISHER_RELEASE_REMOTE = $(RELEASE_REMOTE)
 
 # GNU Make treats the package name as a second goal. Route it through release
 # once (including under -j), and reject ambiguous invocations before any action.
-RELEASE_PACKAGE := $(filter crates kingfisher-secret-scanner,$(MAKECMDGOALS))
+RELEASE_PACKAGE := $(filter crates kingfisher-secret-scanner npm,$(MAKECMDGOALS))
 ifneq ($(strip $(RELEASE_PACKAGE)),)
   ifeq ($(filter release,$(MAKECMDGOALS)),)
-    $(error Use make release crates or make release kingfisher-secret-scanner)
+    $(error Use make release crates, make release kingfisher-secret-scanner, or make release npm)
   endif
   ifneq ($(words $(MAKECMDGOALS)),2)
     $(error Select exactly one release package, with no other Make goals)
@@ -71,12 +71,12 @@ ARCHIVE_CMD = $(TAR_CMD) $(TAR_OPTS)
 SUDO_CMD := $(shell command -v sudo 2>/dev/null)
 
 .PHONY: \
-        default help release crates kingfisher-secret-scanner create-dockerignore setup-zig wizard-gui \
+        default help release crates kingfisher-secret-scanner npm create-dockerignore setup-zig wizard-gui \
         ubuntu-x64 ubuntu-arm64 linux-x64 linux-arm64 linux linux-all \
         darwin-arm64 darwin-x64 darwin-dev darwin darwin-all \
         require-windows-host windows-x64 windows-arm64 windows-test-x64 windows-test-arm64 windows-test windows \
         all list-archives prepare-release-notices check-docker check-rust clean tests audit-deps fuzz \
-        dockerfile docs-build docs-serve docs-clean notices yaml-fmt
+        dockerfile docs-build docs-serve docs-clean notices check-notices yaml-fmt
 
 default: help
 
@@ -85,6 +85,7 @@ help:
 	@echo "  release            CLI release: make release VERSION=X.Y.Z (RELEASE_REMOTE=origin)"
 	@echo "  release crates     Publish pending crates.io versions from committed manifests"
 	@echo "  release kingfisher-secret-scanner  Publish the prepared Python SDK version"
+	@echo "  release npm        Tag the prepared Node SDK version for CI publication (npm approval required)"
 	@echo "  linux              Build Linux archive for current host arch via Docker"
 	@echo "  linux-x64          Build Linux x64 archive via Docker (SKIP_TESTS=1 to skip tests)"
 	@echo "  linux-arm64        Build Linux arm64 archive via Docker (SKIP_TESTS=1 to skip tests)"
@@ -110,7 +111,8 @@ help:
 	@echo "  fuzz               Run fuzz targets (FUZZ_SECONDS=N to control duration, default 60s)"
 	@echo "  docs-build         Build the documentation site"
 	@echo "  docs-serve         Serve the documentation site locally"
-	@echo "  notices            Generate third-party notices"
+	@echo "  notices            Regenerate exact workspace/all-feature third-party notices"
+	@echo "  check-notices      Verify dependency coverage, license text, and provenance"
 	@echo "  yaml-fmt           Format all built-in YAML rule files with prettier"
 	@echo "  clean              Remove build artifacts"
 
@@ -121,7 +123,7 @@ else
 	@python3 scripts/release-packages.py $(RELEASE_PACKAGE) --remote "$$KINGFISHER_RELEASE_REMOTE"
 endif
 
-crates kingfisher-secret-scanner: release
+crates kingfisher-secret-scanner npm: release
 	@:
 
 create-dockerignore:
@@ -466,6 +468,9 @@ windows-arm64: require-windows-host prepare-release-notices
 
 # MSYS2's shared /tmp permits other users to replace cache fixtures. Native tests
 # use the protected user temporary directory so cache trust checks remain meaningful.
+# napi-build requires libnode.dll on GNU Windows. The Node addon's native unit
+# and runtime tests run on supported MSVC x64/arm64 targets in node-sdk.yml;
+# exclude only that addon here, retaining all other workspace test suites.
 windows-test-x64: require-windows-host
 	@bash -eu -o pipefail -c '\
 	  case "$${MSYSTEM:-}" in \
@@ -498,8 +503,8 @@ windows-test-x64: require-windows-host
 	  mkdir -p "$$test_tmp_dir"; \
 	  native_test_tmp="$$(cygpath -w "$$test_tmp_dir")"; \
 	  export TMP="$$native_test_tmp" TEMP="$$native_test_tmp"; unset TMPDIR; \
-	  echo "▶ cargo test --locked --profile ci-test --workspace --all-targets --target $$target_triple (published Vectorscan archive, LLD)"; \
-	  cargo test --locked --profile ci-test --workspace --all-targets --target "$$target_triple"; \
+	  echo "▶ cargo test --locked --profile ci-test --workspace --all-targets --exclude kingfisher-node --target $$target_triple (published Vectorscan archive, LLD)"; \
+	  cargo test --locked --profile ci-test --workspace --all-targets --exclude kingfisher-node --target "$$target_triple"; \
 	'
 
 windows-test-arm64: require-windows-host
@@ -522,8 +527,8 @@ windows-test-arm64: require-windows-host
 	  mkdir -p "$$test_tmp_dir"; \
 	  native_test_tmp="$$(cygpath -w "$$test_tmp_dir")"; \
 	  export TMP="$$native_test_tmp" TEMP="$$native_test_tmp"; unset TMPDIR; \
-	  echo "▶ cargo test --locked --profile ci-test --workspace --all-targets --target $$target_triple (published Vectorscan archive)"; \
-	  cargo test --locked --profile ci-test --workspace --all-targets --target "$$target_triple"; \
+	  echo "▶ cargo test --locked --profile ci-test --workspace --all-targets --exclude kingfisher-node --target $$target_triple (published Vectorscan archive)"; \
+	  cargo test --locked --profile ci-test --workspace --all-targets --exclude kingfisher-node --target "$$target_triple"; \
 	'
 
 windows-test: windows-test-x64 windows-test-arm64
@@ -748,9 +753,12 @@ clean:
 	rm -rf docs-site/site
 
 notices:
-	@echo "Generating third-party notices..."
-	@cargo install cargo-bundle-licenses
-	@cargo bundle-licenses --format yaml --output THIRD_PARTY_NOTICES
+	@echo "Regenerating workspace/all-feature normal/build notices (cargo-bundle-licenses 4.2.0)..."
+	@node scripts/third-party-notices.cjs --generate
+
+check-notices:
+	@node --test scripts/tests/third-party-notices.test.cjs
+	@node scripts/third-party-notices.cjs --check
 
 yaml-fmt:
 	@echo "📝 Formatting legacy custom-rule fixtures…"

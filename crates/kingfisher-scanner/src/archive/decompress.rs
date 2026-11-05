@@ -39,7 +39,8 @@ pub const ZIP_BASED_FORMATS: &[&str] = &[
 ];
 
 /// Strict budgets for a single expansion layer. Nested callers pass the remaining
-/// root budgets to each layer. Unsafe members remain excluded by the extractors.
+/// root budgets to each layer. Unsafe file paths fail strict extraction rather
+/// than silently reporting partial coverage.
 struct ArchiveBudget<'a> {
     bytes: u64,
     entries: usize,
@@ -106,7 +107,7 @@ pub fn extract_zip_archive_in_memory_with_budget(
         }
         let file_name = file.name()?;
         if !is_safe_extract_path(Path::new(file_name.as_ref())) {
-            continue;
+            anyhow::bail!("archive contains an unsafe ZIP member path");
         }
         let name = format!("{archive_label}!{file_name}");
         let remaining = max_bytes.saturating_sub(total);
@@ -247,6 +248,9 @@ fn handle_tar_archive_streaming_with_limits(
     let entries = match archive.entries() {
         Ok(entries) => entries,
         Err(e) => {
+            if budget.is_some() {
+                return Err(e.into());
+            }
             tracing::debug!("failed to open tar archive {}: {}", archive_path.display(), e);
             return Ok(CompressedContent::RawFile(archive_path.to_owned()));
         }
@@ -271,6 +275,9 @@ fn handle_tar_archive_streaming_with_limits(
         let mut entry = match entry {
             Ok(entry) => entry,
             Err(e) => {
+                if budget.is_some() {
+                    return Err(e.into());
+                }
                 tracing::debug!("tar archive {} ended early: {}", archive_path.display(), e);
                 truncated = true;
                 break;
@@ -280,6 +287,9 @@ fn handle_tar_archive_streaming_with_limits(
             let path_in_tar = match entry.path() {
                 Ok(path) => path.to_string_lossy().to_string(),
                 Err(e) => {
+                    if budget.is_some() {
+                        return Err(e.into());
+                    }
                     tracing::debug!(
                         "failed to read tar entry path in {}: {}",
                         archive_path.display(),
@@ -290,6 +300,9 @@ fn handle_tar_archive_streaming_with_limits(
                 }
             };
             if !is_safe_extract_path(Path::new(&path_in_tar)) {
+                if budget.is_some() {
+                    anyhow::bail!("archive contains an unsafe TAR member path");
+                }
                 tracing::debug!("unsafe tar path: {path_in_tar}");
                 continue;
             }
@@ -331,6 +344,9 @@ fn handle_tar_archive_streaming_with_limits(
             if let Some(parent) = out_path.parent()
                 && let Err(e) = fs::create_dir_all(parent)
             {
+                if budget.is_some() {
+                    return Err(e.into());
+                }
                 tracing::debug!("failed to create directory {}: {}", parent.display(), e);
                 continue;
             }
@@ -373,6 +389,9 @@ fn handle_tar_archive_streaming_with_limits(
                     entries_on_disk.push((logical_path, out_path));
                 }
                 Err(e) => {
+                    if budget.is_some() {
+                        return Err(e.into());
+                    }
                     tracing::debug!("failed to create file {}: {}", out_path.display(), e);
                     continue;
                 }
@@ -557,6 +576,9 @@ fn handle_zip_archive_streaming(
         if zipped_file.is_file() {
             let name_in_zip = zipped_file.name()?.into_owned();
             if !is_safe_extract_path(Path::new(&name_in_zip)) {
+                if budget.is_some() {
+                    anyhow::bail!("archive contains an unsafe ZIP member path");
+                }
                 tracing::debug!("unsafe zip path: {name_in_zip}");
                 continue;
             }
@@ -572,6 +594,9 @@ fn handle_zip_archive_streaming(
             if let Some(parent) = out_path.parent()
                 && let Err(e) = fs::create_dir_all(parent)
             {
+                if budget.is_some() {
+                    return Err(e.into());
+                }
                 tracing::debug!("failed to create directory {}: {}", parent.display(), e);
                 continue;
             }
@@ -622,6 +647,9 @@ fn handle_zip_archive_streaming(
                     }
                 }
                 Err(e) => {
+                    if budget.is_some() {
+                        return Err(e.into());
+                    }
                     tracing::debug!("failed to create file {}: {}", out_path.display(), e);
                     continue;
                 }
@@ -786,6 +814,9 @@ fn handle_asar_archive_in_memory(
                 }
                 let inner_path = path_in_asar.to_string_lossy().replace('\\', "/");
                 if !is_safe_extract_path(Path::new(&inner_path)) {
+                    if budget.is_some() {
+                        anyhow::bail!("archive contains an unsafe ASAR member path");
+                    }
                     tracing::debug!("unsafe asar path: {inner_path}");
                     continue;
                 }
@@ -1232,8 +1263,8 @@ pub fn decompress_file_with_strict_single_stream_cap_and_limits(
 pub struct ArchiveExpansion {
     /// Fully decoded entries or a stream within the caller-provided directory.
     pub content: CompressedContent,
-    /// Entries inspected, including skipped unsafe members. TAR/ZIP count
-    /// directories too; ASAR counts indexed files and HWP counts streams.
+    /// Entries inspected. TAR/ZIP count directories too; ASAR counts indexed files
+    /// and HWP counts streams. Unsafe TAR/ZIP/ASAR file paths fail strict extraction.
     pub inspected_entries: usize,
 }
 
@@ -1426,7 +1457,7 @@ mod tests {
     fn zip_names_preserve_unicode_and_cp437_across_extraction_paths() -> anyhow::Result<()> {
         for name in ["café.txt", "caf_.txt"] {
             let mut zip = ZipWriter::new(std::io::Cursor::new(Vec::new()));
-            for member in [name, "../escape.txt", "later.txt"] {
+            for member in [name, "later.txt"] {
                 zip.start_file(member, SimpleFileOptions::default())?;
                 zip.write_all(b"synthetic secret")?;
             }
@@ -1451,7 +1482,7 @@ mod tests {
                 10,
                 &control,
             )?;
-            assert_eq!(inspected, 3);
+            assert_eq!(inspected, 2);
             assert_eq!(entries.len(), 2);
             assert_eq!(entries[0], ("archive.zip!café.txt".into(), b"synthetic secret".to_vec()));
             assert_eq!(entries[1].0, "archive.zip!later.txt");
@@ -1545,6 +1576,121 @@ mod tests {
                 .is_err()
         );
         assert!(!output.path().join("tar-entry-0/config.txt").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn strict_tar_rejects_corrupt_headers_after_complete_members() -> anyhow::Result<()> {
+        let input = tempdir()?;
+        let path = input.path().join("corrupt.tar");
+        write_tar(&path, &[("first.txt", b"complete"), ("second.txt", b"hidden")])?;
+        let mut bytes = fs::read(&path)?;
+        // The second header follows the first header and its padded data block.
+        bytes[1024] ^= 1; // Deliberately invalidate its checksum.
+        fs::write(&path, bytes)?;
+        let output = tempdir()?;
+        let result =
+            super::decompress_file_with_budget(&path, output.path(), 1024, 10, &Default::default());
+        assert!(result.is_err(), "strict extraction must not report partial coverage");
+        // Preserve the CLI's best-effort recovery of complete members.
+        let CompressedContent::ArchiveFiles(entries) = decompress_once(&path, Some(output.path()))?
+        else {
+            panic!("expected complete members from best-effort extraction");
+        };
+        assert_eq!(entries.len(), 1);
+        assert_eq!(fs::read(&entries[0].1)?, b"complete");
+        Ok(())
+    }
+
+    #[test]
+    fn strict_tar_and_zip_reject_unsafe_members_without_partial_coverage() -> anyhow::Result<()> {
+        let input = tempdir()?;
+        let output = tempdir()?;
+        let control = crate::ScanControl::default();
+        let tar_path = input.path().join("unsafe.tar");
+        let mut tar = Builder::new(File::create(&tar_path)?);
+        for name in ["safe.txt", "../outside.txt"] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(6);
+            header.set_mode(0o600);
+            // Bypass the writer's path validation to model an untrusted archive.
+            header.as_mut_bytes()[..name.len()].copy_from_slice(name.as_bytes());
+            header.set_cksum();
+            tar.append(&header, &b"secret"[..])?;
+        }
+        tar.finish()?;
+        drop(tar);
+        let zip_path = input.path().join("unsafe.zip");
+        let mut zip = zip::ZipWriter::new(File::create(&zip_path)?);
+        for name in ["safe.txt", "../outside.txt"] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default())?;
+            zip.write_all(b"secret")?;
+        }
+        zip.finish()?;
+        for path in [&tar_path, &zip_path] {
+            let error = super::decompress_file_with_budget(path, output.path(), 1024, 10, &control)
+                .unwrap_err();
+            assert!(error.to_string().contains("unsafe"), "{error:#}");
+            let CompressedContent::ArchiveFiles(entries) =
+                decompress_once(path, Some(output.path()))?
+            else {
+                panic!("expected best-effort extraction to preserve the safe member");
+            };
+            assert_eq!(entries.len(), 1);
+            assert_eq!(fs::read(&entries[0].1)?, b"secret");
+        }
+        let bytes = fs::read(zip_path)?;
+        let error = super::extract_zip_archive_in_memory_with_budget(
+            &bytes,
+            "unsafe.zip",
+            1024,
+            10,
+            &control,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("unsafe"), "{error:#}");
+        Ok(())
+    }
+
+    #[test]
+    fn strict_archives_propagate_staging_errors() -> anyhow::Result<()> {
+        for format in ["tar", "zip"] {
+            for failure in ["directory", "file"] {
+                let input = tempdir()?;
+                let path = input.path().join(format!("payload.{format}"));
+                let entries: &[(&str, &[u8])] =
+                    &[("first.txt", b"complete"), ("second.txt", b"hidden")];
+                if format == "tar" {
+                    write_tar(&path, entries)?;
+                } else {
+                    let mut zip = ZipWriter::new(File::create(&path)?);
+                    for (name, bytes) in entries {
+                        zip.start_file(*name, SimpleFileOptions::default())?;
+                        zip.write_all(bytes)?;
+                    }
+                    zip.finish()?;
+                }
+                let output = tempdir()?;
+                let parent = output.path().join(format!("{format}-entry-1"));
+                if failure == "directory" {
+                    fs::write(&parent, b"not a directory")?;
+                } else {
+                    fs::create_dir(&parent)?;
+                    fs::create_dir(parent.join("second.txt"))?;
+                }
+                let result = super::decompress_file_with_budget(
+                    &path,
+                    output.path(),
+                    1024,
+                    10,
+                    &Default::default(),
+                );
+                assert!(
+                    result.is_err(),
+                    "strict {format} extraction must propagate {failure} errors"
+                );
+            }
+        }
         Ok(())
     }
 
@@ -2164,7 +2310,7 @@ mod tests {
     }
 
     #[test]
-    fn decompress_asar_skips_parent_dir_entries() -> anyhow::Result<()> {
+    fn decompress_asar_skips_parent_dir_entries_only_in_best_effort_mode() -> anyhow::Result<()> {
         use asar::AsarWriter;
 
         let mut writer = AsarWriter::new();
@@ -2200,6 +2346,18 @@ mod tests {
                 .any(|(name, data)| name.ends_with("!safe.txt") && data.as_slice() == b"safe")
         );
         assert!(!entries.iter().any(|(name, _)| name.contains("..")));
+
+        let output = tempdir()?;
+        let error = super::decompress_file_with_budget(
+            &asar_path,
+            output.path(),
+            1024,
+            10,
+            &crate::ScanControl::default(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("unsafe ASAR"), "{error:#}");
+        assert_eq!(std::fs::read_dir(output.path())?.count(), 0);
         Ok(())
     }
 

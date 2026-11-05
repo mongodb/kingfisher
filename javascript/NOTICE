@@ -1,0 +1,86 @@
+NOTICE file corresponding to Section 4 (d) of the Apache License, Version 2.0
+
+This file contains manual attributions for incorporated or derived source
+material. Rust dependency notices are generated separately in
+THIRD_PARTY_NOTICES.
+
+--------------------------------------------------------------------
+Notices for Kingfisher
+--------------------------------------------------------------------
+Copyright 2025-2026 MongoDB, Inc.
+https://www.mongodb.com
+
+Source repository: https://github.com/mongodb/kingfisher
+
+
+--------------------------------------------------------------------
+Nosey Parker
+--------------------------------------------------------------------
+Copyright 2022 Praetorian Security, Inc <https://praetorian.com>.
+
+This product includes software derived from the Nosey Parker project
+developed by Praetorian Security, Inc:
+
+    https://github.com/praetorian-inc/noseyparker
+
+Kingfisher's scanning engine and architecture derive from Nosey Parker.
+Nosey Parker no longer supplies Kingfisher's candidate detector catalog;
+Kingfisher's candidate detector catalog is sourced from Betterleaks and selected
+Veles detectors (see below).
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+--------------------------------------------------------------------
+Built-in rules
+--------------------------------------------------------------------
+The token-efficiency helper also includes an unchanged Betterleaks subset of
+wordfreq data, Copyright 2022 Robyn Speer, under CC-BY-SA-4.0. The data's separate
+license and corpus attribution are retained in
+crates/kingfisher-rules/data/wordfreq-LICENSE.txt and wordfreq-NOTICE.md, and in
+the generated rule notices. The Rust source retains its existing license.
+
+Kingfisher's candidate detector catalog is sourced from Betterleaks and selected
+Veles detectors in OSV-SCALIBR. A maintainer tool converts pinned upstream sources
+into the bundled catalog; Kingfisher modifies the imported rules with operational
+validation, filtering, access-map, and revocation behavior. Exact upstream inputs,
+license texts, source headers, and provenance are preserved in
+crates/kingfisher-rules/generated/.
+
+Veles / OSV-SCALIBR
+https://github.com/google/osv-scalibr
+Copyright 2025-2026 Google LLC
+Licensed under the Apache License, Version 2.0; see LICENSE.
+
+Betterleaks
+https://github.com/betterleaks/betterleaks
+Copyright (c) 2026 Zachary Rice
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

@@ -2,8 +2,8 @@
 # See ../provenance.json for per-rule origins, pinned revisions, and hashes,
 # ../NOTICES.txt for attribution/licenses, and ../upstream-sources.json.gz
 # for exact upstream sources. Kingfisher-authored helpers are identified in provenance.
-# Generated from source https://raw.githubusercontent.com/betterleaks/betterleaks/b1aa878bc41b06583f6ce83bf0ffcc5e6ed8f4f3/config/betterleaks.toml; do not edit.
-# Imported 469 of 473 Betterleaks rules. Omitted low-value generic rules: generic-api-key, generic-password, generic-username.
+# Generated from source https://raw.githubusercontent.com/betterleaks/betterleaks/8f376ff9c31ed5309ac448fe601c5dd21b376155/config/betterleaks.toml; do not edit.
+# Imported 470 of 474 Betterleaks rules. Omitted low-value generic rules: generic-api-key, generic-password, generic-username.
 # Omitted filename-only built-in rules: pkcs12-file.
 # Custom path-only rules retain path matching semantics.
 betterleaks_prefilter:
@@ -6148,6 +6148,17 @@ rules:
         access_map:
           handler: anthropic
           inputs: {}
+  revocation:
+    type: Betterleaks
+    content:
+      expression: |
+        let id = env.get("ANTHROPIC_API_KEY_ID");
+        let target = env.get("ANTHROPIC_API_KEY_VALUE");
+        let headers = {"x-api-key": env.get("ANTHROPIC_ADMIN_KEY"), "anthropic-version": "2023-06-01", "Content-Type": "application/json"};
+        target == "" || target != finding.secret || !(id matches "^apikey_[A-Za-z0-9_-]+$") ? {"result": "error", "reason": "An exact owner-supplied token/key mapping is required"} : (
+          let r = http.post("https://api.anthropic.com/v1/organizations/api_keys/" + id, headers, toJSON({"status": "inactive"}));
+          r.status == 200 && (r.json?.type ?? "") == "api_key" && (r.json?.id ?? "") == id && (r.json?.status ?? "") == "inactive" ? {"result": "revoked"} : revoke.unknown(r)
+        )
   betterleaks_filter:
     kind: binary
     operator: '||'
@@ -39863,6 +39874,24 @@ rules:
         access_map:
           handler: gcp_api_key
           inputs: {}
+  revocation:
+    type: Betterleaks
+    content:
+      expression: |
+        let headers = {"Authorization": "Bearer " + env.get("GCP_ACCESS_TOKEN")};
+        let lookup = http.get("https://apikeys.googleapis.com/v2/keys:lookupKey?keyString=" + strings.urlQueryEscape(finding.secret), headers);
+        let name = lookup.json?.name ?? "";
+        lookup.status != 200 || !(name matches "^projects/[0-9]+/locations/global/keys/[A-Za-z0-9_-]+$") ? {"result": "error", "reason": "Exact API key lookup failed"} : (
+          let deletion = http.delete("https://apikeys.googleapis.com/v2/" + name, headers);
+          let operation_name = deletion.json?.name ?? "";
+          let operation = operation_name matches "^operations/[A-Za-z0-9_-][A-Za-z0-9_.-]*$" ? operation_name : "";
+          deletion.status != 200 ? {"result": "unknown", "reason": "API key deletion was not confirmed"} : (
+            let result = (deletion.json?.done ?? false) == true ? deletion : (
+              operation != "" ? http.get("https://apikeys.googleapis.com/v2/" + operation, headers) : deletion
+            );
+            result.status == 200 && (result.json?.done ?? false) == true && result.json?.error == nil && (result.json?.response?.name ?? "") == name ? {"result": "revoked"} : {"result": "unknown", "reason": "Check the deletion operation before retrying", "metadata": {"operation": operation}}
+          )
+        )
   betterleaks_filter:
     kind: binary
     operator: '||'
@@ -41918,162 +41947,31 @@ rules:
           - kind: string
             value: (?i)(?:\.git[/\\]config|(?:^|[/\\])\.git-credentials|_history)$
       right:
-        kind: binary
-        operator: '||'
-        left:
-          kind: binary
-          operator: '||'
-          left:
-            kind: binary
-            operator: '&&'
-            left:
-              kind: call
-              callee:
-                kind: member
-                node:
-                  kind: member
-                  node:
-                    kind: member
-                    node:
-                      kind: identifier
-                      value: finding
-                    property:
-                      kind: string
-                      value: captures
-                    optional: false
-                    method: false
-                  property:
-                    kind: string
-                    value: host
-                  optional: false
-                  method: false
-                property:
-                  kind: string
-                  value: endsWith
-                optional: false
-                method: true
-              arguments:
-              - kind: string
-                value: bitbucket.org
-            right:
-              kind: call
-              callee:
-                kind: member
-                node:
-                  kind: member
-                  node:
-                    kind: member
-                    node:
-                      kind: identifier
-                      value: finding
-                    property:
-                      kind: string
-                      value: captures
-                    optional: false
-                    method: false
-                  property:
-                    kind: string
-                    value: uri
-                  optional: false
-                  method: false
-                property:
-                  kind: string
-                  value: endsWith
-                optional: false
-                method: true
-              arguments:
-              - kind: string
-                value: .git
-          right:
-            kind: call
-            callee:
-              kind: member
-              node:
-                kind: member
-                node:
-                  kind: member
-                  node:
-                    kind: identifier
-                    value: finding
-                  property:
-                    kind: string
-                    value: captures
-                  optional: false
-                  method: false
-                property:
-                  kind: string
-                  value: host
-                optional: false
-                method: false
-              property:
-                kind: string
-                value: contains
-              optional: false
-              method: true
-            arguments:
-            - kind: string
-              value: codecatalyst.aws
-        right:
-          kind: binary
-          operator: '&&'
-          left:
-            kind: call
-            callee:
-              kind: member
-              node:
-                kind: member
-                node:
-                  kind: member
-                  node:
-                    kind: identifier
-                    value: finding
-                  property:
-                    kind: string
-                    value: captures
-                  optional: false
-                  method: false
-                property:
-                  kind: string
-                  value: host
-                optional: false
-                method: false
-              property:
-                kind: string
-                value: startsWith
-              optional: false
-              method: true
-            arguments:
-            - kind: string
-              value: git-codecommit.
-          right:
-            kind: call
-            callee:
-              kind: member
-              node:
-                kind: member
-                node:
-                  kind: member
-                  node:
-                    kind: identifier
-                    value: finding
-                  property:
-                    kind: string
-                    value: captures
-                  optional: false
-                  method: false
-                property:
-                  kind: string
-                  value: host
-                optional: false
-                method: false
-              property:
-                kind: string
-                value: endsWith
-              optional: false
-              method: true
-            arguments:
-            - kind: string
-              value: .amazonaws.com
+        kind: call
+        callee:
+          kind: identifier
+          value: matchesAny
+        arguments:
+        - kind: member
+          node:
+            kind: member
+            node:
+              kind: identifier
+              value: finding
+            property:
+              kind: string
+              value: captures
+            optional: false
+            method: false
+          property:
+            kind: string
+            value: uri
+          optional: false
+          method: false
+        - kind: array
+          nodes:
+          - kind: string
+            value: ^https://[^:\s]+:[^\s@]+@(?:bitbucket\.org/[^\s]+\.git\b|git\.[^/]*codecatalyst\.aws/[^\s]*|git-codecommit\.[a-zA-Z\-0-9]+\.amazonaws\.com/[^\s]+)$
   betterleaks_secret_group: 4
   tls_mode: lax
 - name: Detected a Gitea Access Token, which may expose self-hosted Git repositories and associated code to unauthorized access.
@@ -42536,6 +42434,14 @@ rules:
         access_map:
           handler: github
           inputs: {}
+  revocation:
+    type: Betterleaks
+    content:
+      expression: |
+        !(finding.secret matches "^ghu_[A-Za-z0-9]{36}$") ? {"result": "error", "reason": "Installation tokens are not supported by this endpoint"} : (
+          let r = http.post("https://api.github.com/credentials/revoke", {"Accept": "application/vnd.github+json", "Content-Type": "application/json", "X-GitHub-Api-Version": "2026-03-10"}, toJSON({"credentials": [finding.secret]}));
+          r.status == 202 ? {"result": "unknown", "reason": "Revocation accepted; completion is not reported by GitHub"} : revoke.unknown(r)
+        )
   betterleaks_filter:
     kind: binary
     operator: '||'
@@ -54008,14 +53914,17 @@ rules:
     content:
       source: |
         let r = http.get("https://app.harness.io/v1/orgs?limit=1&page=1", {
-            "Accept": "application/json",
-            "x-api-key": finding["secret"]
-          }); r.status in [200, 403] ? {
-            "result": "valid"
-          } : r.status == 401 ? {
-            "result": "invalid",
-            "reason": "Unauthorized"
-          } : validate.unknown(r)
+          "Accept": "application/json",
+          "x-api-key": finding["secret"]
+        }); r.status in [200, 403] ? {
+          "result": "valid",
+          "analysis": {
+            "can_read": r.status == 200 && type(r.json) == "array"
+          }
+        } : r.status == 401 ? {
+          "result": "invalid",
+          "reason": "Unauthorized"
+        } : validate.unknown(r)
       expression:
         kind: variable_declarator
         name: r
@@ -54089,6 +53998,57 @@ rules:
               value:
                 kind: string
                 value: valid
+            - kind: pair
+              key:
+                kind: string
+                value: analysis
+              value:
+                kind: map
+                pairs:
+                - kind: pair
+                  key:
+                    kind: string
+                    value: can_read
+                  value:
+                    kind: binary
+                    operator: '&&'
+                    left:
+                      kind: binary
+                      operator: ==
+                      left:
+                        kind: member
+                        node:
+                          kind: identifier
+                          value: r
+                        property:
+                          kind: string
+                          value: status
+                        optional: false
+                        method: false
+                      right:
+                        kind: integer
+                        value: 200
+                    right:
+                      kind: binary
+                      operator: ==
+                      left:
+                        kind: call
+                        callee:
+                          kind: identifier
+                          value: type
+                        arguments:
+                        - kind: member
+                          node:
+                            kind: identifier
+                            value: r
+                          property:
+                            kind: string
+                            value: json
+                          optional: false
+                          method: false
+                      right:
+                        kind: string
+                        value: array
           exp2:
             kind: conditional
             cond:
@@ -54139,6 +54099,703 @@ rules:
               arguments:
               - kind: identifier
                 value: r
+      analyze:
+        kind: variable_declarator
+        name: input
+        value:
+          kind: member
+          node:
+            kind: identifier
+            value: validation
+          property:
+            kind: string
+            value: analysis
+          optional: false
+          method: false
+        expr:
+          kind: variable_declarator
+          name: parts
+          value:
+            kind: call
+            callee:
+              kind: identifier
+              value: split
+            arguments:
+            - kind: member
+              node:
+                kind: identifier
+                value: finding
+              property:
+                kind: string
+                value: secret
+              optional: false
+              method: false
+            - kind: string
+              value: .
+          expr:
+            kind: variable_declarator
+            name: account_id
+            value:
+              kind: conditional
+              cond:
+                kind: binary
+                operator: ==
+                left:
+                  kind: call
+                  callee:
+                    kind: identifier
+                    value: len
+                  arguments:
+                  - kind: identifier
+                    value: parts
+                right:
+                  kind: integer
+                  value: 4
+              exp1:
+                kind: member
+                node:
+                  kind: identifier
+                  value: parts
+                property:
+                  kind: integer
+                  value: 1
+                optional: false
+                method: false
+              exp2:
+                kind: string
+                value: ''
+            expr:
+              kind: variable_declarator
+              name: is_pat
+              value:
+                kind: binary
+                operator: ==
+                left:
+                  kind: member
+                  node:
+                    kind: identifier
+                    value: parts
+                  property:
+                    kind: integer
+                    value: 0
+                  optional: false
+                  method: false
+                right:
+                  kind: string
+                  value: pat
+              expr:
+                kind: variable_declarator
+                name: profile
+                value:
+                  kind: conditional
+                  cond:
+                    kind: identifier
+                    value: is_pat
+                  exp1:
+                    kind: variable_declarator
+                    name: r
+                    value:
+                      kind: call
+                      callee:
+                        kind: member
+                        node:
+                          kind: identifier
+                          value: http
+                        property:
+                          kind: string
+                          value: get
+                        optional: false
+                        method: true
+                      arguments:
+                      - kind: string
+                        value: https://app.harness.io/ng/api/user/currentUser
+                      - kind: map
+                        pairs:
+                        - kind: pair
+                          key:
+                            kind: string
+                            value: Accept
+                          value:
+                            kind: string
+                            value: application/json
+                        - kind: pair
+                          key:
+                            kind: string
+                            value: x-api-key
+                          value:
+                            kind: member
+                            node:
+                              kind: identifier
+                              value: finding
+                            property:
+                              kind: string
+                              value: secret
+                            optional: false
+                            method: false
+                    expr:
+                      kind: conditional
+                      cond:
+                        kind: binary
+                        operator: '&&'
+                        left:
+                          kind: binary
+                          operator: '&&'
+                          left:
+                            kind: binary
+                            operator: '&&'
+                            left:
+                              kind: binary
+                              operator: '&&'
+                              left:
+                                kind: binary
+                                operator: '&&'
+                                left:
+                                  kind: binary
+                                  operator: ==
+                                  left:
+                                    kind: member
+                                    node:
+                                      kind: identifier
+                                      value: r
+                                    property:
+                                      kind: string
+                                      value: status
+                                    optional: false
+                                    method: false
+                                  right:
+                                    kind: integer
+                                    value: 200
+                                right:
+                                  kind: binary
+                                  operator: ==
+                                  left:
+                                    kind: call
+                                    callee:
+                                      kind: identifier
+                                      value: type
+                                    arguments:
+                                    - kind: member
+                                      node:
+                                        kind: identifier
+                                        value: r
+                                      property:
+                                        kind: string
+                                        value: json
+                                      optional: false
+                                      method: false
+                                  right:
+                                    kind: string
+                                    value: map
+                              right:
+                                kind: binary
+                                operator: ==
+                                left:
+                                  kind: chain
+                                  node:
+                                    kind: member
+                                    node:
+                                      kind: member
+                                      node:
+                                        kind: identifier
+                                        value: r
+                                      property:
+                                        kind: string
+                                        value: json
+                                      optional: false
+                                      method: false
+                                    property:
+                                      kind: string
+                                      value: status
+                                    optional: true
+                                    method: false
+                                right:
+                                  kind: string
+                                  value: SUCCESS
+                            right:
+                              kind: binary
+                              operator: ==
+                              left:
+                                kind: call
+                                callee:
+                                  kind: identifier
+                                  value: type
+                                arguments:
+                                - kind: chain
+                                  node:
+                                    kind: member
+                                    node:
+                                      kind: member
+                                      node:
+                                        kind: identifier
+                                        value: r
+                                      property:
+                                        kind: string
+                                        value: json
+                                      optional: false
+                                      method: false
+                                    property:
+                                      kind: string
+                                      value: data
+                                    optional: true
+                                    method: false
+                              right:
+                                kind: string
+                                value: map
+                          right:
+                            kind: binary
+                            operator: ==
+                            left:
+                              kind: call
+                              callee:
+                                kind: identifier
+                                value: type
+                              arguments:
+                              - kind: chain
+                                node:
+                                  kind: member
+                                  node:
+                                    kind: member
+                                    node:
+                                      kind: member
+                                      node:
+                                        kind: identifier
+                                        value: r
+                                      property:
+                                        kind: string
+                                        value: json
+                                      optional: false
+                                      method: false
+                                    property:
+                                      kind: string
+                                      value: data
+                                    optional: false
+                                    method: false
+                                  property:
+                                    kind: string
+                                    value: uuid
+                                  optional: true
+                                  method: false
+                            right:
+                              kind: string
+                              value: string
+                        right:
+                          kind: binary
+                          operator: '!='
+                          left:
+                            kind: member
+                            node:
+                              kind: member
+                              node:
+                                kind: member
+                                node:
+                                  kind: identifier
+                                  value: r
+                                property:
+                                  kind: string
+                                  value: json
+                                optional: false
+                                method: false
+                              property:
+                                kind: string
+                                value: data
+                              optional: false
+                              method: false
+                            property:
+                              kind: string
+                              value: uuid
+                            optional: false
+                            method: false
+                          right:
+                            kind: string
+                            value: ''
+                      exp1:
+                        kind: member
+                        node:
+                          kind: member
+                          node:
+                            kind: identifier
+                            value: r
+                          property:
+                            kind: string
+                            value: json
+                          optional: false
+                          method: false
+                        property:
+                          kind: string
+                          value: data
+                        optional: false
+                        method: false
+                      exp2:
+                        kind: map
+                        pairs: []
+                  exp2:
+                    kind: map
+                    pairs: []
+                expr:
+                  kind: variable_declarator
+                  name: accounts
+                  value:
+                    kind: conditional
+                    cond:
+                      kind: binary
+                      operator: ==
+                      left:
+                        kind: call
+                        callee:
+                          kind: identifier
+                          value: type
+                        arguments:
+                        - kind: chain
+                          node:
+                            kind: member
+                            node:
+                              kind: identifier
+                              value: profile
+                            property:
+                              kind: string
+                              value: accounts
+                            optional: true
+                            method: false
+                      right:
+                        kind: string
+                        value: array
+                    exp1:
+                      kind: member
+                      node:
+                        kind: identifier
+                        value: profile
+                      property:
+                        kind: string
+                        value: accounts
+                      optional: false
+                      method: false
+                    exp2:
+                      kind: array
+                      nodes: []
+                  expr:
+                    kind: variable_declarator
+                    name: account
+                    value:
+                      kind: builtin
+                      name: find
+                      arguments:
+                      - kind: identifier
+                        value: accounts
+                      - kind: predicate
+                        node:
+                          kind: binary
+                          operator: '&&'
+                          left:
+                            kind: binary
+                            operator: ==
+                            left:
+                              kind: call
+                              callee:
+                                kind: identifier
+                                value: type
+                              arguments:
+                              - kind: pointer
+                                name: '#'
+                            right:
+                              kind: string
+                              value: map
+                          right:
+                            kind: binary
+                            operator: ==
+                            left:
+                              kind: chain
+                              node:
+                                kind: member
+                                node:
+                                  kind: pointer
+                                  name: '#'
+                                property:
+                                  kind: string
+                                  value: uuid
+                                optional: true
+                                method: false
+                            right:
+                              kind: identifier
+                              value: account_id
+                    expr:
+                      kind: variable_declarator
+                      name: can_read
+                      value:
+                        kind: binary
+                        operator: ??
+                        left:
+                          kind: member
+                          node:
+                            kind: identifier
+                            value: input
+                          property:
+                            kind: string
+                            value: can_read
+                          optional: false
+                          method: false
+                        right:
+                          kind: bool
+                          value: false
+                      expr:
+                        kind: map
+                        pairs:
+                        - kind: pair
+                          key:
+                            kind: string
+                            value: identity
+                          value:
+                            kind: map
+                            pairs:
+                            - kind: pair
+                              key:
+                                kind: string
+                                value: id
+                              value:
+                                kind: binary
+                                operator: ??
+                                left:
+                                  kind: chain
+                                  node:
+                                    kind: member
+                                    node:
+                                      kind: identifier
+                                      value: profile
+                                    property:
+                                      kind: string
+                                      value: uuid
+                                    optional: true
+                                    method: false
+                                right:
+                                  kind: string
+                                  value: ''
+                            - kind: pair
+                              key:
+                                kind: string
+                                value: name
+                              value:
+                                kind: conditional
+                                cond:
+                                  kind: binary
+                                  operator: ==
+                                  left:
+                                    kind: call
+                                    callee:
+                                      kind: identifier
+                                      value: type
+                                    arguments:
+                                    - kind: chain
+                                      node:
+                                        kind: member
+                                        node:
+                                          kind: identifier
+                                          value: profile
+                                        property:
+                                          kind: string
+                                          value: name
+                                        optional: true
+                                        method: false
+                                  right:
+                                    kind: string
+                                    value: string
+                                exp1:
+                                  kind: member
+                                  node:
+                                    kind: identifier
+                                    value: profile
+                                  property:
+                                    kind: string
+                                    value: name
+                                  optional: false
+                                  method: false
+                                exp2:
+                                  kind: string
+                                  value: ''
+                            - kind: pair
+                              key:
+                                kind: string
+                                value: email
+                              value:
+                                kind: conditional
+                                cond:
+                                  kind: binary
+                                  operator: ==
+                                  left:
+                                    kind: call
+                                    callee:
+                                      kind: identifier
+                                      value: type
+                                    arguments:
+                                    - kind: chain
+                                      node:
+                                        kind: member
+                                        node:
+                                          kind: identifier
+                                          value: profile
+                                        property:
+                                          kind: string
+                                          value: email
+                                        optional: true
+                                        method: false
+                                  right:
+                                    kind: string
+                                    value: string
+                                exp1:
+                                  kind: member
+                                  node:
+                                    kind: identifier
+                                    value: profile
+                                  property:
+                                    kind: string
+                                    value: email
+                                  optional: false
+                                  method: false
+                                exp2:
+                                  kind: string
+                                  value: ''
+                            - kind: pair
+                              key:
+                                kind: string
+                                value: account
+                              value:
+                                kind: map
+                                pairs:
+                                - kind: pair
+                                  key:
+                                    kind: string
+                                    value: id
+                                  value:
+                                    kind: identifier
+                                    value: account_id
+                                - kind: pair
+                                  key:
+                                    kind: string
+                                    value: name
+                                  value:
+                                    kind: conditional
+                                    cond:
+                                      kind: binary
+                                      operator: ==
+                                      left:
+                                        kind: call
+                                        callee:
+                                          kind: identifier
+                                          value: type
+                                        arguments:
+                                        - kind: chain
+                                          node:
+                                            kind: member
+                                            node:
+                                              kind: identifier
+                                              value: account
+                                            property:
+                                              kind: string
+                                              value: accountName
+                                            optional: true
+                                            method: false
+                                      right:
+                                        kind: string
+                                        value: string
+                                    exp1:
+                                      kind: member
+                                      node:
+                                        kind: identifier
+                                        value: account
+                                      property:
+                                        kind: string
+                                        value: accountName
+                                      optional: false
+                                      method: false
+                                    exp2:
+                                      kind: string
+                                      value: ''
+                        - kind: pair
+                          key:
+                            kind: string
+                            value: metadata
+                          value:
+                            kind: map
+                            pairs:
+                            - kind: pair
+                              key:
+                                kind: string
+                                value: token_type
+                              value:
+                                kind: conditional
+                                cond:
+                                  kind: identifier
+                                  value: is_pat
+                                exp1:
+                                  kind: string
+                                  value: personal_access_token
+                                exp2:
+                                  kind: string
+                                  value: service_account_token
+                        - kind: pair
+                          key:
+                            kind: string
+                            value: capabilities
+                          value:
+                            kind: call
+                            callee:
+                              kind: member
+                              node:
+                                kind: identifier
+                                value: analysis
+                              property:
+                                kind: string
+                                value: capabilities
+                              optional: false
+                              method: true
+                            arguments:
+                            - kind: map
+                              pairs:
+                              - kind: pair
+                                key:
+                                  kind: string
+                                  value: read
+                                value:
+                                  kind: identifier
+                                  value: can_read
+                        - kind: pair
+                          key:
+                            kind: string
+                            value: reason
+                          value:
+                            kind: conditional
+                            cond:
+                              kind: binary
+                              operator: '&&'
+                              left:
+                                kind: identifier
+                                value: is_pat
+                              right:
+                                kind: binary
+                                operator: ==
+                                left:
+                                  kind: call
+                                  callee:
+                                    kind: identifier
+                                    value: len
+                                  arguments:
+                                  - kind: identifier
+                                    value: profile
+                                right:
+                                  kind: integer
+                                  value: 0
+                            exp1:
+                              kind: string
+                              value: Harness user profile was unavailable; effective permissions were not returned
+                            exp2:
+                              kind: conditional
+                              cond:
+                                kind: identifier
+                                value: can_read
+                              exp1:
+                                kind: string
+                                value: Organization listing confirmed read access; other effective permissions were not returned
+                              exp2:
+                                kind: string
+                                value: Harness did not return effective permissions
       components: {}
       capabilities:
         access_map:
@@ -54588,90 +55245,112 @@ rules:
       kind: binary
       operator: '||'
       left:
-        kind: call
-        callee:
-          kind: identifier
-          value: matchesAny
-        arguments:
-        - kind: member
-          node:
+        kind: binary
+        operator: '||'
+        left:
+          kind: call
+          callee:
             kind: identifier
-            value: finding
-          property:
-            kind: string
-            value: secret
-          optional: false
-          method: false
-        - kind: array
-          nodes:
-          - kind: string
-            value: (?i)^true|false|null$
-          - kind: string
-            value: ^(?i:a+|b+|c+|d+|e+|f+|g+|h+|i+|j+|k+|l+|m+|n+|o+|p+|q+|r+|s+|t+|u+|v+|w+|x+|y+|z+|\*+|\.+)$
-          - kind: string
-            value: ^\$(?:\d+|{\d+})$
-          - kind: string
-            value: ^\$(?:[A-Z_]+|[a-z_]+)$
-          - kind: string
-            value: ^\${(?:[A-Z_]+|[a-z_]+)}$
-          - kind: string
-            value: ^\{\{[ \t]*[\w ().|]+[ \t]*}}$
-          - kind: string
-            value: ^\$\{\{[ \t]*(?:(?:env|github|secrets|vars)(?:\.[A-Za-z]\w+)+[\w "'&./=|]*)[ \t]*}}$
-          - kind: string
-            value: ^%(?:[A-Z_]+|[a-z_]+)%$
-          - kind: string
-            value: ^%[+\-# 0]?[bcdeEfFgGoOpqstTUvxX]$
-          - kind: string
-            value: ^\{\d{0,2}}$
-          - kind: string
-            value: ^@(?:[A-Z_]+|[a-z_]+)@$
-          - kind: string
-            value: ^/Users/(?i)[a-z0-9]+/[\w .-/]+$
-          - kind: string
-            value: ^/(?:bin|etc|home|opt|tmp|usr|var)/[\w ./-]+$
+            value: matchesAny
+          arguments:
+          - kind: member
+            node:
+              kind: identifier
+              value: finding
+            property:
+              kind: string
+              value: secret
+            optional: false
+            method: false
+          - kind: array
+            nodes:
+            - kind: string
+              value: (?i)^true|false|null$
+            - kind: string
+              value: ^(?i:a+|b+|c+|d+|e+|f+|g+|h+|i+|j+|k+|l+|m+|n+|o+|p+|q+|r+|s+|t+|u+|v+|w+|x+|y+|z+|\*+|\.+)$
+            - kind: string
+              value: ^\$(?:\d+|{\d+})$
+            - kind: string
+              value: ^\$(?:[A-Z_]+|[a-z_]+)$
+            - kind: string
+              value: ^\${(?:[A-Z_]+|[a-z_]+)}$
+            - kind: string
+              value: ^\{\{[ \t]*[\w ().|]+[ \t]*}}$
+            - kind: string
+              value: ^\$\{\{[ \t]*(?:(?:env|github|secrets|vars)(?:\.[A-Za-z]\w+)+[\w "'&./=|]*)[ \t]*}}$
+            - kind: string
+              value: ^%(?:[A-Z_]+|[a-z_]+)%$
+            - kind: string
+              value: ^%[+\-# 0]?[bcdeEfFgGoOpqstTUvxX]$
+            - kind: string
+              value: ^\{\d{0,2}}$
+            - kind: string
+              value: ^@(?:[A-Z_]+|[a-z_]+)@$
+            - kind: string
+              value: ^/Users/(?i)[a-z0-9]+/[\w .-/]+$
+            - kind: string
+              value: ^/(?:bin|etc|home|opt|tmp|usr|var)/[\w ./-]+$
+        right:
+          kind: call
+          callee:
+            kind: identifier
+            value: containsAny
+          arguments:
+          - kind: member
+            node:
+              kind: identifier
+              value: finding
+            property:
+              kind: string
+              value: secret
+            optional: false
+            method: false
+          - kind: array
+            nodes:
+            - kind: string
+              value: abcdefghijklmnopqrstuvwxyz
+            - kind: string
+              value: 014df517-39d1-4453-b7b3-9930c563627c
       right:
-        kind: call
-        callee:
-          kind: identifier
-          value: containsAny
-        arguments:
-        - kind: member
-          node:
+        kind: binary
+        operator: <=
+        left:
+          kind: call
+          callee:
             kind: identifier
-            value: finding
-          property:
-            kind: string
-            value: secret
-          optional: false
-          method: false
-        - kind: array
-          nodes:
-          - kind: string
-            value: abcdefghijklmnopqrstuvwxyz
-          - kind: string
-            value: 014df517-39d1-4453-b7b3-9930c563627c
+            value: entropy
+          arguments:
+          - kind: member
+            node:
+              kind: identifier
+              value: finding
+            property:
+              kind: string
+              value: secret
+            optional: false
+            method: false
+        right:
+          kind: float
+          value: '4.0'
     right:
-      kind: binary
-      operator: <=
-      left:
-        kind: call
-        callee:
+      kind: call
+      callee:
+        kind: identifier
+        value: matchesAny
+      arguments:
+      - kind: member
+        node:
           kind: identifier
-          value: entropy
-        arguments:
-        - kind: member
-          node:
-            kind: identifier
-            value: finding
-          property:
-            kind: string
-            value: secret
-          optional: false
-          method: false
-      right:
-        kind: float
-        value: '4.0'
+          value: finding
+        property:
+          kind: string
+          value: secret
+        optional: false
+        method: false
+      - kind: array
+        nodes:
+        - kind: string
+          value: ^HRKU-[0-9a-zA-Z_-]{60}\b$
   betterleaks_secret_group: 0
 - name: Highnote secret API key for the live environment.
   id: betterleaks.highnote-secret-live-key
@@ -68304,79 +68983,2479 @@ rules:
         - kind: string
           value: 014df517-39d1-4453-b7b3-9930c563627c
   betterleaks_secret_group: 0
-- name: Detected a MapBox API token, posing a risk to geospatial services and sensitive location data exposure.
+- name: Mapbox public access token. Requests can incur charges on the owner's account.
   id: betterleaks.mapbox-api-token
-  pattern: (?i)(?:mapbox)(?:[ \t\w.-]{0,20})[\s'"]{0,3}(?:=|>|:{1,3}=|\|\||:|=>|\?=|,)[\x60'"\s=]{0,5}(pk\.[a-z0-9]{60}\.[a-z0-9]{22})(?:\\?['"\x60]|[\s;]|\\[nr]|$)
+  pattern: \b(pk\.eyJ1Ijoi[A-Za-z0-9_-]{15,300}\.[A-Za-z0-9_-]{21}[AQgw])(?:$|[^A-Za-z0-9_-])
+  tags:
+  - provider:mapbox
+  - category:maps
   keywords:
-  - mapbox
+  - pk.eyj1ijoi
   confidence: high
+  validation:
+    type: Betterleaks
+    content:
+      source: |
+        let r = http.get("https://api.mapbox.com/tokens/v2?access_token=" + strings.urlQueryEscape(finding["secret"]), {"Accept": "application/json"});
+        let body = type(r.json) == "map" ? r.json : {};
+        let code = body.code ?? "";
+        let token = type(body.token) == "map" ? body.token : {};
+        r.status == 200 && code == "TokenValid" ? {
+         "result": "valid", "reason": code,
+         "analysis": {
+          "username": type(token.user) == "string" ? token.user : "",
+          "token_id": type(token.authorization) == "string" ? token.authorization : "",
+          "usage": type(token.usage) == "string" ? token.usage : ""
+         }
+        } : r.status == 200 && code in ["TokenRevoked", "TokenExpired"] ? {
+         "result": "revoked", "reason": code
+        } : r.status == 200 && code in ["TokenInvalid", "TokenMalformed"] ? {
+         "result": "invalid", "reason": code
+        } : r.status == 401 && type(body.message) == "string" && body.message != "" ? {
+         "result": "invalid", "reason": "401 Unauthorized: " + body.message
+        } : validate.unknown(r)
+      expression:
+        kind: variable_declarator
+        name: r
+        value:
+          kind: call
+          callee:
+            kind: member
+            node:
+              kind: identifier
+              value: http
+            property:
+              kind: string
+              value: get
+            optional: false
+            method: true
+          arguments:
+          - kind: binary
+            operator: +
+            left:
+              kind: string
+              value: https://api.mapbox.com/tokens/v2?access_token=
+            right:
+              kind: call
+              callee:
+                kind: member
+                node:
+                  kind: identifier
+                  value: strings
+                property:
+                  kind: string
+                  value: urlQueryEscape
+                optional: false
+                method: true
+              arguments:
+              - kind: member
+                node:
+                  kind: identifier
+                  value: finding
+                property:
+                  kind: string
+                  value: secret
+                optional: false
+                method: false
+          - kind: map
+            pairs:
+            - kind: pair
+              key:
+                kind: string
+                value: Accept
+              value:
+                kind: string
+                value: application/json
+        expr:
+          kind: variable_declarator
+          name: body
+          value:
+            kind: conditional
+            cond:
+              kind: binary
+              operator: ==
+              left:
+                kind: call
+                callee:
+                  kind: identifier
+                  value: type
+                arguments:
+                - kind: member
+                  node:
+                    kind: identifier
+                    value: r
+                  property:
+                    kind: string
+                    value: json
+                  optional: false
+                  method: false
+              right:
+                kind: string
+                value: map
+            exp1:
+              kind: member
+              node:
+                kind: identifier
+                value: r
+              property:
+                kind: string
+                value: json
+              optional: false
+              method: false
+            exp2:
+              kind: map
+              pairs: []
+          expr:
+            kind: variable_declarator
+            name: code
+            value:
+              kind: binary
+              operator: ??
+              left:
+                kind: member
+                node:
+                  kind: identifier
+                  value: body
+                property:
+                  kind: string
+                  value: code
+                optional: false
+                method: false
+              right:
+                kind: string
+                value: ''
+            expr:
+              kind: variable_declarator
+              name: token
+              value:
+                kind: conditional
+                cond:
+                  kind: binary
+                  operator: ==
+                  left:
+                    kind: call
+                    callee:
+                      kind: identifier
+                      value: type
+                    arguments:
+                    - kind: member
+                      node:
+                        kind: identifier
+                        value: body
+                      property:
+                        kind: string
+                        value: token
+                      optional: false
+                      method: false
+                  right:
+                    kind: string
+                    value: map
+                exp1:
+                  kind: member
+                  node:
+                    kind: identifier
+                    value: body
+                  property:
+                    kind: string
+                    value: token
+                  optional: false
+                  method: false
+                exp2:
+                  kind: map
+                  pairs: []
+              expr:
+                kind: conditional
+                cond:
+                  kind: binary
+                  operator: '&&'
+                  left:
+                    kind: binary
+                    operator: ==
+                    left:
+                      kind: member
+                      node:
+                        kind: identifier
+                        value: r
+                      property:
+                        kind: string
+                        value: status
+                      optional: false
+                      method: false
+                    right:
+                      kind: integer
+                      value: 200
+                  right:
+                    kind: binary
+                    operator: ==
+                    left:
+                      kind: identifier
+                      value: code
+                    right:
+                      kind: string
+                      value: TokenValid
+                exp1:
+                  kind: map
+                  pairs:
+                  - kind: pair
+                    key:
+                      kind: string
+                      value: result
+                    value:
+                      kind: string
+                      value: valid
+                  - kind: pair
+                    key:
+                      kind: string
+                      value: reason
+                    value:
+                      kind: identifier
+                      value: code
+                  - kind: pair
+                    key:
+                      kind: string
+                      value: analysis
+                    value:
+                      kind: map
+                      pairs:
+                      - kind: pair
+                        key:
+                          kind: string
+                          value: username
+                        value:
+                          kind: conditional
+                          cond:
+                            kind: binary
+                            operator: ==
+                            left:
+                              kind: call
+                              callee:
+                                kind: identifier
+                                value: type
+                              arguments:
+                              - kind: member
+                                node:
+                                  kind: identifier
+                                  value: token
+                                property:
+                                  kind: string
+                                  value: user
+                                optional: false
+                                method: false
+                            right:
+                              kind: string
+                              value: string
+                          exp1:
+                            kind: member
+                            node:
+                              kind: identifier
+                              value: token
+                            property:
+                              kind: string
+                              value: user
+                            optional: false
+                            method: false
+                          exp2:
+                            kind: string
+                            value: ''
+                      - kind: pair
+                        key:
+                          kind: string
+                          value: token_id
+                        value:
+                          kind: conditional
+                          cond:
+                            kind: binary
+                            operator: ==
+                            left:
+                              kind: call
+                              callee:
+                                kind: identifier
+                                value: type
+                              arguments:
+                              - kind: member
+                                node:
+                                  kind: identifier
+                                  value: token
+                                property:
+                                  kind: string
+                                  value: authorization
+                                optional: false
+                                method: false
+                            right:
+                              kind: string
+                              value: string
+                          exp1:
+                            kind: member
+                            node:
+                              kind: identifier
+                              value: token
+                            property:
+                              kind: string
+                              value: authorization
+                            optional: false
+                            method: false
+                          exp2:
+                            kind: string
+                            value: ''
+                      - kind: pair
+                        key:
+                          kind: string
+                          value: usage
+                        value:
+                          kind: conditional
+                          cond:
+                            kind: binary
+                            operator: ==
+                            left:
+                              kind: call
+                              callee:
+                                kind: identifier
+                                value: type
+                              arguments:
+                              - kind: member
+                                node:
+                                  kind: identifier
+                                  value: token
+                                property:
+                                  kind: string
+                                  value: usage
+                                optional: false
+                                method: false
+                            right:
+                              kind: string
+                              value: string
+                          exp1:
+                            kind: member
+                            node:
+                              kind: identifier
+                              value: token
+                            property:
+                              kind: string
+                              value: usage
+                            optional: false
+                            method: false
+                          exp2:
+                            kind: string
+                            value: ''
+                exp2:
+                  kind: conditional
+                  cond:
+                    kind: binary
+                    operator: '&&'
+                    left:
+                      kind: binary
+                      operator: ==
+                      left:
+                        kind: member
+                        node:
+                          kind: identifier
+                          value: r
+                        property:
+                          kind: string
+                          value: status
+                        optional: false
+                        method: false
+                      right:
+                        kind: integer
+                        value: 200
+                    right:
+                      kind: binary
+                      operator: in
+                      left:
+                        kind: identifier
+                        value: code
+                      right:
+                        kind: array
+                        nodes:
+                        - kind: string
+                          value: TokenRevoked
+                        - kind: string
+                          value: TokenExpired
+                  exp1:
+                    kind: map
+                    pairs:
+                    - kind: pair
+                      key:
+                        kind: string
+                        value: result
+                      value:
+                        kind: string
+                        value: revoked
+                    - kind: pair
+                      key:
+                        kind: string
+                        value: reason
+                      value:
+                        kind: identifier
+                        value: code
+                  exp2:
+                    kind: conditional
+                    cond:
+                      kind: binary
+                      operator: '&&'
+                      left:
+                        kind: binary
+                        operator: ==
+                        left:
+                          kind: member
+                          node:
+                            kind: identifier
+                            value: r
+                          property:
+                            kind: string
+                            value: status
+                          optional: false
+                          method: false
+                        right:
+                          kind: integer
+                          value: 200
+                      right:
+                        kind: binary
+                        operator: in
+                        left:
+                          kind: identifier
+                          value: code
+                        right:
+                          kind: array
+                          nodes:
+                          - kind: string
+                            value: TokenInvalid
+                          - kind: string
+                            value: TokenMalformed
+                    exp1:
+                      kind: map
+                      pairs:
+                      - kind: pair
+                        key:
+                          kind: string
+                          value: result
+                        value:
+                          kind: string
+                          value: invalid
+                      - kind: pair
+                        key:
+                          kind: string
+                          value: reason
+                        value:
+                          kind: identifier
+                          value: code
+                    exp2:
+                      kind: conditional
+                      cond:
+                        kind: binary
+                        operator: '&&'
+                        left:
+                          kind: binary
+                          operator: '&&'
+                          left:
+                            kind: binary
+                            operator: ==
+                            left:
+                              kind: member
+                              node:
+                                kind: identifier
+                                value: r
+                              property:
+                                kind: string
+                                value: status
+                              optional: false
+                              method: false
+                            right:
+                              kind: integer
+                              value: 401
+                          right:
+                            kind: binary
+                            operator: ==
+                            left:
+                              kind: call
+                              callee:
+                                kind: identifier
+                                value: type
+                              arguments:
+                              - kind: member
+                                node:
+                                  kind: identifier
+                                  value: body
+                                property:
+                                  kind: string
+                                  value: message
+                                optional: false
+                                method: false
+                            right:
+                              kind: string
+                              value: string
+                        right:
+                          kind: binary
+                          operator: '!='
+                          left:
+                            kind: member
+                            node:
+                              kind: identifier
+                              value: body
+                            property:
+                              kind: string
+                              value: message
+                            optional: false
+                            method: false
+                          right:
+                            kind: string
+                            value: ''
+                      exp1:
+                        kind: map
+                        pairs:
+                        - kind: pair
+                          key:
+                            kind: string
+                            value: result
+                          value:
+                            kind: string
+                            value: invalid
+                        - kind: pair
+                          key:
+                            kind: string
+                            value: reason
+                          value:
+                            kind: binary
+                            operator: +
+                            left:
+                              kind: string
+                              value: '401 Unauthorized: '
+                            right:
+                              kind: member
+                              node:
+                                kind: identifier
+                                value: body
+                              property:
+                                kind: string
+                                value: message
+                              optional: false
+                              method: false
+                      exp2:
+                        kind: call
+                        callee:
+                          kind: member
+                          node:
+                            kind: identifier
+                            value: validate
+                          property:
+                            kind: string
+                            value: unknown
+                          optional: false
+                          method: true
+                        arguments:
+                        - kind: identifier
+                          value: r
+      analyze:
+        kind: variable_declarator
+        name: input
+        value:
+          kind: member
+          node:
+            kind: identifier
+            value: validation
+          property:
+            kind: string
+            value: analysis
+          optional: false
+          method: false
+        expr:
+          kind: variable_declarator
+          name: username
+          value:
+            kind: binary
+            operator: ??
+            left:
+              kind: member
+              node:
+                kind: identifier
+                value: input
+              property:
+                kind: string
+                value: username
+              optional: false
+              method: false
+            right:
+              kind: string
+              value: ''
+          expr:
+            kind: variable_declarator
+            name: token_id
+            value:
+              kind: binary
+              operator: ??
+              left:
+                kind: member
+                node:
+                  kind: identifier
+                  value: input
+                property:
+                  kind: string
+                  value: token_id
+                optional: false
+                method: false
+              right:
+                kind: string
+                value: ''
+            expr:
+              kind: variable_declarator
+              name: usage
+              value:
+                kind: binary
+                operator: ??
+                left:
+                  kind: member
+                  node:
+                    kind: identifier
+                    value: input
+                  property:
+                    kind: string
+                    value: usage
+                  optional: false
+                  method: false
+                right:
+                  kind: string
+                  value: ''
+              expr:
+                kind: variable_declarator
+                name: r
+                value:
+                  kind: conditional
+                  cond:
+                    kind: binary
+                    operator: '&&'
+                    left:
+                      kind: binary
+                      operator: '&&'
+                      left:
+                        kind: binary
+                        operator: ==
+                        left:
+                          kind: identifier
+                          value: usage
+                        right:
+                          kind: string
+                          value: sk
+                      right:
+                        kind: binary
+                        operator: matches
+                        left:
+                          kind: identifier
+                          value: username
+                        right:
+                          kind: string
+                          value: ^[A-Za-z0-9_-]+$
+                    right:
+                      kind: binary
+                      operator: '!='
+                      left:
+                        kind: identifier
+                        value: token_id
+                      right:
+                        kind: string
+                        value: ''
+                  exp1:
+                    kind: call
+                    callee:
+                      kind: member
+                      node:
+                        kind: identifier
+                        value: http
+                      property:
+                        kind: string
+                        value: get
+                      optional: false
+                      method: true
+                    arguments:
+                    - kind: binary
+                      operator: +
+                      left:
+                        kind: binary
+                        operator: +
+                        left:
+                          kind: binary
+                          operator: +
+                          left:
+                            kind: binary
+                            operator: +
+                            left:
+                              kind: string
+                              value: https://api.mapbox.com/tokens/v2/
+                            right:
+                              kind: identifier
+                              value: username
+                          right:
+                            kind: string
+                            value: ?access_token=
+                        right:
+                          kind: call
+                          callee:
+                            kind: member
+                            node:
+                              kind: identifier
+                              value: strings
+                            property:
+                              kind: string
+                              value: urlQueryEscape
+                            optional: false
+                            method: true
+                          arguments:
+                          - kind: member
+                            node:
+                              kind: identifier
+                              value: finding
+                            property:
+                              kind: string
+                              value: secret
+                            optional: false
+                            method: false
+                      right:
+                        kind: string
+                        value: '&usage=sk&limit=100'
+                    - kind: map
+                      pairs:
+                      - kind: pair
+                        key:
+                          kind: string
+                          value: Accept
+                        value:
+                          kind: string
+                          value: application/json
+                  exp2:
+                    kind: map
+                    pairs: []
+                expr:
+                  kind: variable_declarator
+                  name: tokens
+                  value:
+                    kind: conditional
+                    cond:
+                      kind: binary
+                      operator: '&&'
+                      left:
+                        kind: binary
+                        operator: ==
+                        left:
+                          kind: binary
+                          operator: ??
+                          left:
+                            kind: member
+                            node:
+                              kind: identifier
+                              value: r
+                            property:
+                              kind: string
+                              value: status
+                            optional: false
+                            method: false
+                          right:
+                            kind: integer
+                            value: 0
+                        right:
+                          kind: integer
+                          value: 200
+                      right:
+                        kind: binary
+                        operator: ==
+                        left:
+                          kind: call
+                          callee:
+                            kind: identifier
+                            value: type
+                          arguments:
+                          - kind: member
+                            node:
+                              kind: identifier
+                              value: r
+                            property:
+                              kind: string
+                              value: json
+                            optional: false
+                            method: false
+                        right:
+                          kind: string
+                          value: array
+                    exp1:
+                      kind: member
+                      node:
+                        kind: identifier
+                        value: r
+                      property:
+                        kind: string
+                        value: json
+                      optional: false
+                      method: false
+                    exp2:
+                      kind: array
+                      nodes: []
+                  expr:
+                    kind: variable_declarator
+                    name: token
+                    value:
+                      kind: builtin
+                      name: find
+                      arguments:
+                      - kind: identifier
+                        value: tokens
+                      - kind: predicate
+                        node:
+                          kind: binary
+                          operator: '&&'
+                          left:
+                            kind: binary
+                            operator: ==
+                            left:
+                              kind: call
+                              callee:
+                                kind: identifier
+                                value: type
+                              arguments:
+                              - kind: pointer
+                                name: '#'
+                            right:
+                              kind: string
+                              value: map
+                          right:
+                            kind: binary
+                            operator: ==
+                            left:
+                              kind: binary
+                              operator: ??
+                              left:
+                                kind: member
+                                node:
+                                  kind: pointer
+                                  name: '#'
+                                property:
+                                  kind: string
+                                  value: id
+                                optional: false
+                                method: false
+                              right:
+                                kind: string
+                                value: ''
+                            right:
+                              kind: identifier
+                              value: token_id
+                    expr:
+                      kind: map
+                      pairs:
+                      - kind: pair
+                        key:
+                          kind: string
+                          value: identity
+                        value:
+                          kind: map
+                          pairs:
+                          - kind: pair
+                            key:
+                              kind: string
+                              value: username
+                            value:
+                              kind: identifier
+                              value: username
+                      - kind: pair
+                        key:
+                          kind: string
+                          value: metadata
+                        value:
+                          kind: map
+                          pairs:
+                          - kind: pair
+                            key:
+                              kind: string
+                              value: token_id
+                            value:
+                              kind: identifier
+                              value: token_id
+                          - kind: pair
+                            key:
+                              kind: string
+                              value: usage
+                            value:
+                              kind: identifier
+                              value: usage
+                          - kind: pair
+                            key:
+                              kind: string
+                              value: note
+                            value:
+                              kind: conditional
+                              cond:
+                                kind: binary
+                                operator: ==
+                                left:
+                                  kind: call
+                                  callee:
+                                    kind: identifier
+                                    value: type
+                                  arguments:
+                                  - kind: chain
+                                    node:
+                                      kind: member
+                                      node:
+                                        kind: identifier
+                                        value: token
+                                      property:
+                                        kind: string
+                                        value: note
+                                      optional: true
+                                      method: false
+                                right:
+                                  kind: string
+                                  value: string
+                              exp1:
+                                kind: member
+                                node:
+                                  kind: identifier
+                                  value: token
+                                property:
+                                  kind: string
+                                  value: note
+                                optional: false
+                                method: false
+                              exp2:
+                                kind: string
+                                value: ''
+                          - kind: pair
+                            key:
+                              kind: string
+                              value: scopes
+                            value:
+                              kind: conditional
+                              cond:
+                                kind: binary
+                                operator: ==
+                                left:
+                                  kind: call
+                                  callee:
+                                    kind: identifier
+                                    value: type
+                                  arguments:
+                                  - kind: chain
+                                    node:
+                                      kind: member
+                                      node:
+                                        kind: identifier
+                                        value: token
+                                      property:
+                                        kind: string
+                                        value: scopes
+                                      optional: true
+                                      method: false
+                                right:
+                                  kind: string
+                                  value: array
+                              exp1:
+                                kind: builtin
+                                name: filter
+                                arguments:
+                                - kind: member
+                                  node:
+                                    kind: identifier
+                                    value: token
+                                  property:
+                                    kind: string
+                                    value: scopes
+                                  optional: false
+                                  method: false
+                                - kind: predicate
+                                  node:
+                                    kind: binary
+                                    operator: ==
+                                    left:
+                                      kind: call
+                                      callee:
+                                        kind: identifier
+                                        value: type
+                                      arguments:
+                                      - kind: pointer
+                                        name: '#'
+                                    right:
+                                      kind: string
+                                      value: string
+                              exp2:
+                                kind: array
+                                nodes: []
+      components: {}
   betterleaks_filter:
     kind: binary
     operator: '||'
     left:
-      kind: call
-      callee:
-        kind: identifier
-        value: matchesAny
-      arguments:
-      - kind: member
-        node:
+      kind: binary
+      operator: '||'
+      left:
+        kind: call
+        callee:
           kind: identifier
-          value: finding
-        property:
-          kind: string
-          value: secret
-        optional: false
-        method: false
-      - kind: array
-        nodes:
-        - kind: string
-          value: (?i)^true|false|null$
-        - kind: string
-          value: ^(?i:a+|b+|c+|d+|e+|f+|g+|h+|i+|j+|k+|l+|m+|n+|o+|p+|q+|r+|s+|t+|u+|v+|w+|x+|y+|z+|\*+|\.+)$
-        - kind: string
-          value: ^\$(?:\d+|{\d+})$
-        - kind: string
-          value: ^\$(?:[A-Z_]+|[a-z_]+)$
-        - kind: string
-          value: ^\${(?:[A-Z_]+|[a-z_]+)}$
-        - kind: string
-          value: ^\{\{[ \t]*[\w ().|]+[ \t]*}}$
-        - kind: string
-          value: ^\$\{\{[ \t]*(?:(?:env|github|secrets|vars)(?:\.[A-Za-z]\w+)+[\w "'&./=|]*)[ \t]*}}$
-        - kind: string
-          value: ^%(?:[A-Z_]+|[a-z_]+)%$
-        - kind: string
-          value: ^%[+\-# 0]?[bcdeEfFgGoOpqstTUvxX]$
-        - kind: string
-          value: ^\{\d{0,2}}$
-        - kind: string
-          value: ^@(?:[A-Z_]+|[a-z_]+)@$
-        - kind: string
-          value: ^/Users/(?i)[a-z0-9]+/[\w .-/]+$
-        - kind: string
-          value: ^/(?:bin|etc|home|opt|tmp|usr|var)/[\w ./-]+$
+          value: matchesAny
+        arguments:
+        - kind: member
+          node:
+            kind: identifier
+            value: finding
+          property:
+            kind: string
+            value: secret
+          optional: false
+          method: false
+        - kind: array
+          nodes:
+          - kind: string
+            value: (?i)^true|false|null$
+          - kind: string
+            value: ^(?i:a+|b+|c+|d+|e+|f+|g+|h+|i+|j+|k+|l+|m+|n+|o+|p+|q+|r+|s+|t+|u+|v+|w+|x+|y+|z+|\*+|\.+)$
+          - kind: string
+            value: ^\$(?:\d+|{\d+})$
+          - kind: string
+            value: ^\$(?:[A-Z_]+|[a-z_]+)$
+          - kind: string
+            value: ^\${(?:[A-Z_]+|[a-z_]+)}$
+          - kind: string
+            value: ^\{\{[ \t]*[\w ().|]+[ \t]*}}$
+          - kind: string
+            value: ^\$\{\{[ \t]*(?:(?:env|github|secrets|vars)(?:\.[A-Za-z]\w+)+[\w "'&./=|]*)[ \t]*}}$
+          - kind: string
+            value: ^%(?:[A-Z_]+|[a-z_]+)%$
+          - kind: string
+            value: ^%[+\-# 0]?[bcdeEfFgGoOpqstTUvxX]$
+          - kind: string
+            value: ^\{\d{0,2}}$
+          - kind: string
+            value: ^@(?:[A-Z_]+|[a-z_]+)@$
+          - kind: string
+            value: ^/Users/(?i)[a-z0-9]+/[\w .-/]+$
+          - kind: string
+            value: ^/(?:bin|etc|home|opt|tmp|usr|var)/[\w ./-]+$
+      right:
+        kind: call
+        callee:
+          kind: identifier
+          value: containsAny
+        arguments:
+        - kind: member
+          node:
+            kind: identifier
+            value: finding
+          property:
+            kind: string
+            value: secret
+          optional: false
+          method: false
+        - kind: array
+          nodes:
+          - kind: string
+            value: abcdefghijklmnopqrstuvwxyz
+          - kind: string
+            value: 014df517-39d1-4453-b7b3-9930c563627c
     right:
-      kind: call
-      callee:
-        kind: identifier
-        value: containsAny
-      arguments:
-      - kind: member
-        node:
+      kind: variable_declarator
+      name: parts
+      value:
+        kind: call
+        callee:
           kind: identifier
-          value: finding
-        property:
-          kind: string
-          value: secret
-        optional: false
-        method: false
-      - kind: array
-        nodes:
+          value: split
+        arguments:
+        - kind: member
+          node:
+            kind: identifier
+            value: finding
+          property:
+            kind: string
+            value: secret
+          optional: false
+          method: false
         - kind: string
-          value: abcdefghijklmnopqrstuvwxyz
+          value: .
+      expr:
+        kind: variable_declarator
+        name: payload
+        value:
+          kind: conditional
+          cond:
+            kind: binary
+            operator: ==
+            left:
+              kind: call
+              callee:
+                kind: identifier
+                value: len
+              arguments:
+              - kind: identifier
+                value: parts
+            right:
+              kind: integer
+              value: 3
+          exp1:
+            kind: member
+            node:
+              kind: identifier
+              value: parts
+            property:
+              kind: integer
+              value: 1
+            optional: false
+            method: false
+          exp2:
+            kind: string
+            value: ''
+        expr:
+          kind: variable_declarator
+          name: padding
+          value:
+            kind: binary
+            operator: '%'
+            left:
+              kind: binary
+              operator: '-'
+              left:
+                kind: integer
+                value: 4
+              right:
+                kind: binary
+                operator: '%'
+                left:
+                  kind: call
+                  callee:
+                    kind: identifier
+                    value: len
+                  arguments:
+                  - kind: identifier
+                    value: payload
+                right:
+                  kind: integer
+                  value: 4
+            right:
+              kind: integer
+              value: 4
+          expr:
+            kind: binary
+            operator: '||'
+            left:
+              kind: binary
+              operator: '||'
+              left:
+                kind: binary
+                operator: <
+                left:
+                  kind: call
+                  callee:
+                    kind: identifier
+                    value: entropy
+                  arguments:
+                  - kind: member
+                    node:
+                      kind: identifier
+                      value: finding
+                    property:
+                      kind: string
+                      value: secret
+                    optional: false
+                    method: false
+                right:
+                  kind: integer
+                  value: 4
+              right:
+                kind: binary
+                operator: ==
+                left:
+                  kind: binary
+                  operator: '%'
+                  left:
+                    kind: call
+                    callee:
+                      kind: identifier
+                      value: len
+                    arguments:
+                    - kind: identifier
+                      value: payload
+                  right:
+                    kind: integer
+                    value: 4
+                right:
+                  kind: integer
+                  value: 1
+            right:
+              kind: unary
+              operator: '!'
+              node:
+                kind: binary
+                operator: matches
+                left:
+                  kind: call
+                  callee:
+                    kind: identifier
+                    value: fromBase64
+                  arguments:
+                  - kind: binary
+                    operator: +
+                    left:
+                      kind: builtin
+                      name: replace
+                      arguments:
+                      - kind: builtin
+                        name: replace
+                        arguments:
+                        - kind: identifier
+                          value: payload
+                        - kind: string
+                          value: '-'
+                        - kind: string
+                          value: +
+                      - kind: string
+                        value: _
+                      - kind: string
+                        value: /
+                    right:
+                      kind: call
+                      callee:
+                        kind: identifier
+                        value: repeat
+                      arguments:
+                      - kind: string
+                        value: =
+                      - kind: identifier
+                        value: padding
+                right:
+                  kind: string
+                  value: ^\{"u":"[^"\\\x00-\x1f]+"\s*,\s*"a"\s*:\s*"[A-Za-z0-9]+"\s*\}$
+  betterleaks_secret_group: 0
+- name: Mapbox secret access token. Granted scopes may allow uploads, edits, or token management.
+  id: betterleaks.mapbox-secret-token
+  pattern: \b(sk\.eyJ1Ijoi[A-Za-z0-9_-]{15,300}\.[A-Za-z0-9_-]{21}[AQgw])(?:$|[^A-Za-z0-9_-])
+  tags:
+  - provider:mapbox
+  - category:maps
+  keywords:
+  - sk.eyj1ijoi
+  confidence: high
+  validation:
+    type: Betterleaks
+    content:
+      source: |
+        let r = http.get("https://api.mapbox.com/tokens/v2?access_token=" + strings.urlQueryEscape(finding["secret"]), {"Accept": "application/json"});
+        let body = type(r.json) == "map" ? r.json : {};
+        let code = body.code ?? "";
+        let token = type(body.token) == "map" ? body.token : {};
+        r.status == 200 && code == "TokenValid" ? {
+         "result": "valid", "reason": code,
+         "analysis": {
+          "username": type(token.user) == "string" ? token.user : "",
+          "token_id": type(token.authorization) == "string" ? token.authorization : "",
+          "usage": type(token.usage) == "string" ? token.usage : ""
+         }
+        } : r.status == 200 && code in ["TokenRevoked", "TokenExpired"] ? {
+         "result": "revoked", "reason": code
+        } : r.status == 200 && code in ["TokenInvalid", "TokenMalformed"] ? {
+         "result": "invalid", "reason": code
+        } : r.status == 401 && type(body.message) == "string" && body.message != "" ? {
+         "result": "invalid", "reason": "401 Unauthorized: " + body.message
+        } : validate.unknown(r)
+      expression:
+        kind: variable_declarator
+        name: r
+        value:
+          kind: call
+          callee:
+            kind: member
+            node:
+              kind: identifier
+              value: http
+            property:
+              kind: string
+              value: get
+            optional: false
+            method: true
+          arguments:
+          - kind: binary
+            operator: +
+            left:
+              kind: string
+              value: https://api.mapbox.com/tokens/v2?access_token=
+            right:
+              kind: call
+              callee:
+                kind: member
+                node:
+                  kind: identifier
+                  value: strings
+                property:
+                  kind: string
+                  value: urlQueryEscape
+                optional: false
+                method: true
+              arguments:
+              - kind: member
+                node:
+                  kind: identifier
+                  value: finding
+                property:
+                  kind: string
+                  value: secret
+                optional: false
+                method: false
+          - kind: map
+            pairs:
+            - kind: pair
+              key:
+                kind: string
+                value: Accept
+              value:
+                kind: string
+                value: application/json
+        expr:
+          kind: variable_declarator
+          name: body
+          value:
+            kind: conditional
+            cond:
+              kind: binary
+              operator: ==
+              left:
+                kind: call
+                callee:
+                  kind: identifier
+                  value: type
+                arguments:
+                - kind: member
+                  node:
+                    kind: identifier
+                    value: r
+                  property:
+                    kind: string
+                    value: json
+                  optional: false
+                  method: false
+              right:
+                kind: string
+                value: map
+            exp1:
+              kind: member
+              node:
+                kind: identifier
+                value: r
+              property:
+                kind: string
+                value: json
+              optional: false
+              method: false
+            exp2:
+              kind: map
+              pairs: []
+          expr:
+            kind: variable_declarator
+            name: code
+            value:
+              kind: binary
+              operator: ??
+              left:
+                kind: member
+                node:
+                  kind: identifier
+                  value: body
+                property:
+                  kind: string
+                  value: code
+                optional: false
+                method: false
+              right:
+                kind: string
+                value: ''
+            expr:
+              kind: variable_declarator
+              name: token
+              value:
+                kind: conditional
+                cond:
+                  kind: binary
+                  operator: ==
+                  left:
+                    kind: call
+                    callee:
+                      kind: identifier
+                      value: type
+                    arguments:
+                    - kind: member
+                      node:
+                        kind: identifier
+                        value: body
+                      property:
+                        kind: string
+                        value: token
+                      optional: false
+                      method: false
+                  right:
+                    kind: string
+                    value: map
+                exp1:
+                  kind: member
+                  node:
+                    kind: identifier
+                    value: body
+                  property:
+                    kind: string
+                    value: token
+                  optional: false
+                  method: false
+                exp2:
+                  kind: map
+                  pairs: []
+              expr:
+                kind: conditional
+                cond:
+                  kind: binary
+                  operator: '&&'
+                  left:
+                    kind: binary
+                    operator: ==
+                    left:
+                      kind: member
+                      node:
+                        kind: identifier
+                        value: r
+                      property:
+                        kind: string
+                        value: status
+                      optional: false
+                      method: false
+                    right:
+                      kind: integer
+                      value: 200
+                  right:
+                    kind: binary
+                    operator: ==
+                    left:
+                      kind: identifier
+                      value: code
+                    right:
+                      kind: string
+                      value: TokenValid
+                exp1:
+                  kind: map
+                  pairs:
+                  - kind: pair
+                    key:
+                      kind: string
+                      value: result
+                    value:
+                      kind: string
+                      value: valid
+                  - kind: pair
+                    key:
+                      kind: string
+                      value: reason
+                    value:
+                      kind: identifier
+                      value: code
+                  - kind: pair
+                    key:
+                      kind: string
+                      value: analysis
+                    value:
+                      kind: map
+                      pairs:
+                      - kind: pair
+                        key:
+                          kind: string
+                          value: username
+                        value:
+                          kind: conditional
+                          cond:
+                            kind: binary
+                            operator: ==
+                            left:
+                              kind: call
+                              callee:
+                                kind: identifier
+                                value: type
+                              arguments:
+                              - kind: member
+                                node:
+                                  kind: identifier
+                                  value: token
+                                property:
+                                  kind: string
+                                  value: user
+                                optional: false
+                                method: false
+                            right:
+                              kind: string
+                              value: string
+                          exp1:
+                            kind: member
+                            node:
+                              kind: identifier
+                              value: token
+                            property:
+                              kind: string
+                              value: user
+                            optional: false
+                            method: false
+                          exp2:
+                            kind: string
+                            value: ''
+                      - kind: pair
+                        key:
+                          kind: string
+                          value: token_id
+                        value:
+                          kind: conditional
+                          cond:
+                            kind: binary
+                            operator: ==
+                            left:
+                              kind: call
+                              callee:
+                                kind: identifier
+                                value: type
+                              arguments:
+                              - kind: member
+                                node:
+                                  kind: identifier
+                                  value: token
+                                property:
+                                  kind: string
+                                  value: authorization
+                                optional: false
+                                method: false
+                            right:
+                              kind: string
+                              value: string
+                          exp1:
+                            kind: member
+                            node:
+                              kind: identifier
+                              value: token
+                            property:
+                              kind: string
+                              value: authorization
+                            optional: false
+                            method: false
+                          exp2:
+                            kind: string
+                            value: ''
+                      - kind: pair
+                        key:
+                          kind: string
+                          value: usage
+                        value:
+                          kind: conditional
+                          cond:
+                            kind: binary
+                            operator: ==
+                            left:
+                              kind: call
+                              callee:
+                                kind: identifier
+                                value: type
+                              arguments:
+                              - kind: member
+                                node:
+                                  kind: identifier
+                                  value: token
+                                property:
+                                  kind: string
+                                  value: usage
+                                optional: false
+                                method: false
+                            right:
+                              kind: string
+                              value: string
+                          exp1:
+                            kind: member
+                            node:
+                              kind: identifier
+                              value: token
+                            property:
+                              kind: string
+                              value: usage
+                            optional: false
+                            method: false
+                          exp2:
+                            kind: string
+                            value: ''
+                exp2:
+                  kind: conditional
+                  cond:
+                    kind: binary
+                    operator: '&&'
+                    left:
+                      kind: binary
+                      operator: ==
+                      left:
+                        kind: member
+                        node:
+                          kind: identifier
+                          value: r
+                        property:
+                          kind: string
+                          value: status
+                        optional: false
+                        method: false
+                      right:
+                        kind: integer
+                        value: 200
+                    right:
+                      kind: binary
+                      operator: in
+                      left:
+                        kind: identifier
+                        value: code
+                      right:
+                        kind: array
+                        nodes:
+                        - kind: string
+                          value: TokenRevoked
+                        - kind: string
+                          value: TokenExpired
+                  exp1:
+                    kind: map
+                    pairs:
+                    - kind: pair
+                      key:
+                        kind: string
+                        value: result
+                      value:
+                        kind: string
+                        value: revoked
+                    - kind: pair
+                      key:
+                        kind: string
+                        value: reason
+                      value:
+                        kind: identifier
+                        value: code
+                  exp2:
+                    kind: conditional
+                    cond:
+                      kind: binary
+                      operator: '&&'
+                      left:
+                        kind: binary
+                        operator: ==
+                        left:
+                          kind: member
+                          node:
+                            kind: identifier
+                            value: r
+                          property:
+                            kind: string
+                            value: status
+                          optional: false
+                          method: false
+                        right:
+                          kind: integer
+                          value: 200
+                      right:
+                        kind: binary
+                        operator: in
+                        left:
+                          kind: identifier
+                          value: code
+                        right:
+                          kind: array
+                          nodes:
+                          - kind: string
+                            value: TokenInvalid
+                          - kind: string
+                            value: TokenMalformed
+                    exp1:
+                      kind: map
+                      pairs:
+                      - kind: pair
+                        key:
+                          kind: string
+                          value: result
+                        value:
+                          kind: string
+                          value: invalid
+                      - kind: pair
+                        key:
+                          kind: string
+                          value: reason
+                        value:
+                          kind: identifier
+                          value: code
+                    exp2:
+                      kind: conditional
+                      cond:
+                        kind: binary
+                        operator: '&&'
+                        left:
+                          kind: binary
+                          operator: '&&'
+                          left:
+                            kind: binary
+                            operator: ==
+                            left:
+                              kind: member
+                              node:
+                                kind: identifier
+                                value: r
+                              property:
+                                kind: string
+                                value: status
+                              optional: false
+                              method: false
+                            right:
+                              kind: integer
+                              value: 401
+                          right:
+                            kind: binary
+                            operator: ==
+                            left:
+                              kind: call
+                              callee:
+                                kind: identifier
+                                value: type
+                              arguments:
+                              - kind: member
+                                node:
+                                  kind: identifier
+                                  value: body
+                                property:
+                                  kind: string
+                                  value: message
+                                optional: false
+                                method: false
+                            right:
+                              kind: string
+                              value: string
+                        right:
+                          kind: binary
+                          operator: '!='
+                          left:
+                            kind: member
+                            node:
+                              kind: identifier
+                              value: body
+                            property:
+                              kind: string
+                              value: message
+                            optional: false
+                            method: false
+                          right:
+                            kind: string
+                            value: ''
+                      exp1:
+                        kind: map
+                        pairs:
+                        - kind: pair
+                          key:
+                            kind: string
+                            value: result
+                          value:
+                            kind: string
+                            value: invalid
+                        - kind: pair
+                          key:
+                            kind: string
+                            value: reason
+                          value:
+                            kind: binary
+                            operator: +
+                            left:
+                              kind: string
+                              value: '401 Unauthorized: '
+                            right:
+                              kind: member
+                              node:
+                                kind: identifier
+                                value: body
+                              property:
+                                kind: string
+                                value: message
+                              optional: false
+                              method: false
+                      exp2:
+                        kind: call
+                        callee:
+                          kind: member
+                          node:
+                            kind: identifier
+                            value: validate
+                          property:
+                            kind: string
+                            value: unknown
+                          optional: false
+                          method: true
+                        arguments:
+                        - kind: identifier
+                          value: r
+      analyze:
+        kind: variable_declarator
+        name: input
+        value:
+          kind: member
+          node:
+            kind: identifier
+            value: validation
+          property:
+            kind: string
+            value: analysis
+          optional: false
+          method: false
+        expr:
+          kind: variable_declarator
+          name: username
+          value:
+            kind: binary
+            operator: ??
+            left:
+              kind: member
+              node:
+                kind: identifier
+                value: input
+              property:
+                kind: string
+                value: username
+              optional: false
+              method: false
+            right:
+              kind: string
+              value: ''
+          expr:
+            kind: variable_declarator
+            name: token_id
+            value:
+              kind: binary
+              operator: ??
+              left:
+                kind: member
+                node:
+                  kind: identifier
+                  value: input
+                property:
+                  kind: string
+                  value: token_id
+                optional: false
+                method: false
+              right:
+                kind: string
+                value: ''
+            expr:
+              kind: variable_declarator
+              name: usage
+              value:
+                kind: binary
+                operator: ??
+                left:
+                  kind: member
+                  node:
+                    kind: identifier
+                    value: input
+                  property:
+                    kind: string
+                    value: usage
+                  optional: false
+                  method: false
+                right:
+                  kind: string
+                  value: ''
+              expr:
+                kind: variable_declarator
+                name: r
+                value:
+                  kind: conditional
+                  cond:
+                    kind: binary
+                    operator: '&&'
+                    left:
+                      kind: binary
+                      operator: '&&'
+                      left:
+                        kind: binary
+                        operator: ==
+                        left:
+                          kind: identifier
+                          value: usage
+                        right:
+                          kind: string
+                          value: sk
+                      right:
+                        kind: binary
+                        operator: matches
+                        left:
+                          kind: identifier
+                          value: username
+                        right:
+                          kind: string
+                          value: ^[A-Za-z0-9_-]+$
+                    right:
+                      kind: binary
+                      operator: '!='
+                      left:
+                        kind: identifier
+                        value: token_id
+                      right:
+                        kind: string
+                        value: ''
+                  exp1:
+                    kind: call
+                    callee:
+                      kind: member
+                      node:
+                        kind: identifier
+                        value: http
+                      property:
+                        kind: string
+                        value: get
+                      optional: false
+                      method: true
+                    arguments:
+                    - kind: binary
+                      operator: +
+                      left:
+                        kind: binary
+                        operator: +
+                        left:
+                          kind: binary
+                          operator: +
+                          left:
+                            kind: binary
+                            operator: +
+                            left:
+                              kind: string
+                              value: https://api.mapbox.com/tokens/v2/
+                            right:
+                              kind: identifier
+                              value: username
+                          right:
+                            kind: string
+                            value: ?access_token=
+                        right:
+                          kind: call
+                          callee:
+                            kind: member
+                            node:
+                              kind: identifier
+                              value: strings
+                            property:
+                              kind: string
+                              value: urlQueryEscape
+                            optional: false
+                            method: true
+                          arguments:
+                          - kind: member
+                            node:
+                              kind: identifier
+                              value: finding
+                            property:
+                              kind: string
+                              value: secret
+                            optional: false
+                            method: false
+                      right:
+                        kind: string
+                        value: '&usage=sk&limit=100'
+                    - kind: map
+                      pairs:
+                      - kind: pair
+                        key:
+                          kind: string
+                          value: Accept
+                        value:
+                          kind: string
+                          value: application/json
+                  exp2:
+                    kind: map
+                    pairs: []
+                expr:
+                  kind: variable_declarator
+                  name: tokens
+                  value:
+                    kind: conditional
+                    cond:
+                      kind: binary
+                      operator: '&&'
+                      left:
+                        kind: binary
+                        operator: ==
+                        left:
+                          kind: binary
+                          operator: ??
+                          left:
+                            kind: member
+                            node:
+                              kind: identifier
+                              value: r
+                            property:
+                              kind: string
+                              value: status
+                            optional: false
+                            method: false
+                          right:
+                            kind: integer
+                            value: 0
+                        right:
+                          kind: integer
+                          value: 200
+                      right:
+                        kind: binary
+                        operator: ==
+                        left:
+                          kind: call
+                          callee:
+                            kind: identifier
+                            value: type
+                          arguments:
+                          - kind: member
+                            node:
+                              kind: identifier
+                              value: r
+                            property:
+                              kind: string
+                              value: json
+                            optional: false
+                            method: false
+                        right:
+                          kind: string
+                          value: array
+                    exp1:
+                      kind: member
+                      node:
+                        kind: identifier
+                        value: r
+                      property:
+                        kind: string
+                        value: json
+                      optional: false
+                      method: false
+                    exp2:
+                      kind: array
+                      nodes: []
+                  expr:
+                    kind: variable_declarator
+                    name: token
+                    value:
+                      kind: builtin
+                      name: find
+                      arguments:
+                      - kind: identifier
+                        value: tokens
+                      - kind: predicate
+                        node:
+                          kind: binary
+                          operator: '&&'
+                          left:
+                            kind: binary
+                            operator: ==
+                            left:
+                              kind: call
+                              callee:
+                                kind: identifier
+                                value: type
+                              arguments:
+                              - kind: pointer
+                                name: '#'
+                            right:
+                              kind: string
+                              value: map
+                          right:
+                            kind: binary
+                            operator: ==
+                            left:
+                              kind: binary
+                              operator: ??
+                              left:
+                                kind: member
+                                node:
+                                  kind: pointer
+                                  name: '#'
+                                property:
+                                  kind: string
+                                  value: id
+                                optional: false
+                                method: false
+                              right:
+                                kind: string
+                                value: ''
+                            right:
+                              kind: identifier
+                              value: token_id
+                    expr:
+                      kind: map
+                      pairs:
+                      - kind: pair
+                        key:
+                          kind: string
+                          value: identity
+                        value:
+                          kind: map
+                          pairs:
+                          - kind: pair
+                            key:
+                              kind: string
+                              value: username
+                            value:
+                              kind: identifier
+                              value: username
+                      - kind: pair
+                        key:
+                          kind: string
+                          value: metadata
+                        value:
+                          kind: map
+                          pairs:
+                          - kind: pair
+                            key:
+                              kind: string
+                              value: token_id
+                            value:
+                              kind: identifier
+                              value: token_id
+                          - kind: pair
+                            key:
+                              kind: string
+                              value: usage
+                            value:
+                              kind: identifier
+                              value: usage
+                          - kind: pair
+                            key:
+                              kind: string
+                              value: note
+                            value:
+                              kind: conditional
+                              cond:
+                                kind: binary
+                                operator: ==
+                                left:
+                                  kind: call
+                                  callee:
+                                    kind: identifier
+                                    value: type
+                                  arguments:
+                                  - kind: chain
+                                    node:
+                                      kind: member
+                                      node:
+                                        kind: identifier
+                                        value: token
+                                      property:
+                                        kind: string
+                                        value: note
+                                      optional: true
+                                      method: false
+                                right:
+                                  kind: string
+                                  value: string
+                              exp1:
+                                kind: member
+                                node:
+                                  kind: identifier
+                                  value: token
+                                property:
+                                  kind: string
+                                  value: note
+                                optional: false
+                                method: false
+                              exp2:
+                                kind: string
+                                value: ''
+                          - kind: pair
+                            key:
+                              kind: string
+                              value: scopes
+                            value:
+                              kind: conditional
+                              cond:
+                                kind: binary
+                                operator: ==
+                                left:
+                                  kind: call
+                                  callee:
+                                    kind: identifier
+                                    value: type
+                                  arguments:
+                                  - kind: chain
+                                    node:
+                                      kind: member
+                                      node:
+                                        kind: identifier
+                                        value: token
+                                      property:
+                                        kind: string
+                                        value: scopes
+                                      optional: true
+                                      method: false
+                                right:
+                                  kind: string
+                                  value: array
+                              exp1:
+                                kind: builtin
+                                name: filter
+                                arguments:
+                                - kind: member
+                                  node:
+                                    kind: identifier
+                                    value: token
+                                  property:
+                                    kind: string
+                                    value: scopes
+                                  optional: false
+                                  method: false
+                                - kind: predicate
+                                  node:
+                                    kind: binary
+                                    operator: ==
+                                    left:
+                                      kind: call
+                                      callee:
+                                        kind: identifier
+                                        value: type
+                                      arguments:
+                                      - kind: pointer
+                                        name: '#'
+                                    right:
+                                      kind: string
+                                      value: string
+                              exp2:
+                                kind: array
+                                nodes: []
+      components: {}
+  betterleaks_filter:
+    kind: binary
+    operator: '||'
+    left:
+      kind: binary
+      operator: '||'
+      left:
+        kind: call
+        callee:
+          kind: identifier
+          value: matchesAny
+        arguments:
+        - kind: member
+          node:
+            kind: identifier
+            value: finding
+          property:
+            kind: string
+            value: secret
+          optional: false
+          method: false
+        - kind: array
+          nodes:
+          - kind: string
+            value: (?i)^true|false|null$
+          - kind: string
+            value: ^(?i:a+|b+|c+|d+|e+|f+|g+|h+|i+|j+|k+|l+|m+|n+|o+|p+|q+|r+|s+|t+|u+|v+|w+|x+|y+|z+|\*+|\.+)$
+          - kind: string
+            value: ^\$(?:\d+|{\d+})$
+          - kind: string
+            value: ^\$(?:[A-Z_]+|[a-z_]+)$
+          - kind: string
+            value: ^\${(?:[A-Z_]+|[a-z_]+)}$
+          - kind: string
+            value: ^\{\{[ \t]*[\w ().|]+[ \t]*}}$
+          - kind: string
+            value: ^\$\{\{[ \t]*(?:(?:env|github|secrets|vars)(?:\.[A-Za-z]\w+)+[\w "'&./=|]*)[ \t]*}}$
+          - kind: string
+            value: ^%(?:[A-Z_]+|[a-z_]+)%$
+          - kind: string
+            value: ^%[+\-# 0]?[bcdeEfFgGoOpqstTUvxX]$
+          - kind: string
+            value: ^\{\d{0,2}}$
+          - kind: string
+            value: ^@(?:[A-Z_]+|[a-z_]+)@$
+          - kind: string
+            value: ^/Users/(?i)[a-z0-9]+/[\w .-/]+$
+          - kind: string
+            value: ^/(?:bin|etc|home|opt|tmp|usr|var)/[\w ./-]+$
+      right:
+        kind: call
+        callee:
+          kind: identifier
+          value: containsAny
+        arguments:
+        - kind: member
+          node:
+            kind: identifier
+            value: finding
+          property:
+            kind: string
+            value: secret
+          optional: false
+          method: false
+        - kind: array
+          nodes:
+          - kind: string
+            value: abcdefghijklmnopqrstuvwxyz
+          - kind: string
+            value: 014df517-39d1-4453-b7b3-9930c563627c
+    right:
+      kind: variable_declarator
+      name: parts
+      value:
+        kind: call
+        callee:
+          kind: identifier
+          value: split
+        arguments:
+        - kind: member
+          node:
+            kind: identifier
+            value: finding
+          property:
+            kind: string
+            value: secret
+          optional: false
+          method: false
         - kind: string
-          value: 014df517-39d1-4453-b7b3-9930c563627c
+          value: .
+      expr:
+        kind: variable_declarator
+        name: payload
+        value:
+          kind: conditional
+          cond:
+            kind: binary
+            operator: ==
+            left:
+              kind: call
+              callee:
+                kind: identifier
+                value: len
+              arguments:
+              - kind: identifier
+                value: parts
+            right:
+              kind: integer
+              value: 3
+          exp1:
+            kind: member
+            node:
+              kind: identifier
+              value: parts
+            property:
+              kind: integer
+              value: 1
+            optional: false
+            method: false
+          exp2:
+            kind: string
+            value: ''
+        expr:
+          kind: variable_declarator
+          name: padding
+          value:
+            kind: binary
+            operator: '%'
+            left:
+              kind: binary
+              operator: '-'
+              left:
+                kind: integer
+                value: 4
+              right:
+                kind: binary
+                operator: '%'
+                left:
+                  kind: call
+                  callee:
+                    kind: identifier
+                    value: len
+                  arguments:
+                  - kind: identifier
+                    value: payload
+                right:
+                  kind: integer
+                  value: 4
+            right:
+              kind: integer
+              value: 4
+          expr:
+            kind: binary
+            operator: '||'
+            left:
+              kind: binary
+              operator: '||'
+              left:
+                kind: binary
+                operator: <
+                left:
+                  kind: call
+                  callee:
+                    kind: identifier
+                    value: entropy
+                  arguments:
+                  - kind: member
+                    node:
+                      kind: identifier
+                      value: finding
+                    property:
+                      kind: string
+                      value: secret
+                    optional: false
+                    method: false
+                right:
+                  kind: integer
+                  value: 4
+              right:
+                kind: binary
+                operator: ==
+                left:
+                  kind: binary
+                  operator: '%'
+                  left:
+                    kind: call
+                    callee:
+                      kind: identifier
+                      value: len
+                    arguments:
+                    - kind: identifier
+                      value: payload
+                  right:
+                    kind: integer
+                    value: 4
+                right:
+                  kind: integer
+                  value: 1
+            right:
+              kind: unary
+              operator: '!'
+              node:
+                kind: binary
+                operator: matches
+                left:
+                  kind: call
+                  callee:
+                    kind: identifier
+                    value: fromBase64
+                  arguments:
+                  - kind: binary
+                    operator: +
+                    left:
+                      kind: builtin
+                      name: replace
+                      arguments:
+                      - kind: builtin
+                        name: replace
+                        arguments:
+                        - kind: identifier
+                          value: payload
+                        - kind: string
+                          value: '-'
+                        - kind: string
+                          value: +
+                      - kind: string
+                        value: _
+                      - kind: string
+                        value: /
+                    right:
+                      kind: call
+                      callee:
+                        kind: identifier
+                        value: repeat
+                      arguments:
+                      - kind: string
+                        value: =
+                      - kind: identifier
+                        value: padding
+                right:
+                  kind: string
+                  value: ^\{"u":"[^"\\\x00-\x1f]+"\s*,\s*"a"\s*:\s*"[A-Za-z0-9]+"\s*\}$
   betterleaks_secret_group: 0
 - name: Identified a Mattermost Access Token, which may compromise team communication channels and data privacy.
   id: betterleaks.mattermost-access-token
@@ -74857,6 +77936,20 @@ rules:
   keywords:
   - ntn_
   confidence: high
+  revocation:
+    type: Betterleaks
+    content:
+      expression: |
+        let headers = {"Authorization": "Basic " + base64.encode(env.get("NOTION_CLIENT_ID") + ":" + env.get("NOTION_CLIENT_SECRET")), "Notion-Version": "2026-03-11", "Content-Type": "application/json"};
+        let body = toJSON({"token": finding.secret});
+        let before = http.post("https://api.notion.com/v1/oauth/introspect", headers, body);
+        before.status != 200 || (before.json?.active ?? false) != true ? {"result": "error", "reason": "The supplied app did not confirm an active OAuth token"} : (
+          let r = http.post("https://api.notion.com/v1/oauth/revoke", headers, body);
+          r.status != 200 ? revoke.unknown(r) : (
+            let after = http.post("https://api.notion.com/v1/oauth/introspect", headers, body);
+            after.status == 200 && after.json?.active == false ? {"result": "revoked"} : revoke.unknown(after)
+          )
+        )
   betterleaks_filter:
     kind: binary
     operator: '||'
@@ -77545,6 +80638,25 @@ rules:
         access_map:
           handler: openai
           inputs: {}
+  revocation:
+    type: Betterleaks
+    content:
+      expression: |
+        let id = env.get("OPENAI_API_KEY_ID");
+        let target = env.get("OPENAI_API_KEY_VALUE");
+        let headers = {"Authorization": "Bearer " + env.get("OPENAI_ADMIN_KEY")};
+        target == "" || target != finding.secret || !(id matches "^key_[A-Za-z0-9_-]+$") ? {"result": "error", "reason": "An exact owner-supplied token/key mapping is required"} : (
+          finding.secret startsWith "sk-admin-" ? (
+            let r = http.delete("https://api.openai.com/v1/organization/admin_api_keys/" + id, headers);
+            r.status == 200 && (r.json?.object ?? "") == "organization.admin_api_key.deleted" && (r.json?.id ?? "") == id && (r.json?.deleted ?? false) == true ? {"result": "revoked"} : revoke.unknown(r)
+          ) : (
+            let project = env.get("OPENAI_PROJECT_ID");
+            !(project matches "^proj_[A-Za-z0-9_-]+$") ? {"result": "error", "reason": "An exact project ID is required"} : (
+              let r = http.delete("https://api.openai.com/v1/organization/projects/" + project + "/api_keys/" + id, headers);
+              r.status == 200 && (r.json?.object ?? "") == "organization.project.api_key.deleted" && (r.json?.id ?? "") == id && (r.json?.deleted ?? false) == true ? {"result": "revoked"} : revoke.unknown(r)
+            )
+          )
+        )
   betterleaks_filter:
     kind: binary
     operator: '||'
@@ -78365,8 +81477,24 @@ rules:
           kind: float
           value: '3.5'
     right:
-      kind: bool
-      value: true
+      kind: call
+      callee:
+        kind: identifier
+        value: matchesAny
+      arguments:
+      - kind: member
+        node:
+          kind: identifier
+          value: finding
+        property:
+          kind: string
+          value: secret
+        optional: false
+        method: false
+      - kind: array
+        nodes:
+        - kind: string
+          value: ^sk-or-v[0-9]+-[A-Za-z0-9_-]{20,}$
   betterleaks_secret_group: 0
 - name: Found an OpenShift user token, potentially compromising an OpenShift/Kubernetes cluster.
   id: betterleaks.openshift-user-token
@@ -90217,6 +93345,17 @@ rules:
                 - kind: identifier
                   value: r
       components: {}
+  revocation:
+    type: Betterleaks
+    content:
+      expression: |
+        let id = env.get("RESEND_API_KEY_ID");
+        let target = env.get("RESEND_API_KEY_VALUE");
+        let headers = {"Authorization": "Bearer " + env.get("RESEND_ADMIN_API_KEY")};
+        target == "" || target != finding.secret || !(id matches "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$") ? {"result": "error", "reason": "An exact owner-supplied token/key mapping is required"} : (
+          let r = http.delete("https://api.resend.com/api-keys/" + id, headers);
+          r.status == 200 && (r.json?.object ?? "") == "api_key" && (r.json?.id ?? "") == id && (r.json?.deleted ?? false) == true ? {"result": "revoked"} : revoke.unknown(r)
+        )
   betterleaks_filter:
     kind: binary
     operator: '||'
@@ -95843,90 +98982,112 @@ rules:
       kind: binary
       operator: '||'
       left:
-        kind: call
-        callee:
-          kind: identifier
-          value: matchesAny
-        arguments:
-        - kind: member
-          node:
+        kind: binary
+        operator: '||'
+        left:
+          kind: call
+          callee:
             kind: identifier
-            value: finding
-          property:
-            kind: string
-            value: secret
-          optional: false
-          method: false
-        - kind: array
-          nodes:
-          - kind: string
-            value: (?i)^true|false|null$
-          - kind: string
-            value: ^(?i:a+|b+|c+|d+|e+|f+|g+|h+|i+|j+|k+|l+|m+|n+|o+|p+|q+|r+|s+|t+|u+|v+|w+|x+|y+|z+|\*+|\.+)$
-          - kind: string
-            value: ^\$(?:\d+|{\d+})$
-          - kind: string
-            value: ^\$(?:[A-Z_]+|[a-z_]+)$
-          - kind: string
-            value: ^\${(?:[A-Z_]+|[a-z_]+)}$
-          - kind: string
-            value: ^\{\{[ \t]*[\w ().|]+[ \t]*}}$
-          - kind: string
-            value: ^\$\{\{[ \t]*(?:(?:env|github|secrets|vars)(?:\.[A-Za-z]\w+)+[\w "'&./=|]*)[ \t]*}}$
-          - kind: string
-            value: ^%(?:[A-Z_]+|[a-z_]+)%$
-          - kind: string
-            value: ^%[+\-# 0]?[bcdeEfFgGoOpqstTUvxX]$
-          - kind: string
-            value: ^\{\d{0,2}}$
-          - kind: string
-            value: ^@(?:[A-Z_]+|[a-z_]+)@$
-          - kind: string
-            value: ^/Users/(?i)[a-z0-9]+/[\w .-/]+$
-          - kind: string
-            value: ^/(?:bin|etc|home|opt|tmp|usr|var)/[\w ./-]+$
+            value: matchesAny
+          arguments:
+          - kind: member
+            node:
+              kind: identifier
+              value: finding
+            property:
+              kind: string
+              value: secret
+            optional: false
+            method: false
+          - kind: array
+            nodes:
+            - kind: string
+              value: (?i)^true|false|null$
+            - kind: string
+              value: ^(?i:a+|b+|c+|d+|e+|f+|g+|h+|i+|j+|k+|l+|m+|n+|o+|p+|q+|r+|s+|t+|u+|v+|w+|x+|y+|z+|\*+|\.+)$
+            - kind: string
+              value: ^\$(?:\d+|{\d+})$
+            - kind: string
+              value: ^\$(?:[A-Z_]+|[a-z_]+)$
+            - kind: string
+              value: ^\${(?:[A-Z_]+|[a-z_]+)}$
+            - kind: string
+              value: ^\{\{[ \t]*[\w ().|]+[ \t]*}}$
+            - kind: string
+              value: ^\$\{\{[ \t]*(?:(?:env|github|secrets|vars)(?:\.[A-Za-z]\w+)+[\w "'&./=|]*)[ \t]*}}$
+            - kind: string
+              value: ^%(?:[A-Z_]+|[a-z_]+)%$
+            - kind: string
+              value: ^%[+\-# 0]?[bcdeEfFgGoOpqstTUvxX]$
+            - kind: string
+              value: ^\{\d{0,2}}$
+            - kind: string
+              value: ^@(?:[A-Z_]+|[a-z_]+)@$
+            - kind: string
+              value: ^/Users/(?i)[a-z0-9]+/[\w .-/]+$
+            - kind: string
+              value: ^/(?:bin|etc|home|opt|tmp|usr|var)/[\w ./-]+$
+        right:
+          kind: call
+          callee:
+            kind: identifier
+            value: containsAny
+          arguments:
+          - kind: member
+            node:
+              kind: identifier
+              value: finding
+            property:
+              kind: string
+              value: secret
+            optional: false
+            method: false
+          - kind: array
+            nodes:
+            - kind: string
+              value: abcdefghijklmnopqrstuvwxyz
+            - kind: string
+              value: 014df517-39d1-4453-b7b3-9930c563627c
       right:
-        kind: call
-        callee:
-          kind: identifier
-          value: containsAny
-        arguments:
-        - kind: member
-          node:
+        kind: binary
+        operator: <=
+        left:
+          kind: call
+          callee:
             kind: identifier
-            value: finding
-          property:
-            kind: string
-            value: secret
-          optional: false
-          method: false
-        - kind: array
-          nodes:
-          - kind: string
-            value: abcdefghijklmnopqrstuvwxyz
-          - kind: string
-            value: 014df517-39d1-4453-b7b3-9930c563627c
+            value: entropy
+          arguments:
+          - kind: member
+            node:
+              kind: identifier
+              value: finding
+            property:
+              kind: string
+              value: secret
+            optional: false
+            method: false
+        right:
+          kind: float
+          value: '2.0'
     right:
-      kind: binary
-      operator: <=
-      left:
-        kind: call
-        callee:
+      kind: call
+      callee:
+        kind: identifier
+        value: matchesAny
+      arguments:
+      - kind: member
+        node:
           kind: identifier
-          value: entropy
-        arguments:
-        - kind: member
-          node:
-            kind: identifier
-            value: finding
-          property:
-            kind: string
-            value: secret
-          optional: false
-          method: false
-      right:
-        kind: float
-        value: '2.0'
+          value: finding
+        property:
+          kind: string
+          value: secret
+        optional: false
+        method: false
+      - kind: array
+        nodes:
+        - kind: string
+          value: ^xapp-[0-9]{1,10}-[A-Za-z0-9]{11}-[0-9]{13}-[A-Fa-f0-9]{64}$
   betterleaks_secret_group: 0
 - name: Identified a Slack Bot token, which may compromise bot integrations and communication channel security.
   id: betterleaks.slack-bot-token
@@ -107697,6 +110858,15 @@ rules:
   keywords:
   - twilio
   confidence: high
+  revocation:
+    type: Betterleaks
+    content:
+      expression: |
+        let headers = {"Authorization": "Basic " + base64.encode(env.get("TWILIO_ACCOUNT_SID") + ":" + env.get("TWILIO_AUTH_TOKEN"))};
+        !(finding.secret matches "^SK[0-9a-fA-F]{32}$") ? {"result": "error", "reason": "An exact Twilio API key SID is required"} : (
+          let r = http.delete("https://iam.twilio.com/v1/Keys/" + finding.secret, headers);
+          r.status == 204 ? {"result": "revoked"} : revoke.unknown(r)
+        )
   betterleaks_filter:
     kind: binary
     operator: '||'
@@ -111274,6 +114444,18 @@ rules:
               - kind: identifier
                 value: r
       components: {}
+  revocation:
+    type: Betterleaks
+    content:
+      expression: |
+        let id = env.get("VERCEL_AI_GATEWAY_KEY_ID");
+        let target = env.get("VERCEL_AI_GATEWAY_KEY_VALUE");
+        let team = env.get("VERCEL_TEAM_ID");
+        let headers = {"Authorization": "Bearer " + env.get("VERCEL_OWNER_TOKEN")};
+        target == "" || target != finding.secret || !(id matches "^[A-Za-z0-9_-]+$") || !(team matches "^team_[A-Za-z0-9_-]+$") ? {"result": "error", "reason": "An exact owner-supplied token/key/team mapping is required"} : (
+          let r = http.delete("https://api.vercel.com/v1/api-keys/" + id + "?teamId=" + team, headers);
+          r.status == 204 ? {"result": "revoked"} : revoke.unknown(r)
+        )
   betterleaks_filter:
     kind: binary
     operator: '||'

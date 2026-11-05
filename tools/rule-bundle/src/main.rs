@@ -24,9 +24,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-// Betterleaks v2.0.0-rc.5 adds Labelbox, NuGet, and Tailscale content detectors.
-const BETTERLEAKS_REVISION: &str = "b1aa878bc41b06583f6ce83bf0ffcc5e6ed8f4f3";
-const BETTERLEAKS_SHA256: &str = "107da222fc897daa2647027248d86ece9dde29e993d5fc9e138826c71f951127";
+// Betterleaks v2.0.0-rc.7 adds Mapbox secret tokens and improves Mapbox/Harness validation.
+const BETTERLEAKS_REVISION: &str = "8f376ff9c31ed5309ac448fe601c5dd21b376155";
+const BETTERLEAKS_SHA256: &str = "7c305ade42d5dbad4650b97cca0299f9c16d152ec555ae47bd6f321f049f82e5";
 const BETTERLEAKS_WORDS_SHA256: &str =
     "d4dd5530d98f4ff343864ed71cfc0064abeae34e4f078edc0b46590c2da8fb47";
 const RULES: &str = "crates/kingfisher-rules";

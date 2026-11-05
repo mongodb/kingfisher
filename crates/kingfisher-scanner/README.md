@@ -5,7 +5,7 @@ follows semantic versioning; breaking changes require a new major version.
 
 ```toml
 [dependencies]
-kingfisher-scanner = "3.0.1"
+kingfisher-scanner = "3.0.2"
 anyhow = "1"
 ```
 
@@ -190,7 +190,7 @@ scratch allocation or reentrant borrowing errors; prefer `try_with`.
 Validation is disabled by default. Enable all supported validators and revocation:
 
 ```toml
-kingfisher-scanner = { version = "3.0.1", features = ["validation"] }
+kingfisher-scanner = { version = "3.0.2", features = ["validation"] }
 ```
 
 `validation` enables every supported family and its dependencies. Legacy
@@ -241,6 +241,12 @@ For one finding with supporting credentials, use
 `ValidatedFinding` pairs the original finding with its outcome, optional reason,
 and HTTP status. Its debug output omits credentials; it deliberately does not
 implement serialization. `into_redacted()` redacts secret and capture values.
+
+Low-level `ValidationEngine` responses can include allowlisted identity metadata,
+such as AWS's caller ARN or a Hugging Face username, using existing validation
+evidence without extra requests or analysis. The full private analysis handoff is
+never reported. High-level `ValidatedFinding` still omits provider responses.
+See the [identity metadata policy](https://github.com/mongodb/kingfisher/blob/main/docs/RULES.md#validation-response-identity-metadata).
 
 Validators are cloneable and share their concurrency limit. Defaults use strict
 TLS, no redirects, and block internal addresses. Inject an HTTP client with
@@ -464,6 +470,10 @@ preserving their logical names, including repeated names.
 `decompress_file_with_budget` and `extract_zip_archive_in_memory_with_budget`
 also enforce strict byte/entry budgets with `ScanControl` and return inspected
 entry usage, allowing nested callers to debit one aggregate root budget.
+Budgeted TAR/ZIP/ASAR extraction rejects malformed or unsafe members and staging
+I/O errors for the whole root, without returning partial members. Legacy
+best-effort entry points still skip unsafe entries; these checks do not guarantee
+complete coverage of every archive format.
 
 Owned directories from `decompress_file_to_temp` use Unix mode 0700; standalone
 decoded files created without an output directory use mode 0600 and require caller

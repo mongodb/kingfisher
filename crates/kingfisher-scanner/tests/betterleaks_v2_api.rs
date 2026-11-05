@@ -127,6 +127,41 @@ response.status == 204 ? {result: "revoked"} : revoke.unknown(response)
 }
 
 #[tokio::test]
+async fn engine_includes_allowlisted_identity_metadata_without_short_global_collisions() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("identity.toml");
+    std::fs::write(&path, r#"
+[[rules]]
+id = "identity"
+regex = '(token_[a-z0-9]{16})'
+validate = '''{result: "valid", analysis: {id: "12345", username: "user", private: "private-evidence"}}'''
+"#).unwrap();
+    let mut rules = Rules::from_paths([path], Confidence::Low).unwrap();
+    let mut rule = kingfisher_rules::Rule::new(rules.rules.remove("custom.identity").unwrap());
+    let kingfisher_rules::Validation::Betterleaks(validation) =
+        rule.syntax.validation.as_mut().unwrap()
+    else {
+        panic!("expected Betterleaks")
+    };
+    // Built-in capabilities are deliberately not imported from custom TOML.
+    validation.capabilities.access_map =
+        Some(serde_json::from_value(serde_json::json!({"handler":"github"})).unwrap());
+    let client = reqwest::Client::new();
+    let parser = liquid::ParserBuilder::with_stdlib().build().unwrap();
+    let globals =
+        liquid::object!({"TOKEN": "token_abcdefgh12345678", "INDEX": "1", "REGION": "us"});
+    let result = kingfisher_scanner::validation::ValidationEngine::new(&client, &parser)
+        .validate(&rule, &globals)
+        .await;
+    assert_eq!(result.outcome, ValidationOutcome::VerifiedActive);
+    let body: serde_json::Value = serde_json::from_str(&result.response_body).unwrap();
+    assert_eq!(body["metadata"], serde_json::json!({"id":"12345", "username":"user"}));
+    assert_eq!(body["result"], "valid");
+    assert!(!result.response_body.contains("private-evidence"));
+    assert!(result.analysis_data.is_some(), "private analysis handoff is retained");
+}
+
+#[tokio::test]
 async fn explicit_analysis_obeys_transport_policy_deadline_and_snapshot_redaction() {
     use std::time::Duration;
     let calls = Arc::new(AtomicUsize::new(0));

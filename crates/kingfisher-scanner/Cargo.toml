@@ -1,6 +1,6 @@
 [package]
 name = "kingfisher-scanner"
-version = "3.0.1"
+version = "3.0.2"
 description = "High-level scanning API for Kingfisher secret scanner"
 edition.workspace = true
 rust-version.workspace = true
@@ -110,7 +110,7 @@ validation-all = ["validation"]
 [dependencies]
 # Internal dependencies
 kingfisher-core = { version = "1.0.6", path = "../kingfisher-core" }
-kingfisher-rules = { version = "3.0.1", path = "../kingfisher-rules", features = ["__scanner-internals"] }
+kingfisher-rules = { version = "3.1.0", path = "../kingfisher-rules", features = ["__scanner-internals"] }
 
 # Error handling
 anyhow.workspace = true
@@ -239,7 +239,7 @@ ldap3 = { version = "0.12.1", default-features = false, features = ["tls-rustls-
 axum = { version = "0.8", default-features = false, features = ["tokio", "http1"] }
 pretty_assertions = "1.4"
 tempfile = "3.27"
-tokio = { version = "1.54", features = ["macros", "rt", "sync"] }
+tokio = { version = "1.54", features = ["macros", "rt", "sync", "test-util"] }
 
 [[example]]
 name = "detection_policy"

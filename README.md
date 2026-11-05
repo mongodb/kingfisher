@@ -28,14 +28,15 @@ Kingfisher is a fast, free, open-source secret scanner and credential response t
  - validate which credentials are active
  - map a leaked secret's identity, permissions, and reachable resources
  - triage findings in a browser, or output as SARIF, JSON, TOON
+ - send real-time alerts to Slack, Microsoft Teams, Discord, Mattermost, Google Chat, or any JSON webhook
  - revoke supported secrets
 
 > **Defender workflow:** Follow the [end-to-end defender workflow](docs/DEFENDER_WORKFLOW.md) for secret detection, validation, notifications, blast-radius mapping, and revocation.
 
-## Embed Kingfisher in Rust or Python
+## Embed Kingfisher in Rust, Python, or JavaScript
 
 Add Kingfisher's fast secret scanning, live credential validation, and revocation
-to your own applications through a Python module or native Rust library.
+to your own applications through Python, Rust, or the native Node SDK preview.
 Everything runs in-process, with no CLI subprocess required.
 
 <p align="center">
@@ -50,6 +51,12 @@ Everything runs in-process, with no CLI subprocess required.
 - **Rust:** Use `kingfisher-scanner`. See the [library guide](docs/LIBRARY.md) and
   [runnable examples](crates/kingfisher-scanner/examples) for scanning and validation,
   plus [revocation via `kingfisher-scanner`](docs/LIBRARY.md#revoke-a-credential).
+- **JavaScript / TypeScript:** The `kingfisher-secret-scanner` npm SDK **0.1.0** is a
+  preview of npm support, wrapping the same Rust crates with napi-rs. See the
+  [Node SDK guide](docs/JAVASCRIPT.md) and [source/examples](javascript). It targets
+  Node.js, including VS Code workspace extensions, rather than browser/WASM runtimes.
+  Start with the [runnable recipe walkthrough](javascript/examples/README.md);
+  maintainers can follow the [npm trusted-publishing setup](docs/PUBLISHING.md#npm-publishing-with-github-actions).
 
 ## Scan Targets
 
@@ -106,9 +113,10 @@ the test environment, and [deployment options](docs/DEPLOYMENT.md) for local, CI
 | **Validate** | Live provider checks that distinguish active credentials from static candidates | [Validation and filtering](docs/USAGE.md#display-only-secrets-confirmed-active-by-third-party-apis) |
 | **Map** | Read-only blast-radius analysis for supported providers, including AWS role and GCP service-account reachability, bounded Bedrock discovery, and Google API-key probes | [Blast radius](docs/BLAST_RADIUS.md) |
 | **Triage** | A local and hosted browser viewer for filtering, deduplication, prioritization, blast-radius inspection, and export | [Viewer usage](docs/USAGE.md#report-viewer-local-and-hosted), [hosted guide](https://mongodb.github.io/kingfisher/features/report-viewer/) |
+| **Alert** | Real-time notifications for findings, with per-sink confidence, validation, and access-map filters | [Alert webhooks](docs/ALERTS.md) |
 | **Revoke** | Conservative provider-specific containment workflows for supported credentials | [Revocation](docs/REVOCATION_PROVIDERS.md) |
 
-Live validation, advanced cloud blast-radius analysis, visual triage,
+Live validation, advanced cloud blast-radius analysis, visual triage, real-time alerts,
 and supported revocation all ship in the free, open source Kingfisher. There is no separate paid or
 enterprise tier.
 
@@ -256,6 +264,27 @@ the [end-to-end defender workflow](docs/DEFENDER_WORKFLOW.md),
 [direct revocation](docs/USAGE.md#direct-secret-revocation-with-kingfisher-revoke), and
 [CI and pre-commit deployment](docs/DEPLOYMENT.md#ci-and-pre-commit).
 
+## Real-Time Alerts
+
+Send findings to the place your responders already watch. When a scan completes, Kingfisher can
+POST a summary with active/inactive counts, top rules, optional per-finding details, and a link to
+the full report.
+
+```bash
+# Repeat --alert-webhook to fan out; Slack and Teams are inferred from the URL hosts
+kingfisher scan /path/to/repository \
+    --alert-webhook "$SLACK_SECURITY_WEBHOOK" \
+    --alert-webhook "$TEAMS_SECURITY_WEBHOOK"
+```
+
+Slack, Microsoft Teams, Discord, Mattermost, Google Chat, and generic JSON webhooks are supported.
+Confidence, validation, and access-map filters plus detail levels can be set globally from the
+CLI or per destination in `kingfisher.yaml`; payloads also carry stable finding fingerprints for
+deduplication. Alert delivery is best-effort and never changes the scan exit code.
+
+See the [alert webhook guide](docs/ALERTS.md) for payload formats, `--alert-*` flags, finding
+filters, and configuration examples.
+
 ## Map the Blast Radius. Revoke the Credential.
 
 For supported credentials, `--blast-radius` goes beyond a live/inactive verdict. It maps the
@@ -305,7 +334,7 @@ always confirm the target and operational impact before containment.
 - **Checksum-aware custom detection**: Kingfisher custom rules can verify token checksums offline before validation ([checksum intelligence](docs/RULES.md#checksum-intelligence))
 - **Report Viewer (local + hosted)**: Visualize and triage Kingfisher, **SARIF, Gitleaks, and TruffleHog** output locally with `kingfisher view ./report.json` or online with the [hosted viewer](https://mongodb.github.io/kingfisher/viewer/). Multiple files, directories, and imported third-party reports are merged and deduplicated. See [docs/USAGE.md](docs/USAGE.md#report-viewer-local-and-hosted).
 - **Audit reporting**: Generate compliance-oriented HTML reports with scan metadata and validation ordering
-- **Embedding**: Scan in-process from [Rust](docs/LIBRARY.md) or [Python](docs/PYPI.md), with explicit validation and revocation APIs
+- **Embedding**: Scan in-process from [Rust](docs/LIBRARY.md), [Python](docs/PYPI.md), or the [Node SDK preview](docs/JAVASCRIPT.md), with explicit validation and revocation APIs
 
 ## Basic Usage Demo
 ```bash
@@ -647,11 +676,11 @@ validation filters, output formats, scan scope, and command examples.
 | Run scans and inspect reports in a native workspace | [Kingfisher wizard](docs/WIZARD.md) |
 | Triage one or more reports visually | [Viewer usage](docs/USAGE.md#report-viewer-local-and-hosted), [hosted guide](https://mongodb.github.io/kingfisher/features/report-viewer/) |
 | Configure CI, pre-commit, or centralized scanning | [Deployment](docs/DEPLOYMENT.md), [advanced configuration](docs/ADVANCED.md) |
-| Send findings to chat or webhook destinations | [Alerts](docs/ALERTS.md) |
+| Send real-time alerts to chat or webhook destinations | [Alert webhooks](docs/ALERTS.md) |
 | Produce repository coverage and audit evidence | [Repository audit log](docs/AUDIT_LOG.md) |
 | Suppress existing findings without hiding new ones | [Baselines](docs/BASELINE.md) |
 | Write or import custom rules | [Rule authoring](docs/RULES.md) |
-| Embed the scanner in Rust or use it from Python | [Rust library](docs/LIBRARY.md), [Python SDK and distribution](docs/PYPI.md) |
+| Embed the scanner in Rust, Python or JavaScript/TypeScript | [Rust library](docs/LIBRARY.md), [Python SDK](docs/PYPI.md), [Node SDK](docs/JAVASCRIPT.md) |
 
 ## Output for People and Machines
 

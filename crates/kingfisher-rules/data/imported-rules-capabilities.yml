@@ -25,18 +25,18 @@ betterleaks:
   digitalocean-pat:
     filter_override: 'true'
   generic-credential-uri:
-    filter_override: 'matchesAny(attributes["path"], [`(?i)(?:\.git[/\\]config|(?:^|[/\\])\.git-credentials|_history)$`]) && ((finding["captures"]["host"].endsWith("bitbucket.org") && finding["captures"]["uri"].endsWith(".git")) || finding["captures"]["host"].contains("codecatalyst.aws") || (finding["captures"]["host"].startsWith("git-codecommit.") && finding["captures"]["host"].endsWith(".amazonaws.com")))'
+    # Suppress only complete HTTPS credential URLs matched by the selected Veles adapters.
+    # Host suffixes alone also hide unrelated hosts, ports, schemes, and empty usernames.
+    filter_override: 'matchesAny(attributes["path"], [`(?i)(?:\.git[/\\]config|(?:^|[/\\])\.git-credentials|_history)$`]) && matchesAny(finding["captures"]["uri"], [`^https://[^:\s]+:[^\s@]+@(?:bitbucket\.org/[^\s]+\.git\b|git\.[^/]*codecatalyst\.aws/[^\s]*|git-codecommit\.[a-zA-Z\-0-9]+\.amazonaws\.com/[^\s]+)$`])'
     validation: CredentialUri
     # Database endpoints commonly use private-CA or self-signed certificates. Honored only when
     # the operator also passes `--tls-mode lax`. HTTPS Basic Auth is validated separately;
     # plaintext HTTP and unsupported schemes are not live-validated.
     tls_mode: lax
-  heroku-api-key-v2:
-    filter_override: 'true'
   npm-access-token:
     filter_override: 'finding["secret"].startsWith("npm_")'
   openrouter-api-key:
-    filter_override: 'true'
+    filter_override: 'matchesAny(finding["secret"], [`^sk-or-v[0-9]+-[A-Za-z0-9_-]{20,}$`])'
   postman-api-token:
     filter_override: 'true'
   private-key:
@@ -46,8 +46,6 @@ betterleaks:
     validation: Assumed
   sendgrid-api-token:
     filter_override: 'matchesAny(finding["secret"], [`^SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}$`])'
-  slack-app-token:
-    filter_override: 'matchesAny(finding["secret"], [`^xapp-[0-9]{1,10}-[A-Za-z0-9]{11}-[0-9]{13}-[A-Fa-f0-9]{64}$`])'
   slack-config-access-token:
     filter_override: 'matchesAny(finding["secret"], [`^xoxe\.xoxp-[0-9]{1,10}-[A-Za-z0-9]{166}$`])'
   slack-config-refresh-token:
@@ -87,6 +85,26 @@ betterleaks:
   gcp-api-key:
     access_map:
       handler: gcp_api_key
+    # API Keys v2: exact raw-key lookup, one deletion, bounded operation confirmation.
+    # A pending/failed operation is indeterminate, never successful or safe to resubmit.
+    revocation:
+      type: Betterleaks
+      content:
+        expression: |
+          let headers = {"Authorization": "Bearer " + env.get("GCP_ACCESS_TOKEN")};
+          let lookup = http.get("https://apikeys.googleapis.com/v2/keys:lookupKey?keyString=" + strings.urlQueryEscape(finding.secret), headers);
+          let name = lookup.json?.name ?? "";
+          lookup.status != 200 || !(name matches "^projects/[0-9]+/locations/global/keys/[A-Za-z0-9_-]+$") ? {"result": "error", "reason": "Exact API key lookup failed"} : (
+            let deletion = http.delete("https://apikeys.googleapis.com/v2/" + name, headers);
+            let operation_name = deletion.json?.name ?? "";
+            let operation = operation_name matches "^operations/[A-Za-z0-9_-][A-Za-z0-9_.-]*$" ? operation_name : "";
+            deletion.status != 200 ? {"result": "unknown", "reason": "API key deletion was not confirmed"} : (
+              let result = (deletion.json?.done ?? false) == true ? deletion : (
+                operation != "" ? http.get("https://apikeys.googleapis.com/v2/" + operation, headers) : deletion
+              );
+              result.status == 200 && (result.json?.done ?? false) == true && result.json?.error == nil && (result.json?.response?.name ?? "") == name ? {"result": "revoked"} : {"result": "unknown", "reason": "Check the deletion operation before retrying", "metadata": {"operation": operation}}
+            )
+          )
   gcp-service-account:
     access_map:
       handler: gcp
@@ -150,8 +168,6 @@ betterleaks:
     access_map: { handler: airtable }
   anthropic-admin-api-key:
     access_map: { handler: anthropic }
-  anthropic-api-key:
-    access_map: { handler: anthropic }
   buildkite-user-access-token:
     access_map: { handler: buildkite }
     revocation:
@@ -198,6 +214,84 @@ betterleaks:
     access_map: { handler: monday }
   openai-api-key:
     access_map: { handler: openai }
+    # The owner supplies the exact project/key IDs; masked list entries are not a mapping.
+    # Deleting a service-account-owned key must never delete the service account itself.
+    revocation:
+      type: Betterleaks
+      content:
+        expression: |
+          let id = env.get("OPENAI_API_KEY_ID");
+          let target = env.get("OPENAI_API_KEY_VALUE");
+          let headers = {"Authorization": "Bearer " + env.get("OPENAI_ADMIN_KEY")};
+          target == "" || target != finding.secret || !(id matches "^key_[A-Za-z0-9_-]+$") ? {"result": "error", "reason": "An exact owner-supplied token/key mapping is required"} : (
+            finding.secret startsWith "sk-admin-" ? (
+              let r = http.delete("https://api.openai.com/v1/organization/admin_api_keys/" + id, headers);
+              r.status == 200 && (r.json?.object ?? "") == "organization.admin_api_key.deleted" && (r.json?.id ?? "") == id && (r.json?.deleted ?? false) == true ? {"result": "revoked"} : revoke.unknown(r)
+            ) : (
+              let project = env.get("OPENAI_PROJECT_ID");
+              !(project matches "^proj_[A-Za-z0-9_-]+$") ? {"result": "error", "reason": "An exact project ID is required"} : (
+                let r = http.delete("https://api.openai.com/v1/organization/projects/" + project + "/api_keys/" + id, headers);
+                r.status == 200 && (r.json?.object ?? "") == "organization.project.api_key.deleted" && (r.json?.id ?? "") == id && (r.json?.deleted ?? false) == true ? {"result": "revoked"} : revoke.unknown(r)
+              )
+            )
+          )
+
+  anthropic-api-key:
+    access_map: { handler: anthropic }
+    revocation:
+      type: Betterleaks
+      content:
+        expression: |
+          let id = env.get("ANTHROPIC_API_KEY_ID");
+          let target = env.get("ANTHROPIC_API_KEY_VALUE");
+          let headers = {"x-api-key": env.get("ANTHROPIC_ADMIN_KEY"), "anthropic-version": "2023-06-01", "Content-Type": "application/json"};
+          target == "" || target != finding.secret || !(id matches "^apikey_[A-Za-z0-9_-]+$") ? {"result": "error", "reason": "An exact owner-supplied token/key mapping is required"} : (
+            let r = http.post("https://api.anthropic.com/v1/organizations/api_keys/" + id, headers, toJSON({"status": "inactive"}));
+            r.status == 200 && (r.json?.type ?? "") == "api_key" && (r.json?.id ?? "") == id && (r.json?.status ?? "") == "inactive" ? {"result": "revoked"} : revoke.unknown(r)
+          )
+
+  notion-api-token:
+    # Only OAuth access tokens owned by the supplied app, not internal tokens or PATs.
+    revocation:
+      type: Betterleaks
+      content:
+        expression: |
+          let headers = {"Authorization": "Basic " + base64.encode(env.get("NOTION_CLIENT_ID") + ":" + env.get("NOTION_CLIENT_SECRET")), "Notion-Version": "2026-03-11", "Content-Type": "application/json"};
+          let body = toJSON({"token": finding.secret});
+          let before = http.post("https://api.notion.com/v1/oauth/introspect", headers, body);
+          before.status != 200 || (before.json?.active ?? false) != true ? {"result": "error", "reason": "The supplied app did not confirm an active OAuth token"} : (
+            let r = http.post("https://api.notion.com/v1/oauth/revoke", headers, body);
+            r.status != 200 ? revoke.unknown(r) : (
+              let after = http.post("https://api.notion.com/v1/oauth/introspect", headers, body);
+              after.status == 200 && after.json?.active == false ? {"result": "revoked"} : revoke.unknown(after)
+            )
+          )
+
+  resend-api-key.1:
+    # Full-access management credential + exact UUID from the owner's creation record.
+    revocation:
+      type: Betterleaks
+      content:
+        expression: |
+          let id = env.get("RESEND_API_KEY_ID");
+          let target = env.get("RESEND_API_KEY_VALUE");
+          let headers = {"Authorization": "Bearer " + env.get("RESEND_ADMIN_API_KEY")};
+          target == "" || target != finding.secret || !(id matches "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$") ? {"result": "error", "reason": "An exact owner-supplied token/key mapping is required"} : (
+            let r = http.delete("https://api.resend.com/api-keys/" + id, headers);
+            r.status == 200 && (r.json?.object ?? "") == "api_key" && (r.json?.id ?? "") == id && (r.json?.deleted ?? false) == true ? {"result": "revoked"} : revoke.unknown(r)
+          )
+
+  twilio-api-key:
+    # The detected SK value is a SID, not a secret. This fixed endpoint is US1 only.
+    revocation:
+      type: Betterleaks
+      content:
+        expression: |
+          let headers = {"Authorization": "Basic " + base64.encode(env.get("TWILIO_ACCOUNT_SID") + ":" + env.get("TWILIO_AUTH_TOKEN"))};
+          !(finding.secret matches "^SK[0-9a-fA-F]{32}$") ? {"result": "error", "reason": "An exact Twilio API key SID is required"} : (
+            let r = http.delete("https://iam.twilio.com/v1/Keys/" + finding.secret, headers);
+            r.status == 204 ? {"result": "revoked"} : revoke.unknown(r)
+          )
   paypal-client-secret.1:
     access_map:
       handler: paypal
@@ -221,6 +315,16 @@ betterleaks:
 
   github-app-token:
     access_map: { handler: github }
+    # The public credentials endpoint supports user access (ghu_), NOT installation (ghs_).
+    # Its 202 is only acceptance: do not turn it into a confirmed-revoked result.
+    revocation:
+      type: Betterleaks
+      content:
+        expression: |
+          !(finding.secret matches "^ghu_[A-Za-z0-9]{36}$") ? {"result": "error", "reason": "Installation tokens are not supported by this endpoint"} : (
+            let r = http.post("https://api.github.com/credentials/revoke", {"Accept": "application/vnd.github+json", "Content-Type": "application/json", "X-GitHub-Api-Version": "2026-03-10"}, toJSON({"credentials": [finding.secret]}));
+            r.status == 202 ? {"result": "unknown", "reason": "Revocation accepted; completion is not reported by GitHub"} : revoke.unknown(r)
+          )
   github-fine-grained-pat:
     access_map: { handler: github }
     revocation: &github_credential_revoke
@@ -380,8 +484,11 @@ betterleaks:
                 - type: StatusMatch
                   status: [200]
   heroku-api-key-v2:
+    # Veles's trailing word boundary does not cover tokens ending in a hyphen.
+    filter_override: 'matchesAny(finding["secret"], [`^HRKU-[0-9a-zA-Z_-]{60}\b$`])'
     revocation: *heroku_revoke
   slack-app-token:
+    filter_override: 'matchesAny(finding["secret"], [`^xapp-[0-9]{1,10}-[A-Za-z0-9]{11}-[0-9]{13}-[A-Fa-f0-9]{64}$`])'
     revocation: &slack_revoke
       type: Http
       content:
@@ -438,6 +545,22 @@ betterleaks:
                 - report_response: true
                 - type: StatusMatch
                   status: [200]
+  vercel-ai-gateway-key:
+    # Owner creation records must bind the full candidate key to its exact key/team IDs.
+    # Never infer this mapping from the list API's masked partialKey.
+    revocation:
+      type: Betterleaks
+      content:
+        expression: |
+          let id = env.get("VERCEL_AI_GATEWAY_KEY_ID");
+          let target = env.get("VERCEL_AI_GATEWAY_KEY_VALUE");
+          let team = env.get("VERCEL_TEAM_ID");
+          let headers = {"Authorization": "Bearer " + env.get("VERCEL_OWNER_TOKEN")};
+          target == "" || target != finding.secret || !(id matches "^[A-Za-z0-9_-]+$") || !(team matches "^team_[A-Za-z0-9_-]+$") ? {"result": "error", "reason": "An exact owner-supplied token/key/team mapping is required"} : (
+            let r = http.delete("https://api.vercel.com/v1/api-keys/" + id + "?teamId=" + team, headers);
+            r.status == 204 ? {"result": "revoked"} : revoke.unknown(r)
+          )
+
   vercel-api-token:
     revocation: &vercel_self_revoke
       type: Http

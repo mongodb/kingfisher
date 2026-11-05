@@ -123,6 +123,7 @@ nav:
     - Architecture: reference/architecture.md
     - Rust Library Crates: reference/library.md
     - Python Bindings: reference/python-bindings.md
+    - JavaScript and TypeScript SDK: reference/javascript-bindings.md
     - Benchmarks & Comparison: reference/comparison.md
     - Project Background: reference/project.md
   - Blog:

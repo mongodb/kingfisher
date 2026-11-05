@@ -1327,13 +1327,19 @@ fn cache_target() -> String {
     )
 }
 
+const CACHE_VECTORSCAN_BINDING_VERSION: &str = "0.1.4";
+const CACHE_VECTORSCAN_SYS_VERSION: &str = "0.1.4";
+
 fn cache_vectorscan_version() -> String {
     // Keep the exact binding/sys pins in Cargo.toml in sync with this identity. The full
     // runtime version includes the build date: release-only keys could admit bytecode
     // from patched or differently configured native builds. Reuse within one deployed
     // build still avoids compilation across processes. CPU compatibility is checked by
     // Vectorscan itself when deserializing; OS labels alone do not establish compatibility.
-    format!("binding=0.1.2;sys=0.1.2;runtime={}", kingfisher_vectorscan::version())
+    format!(
+        "binding={CACHE_VECTORSCAN_BINDING_VERSION};sys={CACHE_VECTORSCAN_SYS_VERSION};runtime={}",
+        kingfisher_vectorscan::version()
+    )
 }
 
 fn load_cached_vectorscan_db(
@@ -1748,6 +1754,25 @@ mod test_vectorscan {
     use super::*;
     use crate::{Confidence, rules::Rules};
 
+    fn write_private_cache_fixture(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
+        #[cfg(windows)]
+        let mut file = cache_security_windows::create_file(path)?;
+        #[cfg(not(windows))]
+        let mut file = {
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                // Avoid group-writable fixtures under a permissive test-process umask.
+                options.mode(0o600);
+            }
+            options.open(path)?
+        };
+        file.write_all(contents.as_ref())?;
+        Ok(())
+    }
+
     #[test]
     fn source_attribute_keys_include_prefilter_and_finding_filters_and_dynamic_keys() {
         let expression = |source: &str| {
@@ -1859,8 +1884,39 @@ rules:
         assert!(!target.contains(env::consts::OS));
         assert!(!target.contains(env::consts::FAMILY));
         let identity = cache_vectorscan_version();
-        assert!(identity.starts_with("binding=0.1.2;sys=0.1.2;runtime="));
+        assert!(identity.starts_with(&format!(
+            "binding={CACHE_VECTORSCAN_BINDING_VERSION};sys={CACHE_VECTORSCAN_SYS_VERSION};runtime="
+        )));
         assert!(identity.ends_with(&kingfisher_vectorscan::version()));
+    }
+
+    #[test]
+    fn cache_engine_identity_matches_exact_manifest_pins() {
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let manifest: toml::Value =
+            toml::from_str(&std::fs::read_to_string(directory.join("Cargo.toml")).unwrap())
+                .unwrap();
+        for (name, version) in [
+            ("kingfisher-vectorscan", CACHE_VECTORSCAN_BINDING_VERSION),
+            ("kingfisher-vectorscan-sys", CACHE_VECTORSCAN_SYS_VERSION),
+        ] {
+            let dependency = &manifest["dependencies"][name];
+            let requirement =
+                if dependency.get("workspace").and_then(toml::Value::as_bool) == Some(true) {
+                    let workspace: toml::Value = toml::from_str(
+                        &std::fs::read_to_string(directory.join("../../Cargo.toml")).unwrap(),
+                    )
+                    .unwrap();
+                    workspace["workspace"]["dependencies"][name].clone()
+                } else {
+                    dependency.clone()
+                };
+            let requirement = requirement
+                .as_str()
+                .or_else(|| requirement.get("version").and_then(toml::Value::as_str))
+                .expect("Vectorscan dependency must have an exact version");
+            assert_eq!(requirement, format!("={version}"), "{name} cache identity drifted");
+        }
     }
 
     #[test]
@@ -1883,7 +1939,7 @@ rules:
         let path = cache_dir.join("oversized.vscdb");
         let mut bytes = CACHE_MAGIC.to_vec();
         bytes.extend_from_slice(&u32::MAX.to_le_bytes());
-        fs::write(&path, bytes)?;
+        write_private_cache_fixture(&path, bytes)?;
         assert!(
             read_cached_vectorscan_header(&path).unwrap_err().to_string().contains("too large")
         );
@@ -2046,7 +2102,9 @@ rules:
         let header = read_cached_vectorscan_header(&cache_path)?;
         let native_bytes = original.vectorscan_db().serialize()?;
 
-        for rejection in ["cpu", "native-version", "architecture", "metadata", "prefilter"] {
+        for rejection in
+            ["cpu", "native-version", "binding-version", "architecture", "metadata", "prefilter"]
+        {
             let mut bad_header = header.clone();
             let mut bad_native = native_bytes.clone();
             // Vectorscan 5.x serialization starts with u32 magic/version/length followed by
@@ -2060,6 +2118,15 @@ rules:
                 "native-version" => {
                     bad_native[4..8].fill(0);
                     Some(HyperscanErrorCode::DbVersionError)
+                }
+                "binding-version" => {
+                    // Even identical native runtime bytes from a previous binding/sys
+                    // release must not bypass the deployed build identity check.
+                    bad_header.vectorscan_version = format!(
+                        "binding=0.1.2;sys=0.1.2;runtime={}",
+                        kingfisher_vectorscan::version()
+                    );
+                    None
                 }
                 "architecture" => {
                     bad_header.target = "incompatible-architecture".to_string();
@@ -2392,7 +2459,7 @@ rules:
         bytes.extend_from_slice(&(header_bytes.len() as u32).to_le_bytes());
         bytes.extend_from_slice(&header_bytes);
         bytes.extend_from_slice(b"not-a-real-vectorscan-db");
-        fs::write(&path, bytes)?;
+        write_private_cache_fixture(&path, bytes)?;
         Ok(path)
     }
 
@@ -2435,7 +2502,7 @@ rules:
     fn prune_rule_cache_keeps_entry_floor_and_removes_old_excess_entries() -> Result<()> {
         let cache_dir =
             env::temp_dir().join(format!("kingfisher-rule-cache-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&cache_dir)?;
+        prepare_rule_cache_dir(&cache_dir)?;
         let cache = RuleCacheConfig::new(&cache_dir);
 
         for index in 0..12 {
@@ -2463,7 +2530,7 @@ rules:
     fn prune_rule_cache_never_removes_protected_cache_key() -> Result<()> {
         let cache_dir =
             env::temp_dir().join(format!("kingfisher-rule-cache-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&cache_dir)?;
+        prepare_rule_cache_dir(&cache_dir)?;
         let cache = RuleCacheConfig::new(&cache_dir);
 
         write_fake_cache_entry(&cache_dir, "delete-me")?;
@@ -2490,12 +2557,12 @@ rules:
     fn prune_rule_cache_ignores_invalid_cache_entries() -> Result<()> {
         let cache_dir =
             env::temp_dir().join(format!("kingfisher-rule-cache-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&cache_dir)?;
+        prepare_rule_cache_dir(&cache_dir)?;
         let cache = RuleCacheConfig::new(&cache_dir);
 
         write_fake_cache_entry(&cache_dir, "valid")?;
-        fs::write(cache_dir.join("corrupt.vscdb"), b"nope")?;
-        fs::write(cache_dir.join("notes.txt"), b"not a cache entry")?;
+        write_private_cache_fixture(&cache_dir.join("corrupt.vscdb"), b"nope")?;
+        write_private_cache_fixture(&cache_dir.join("notes.txt"), b"not a cache entry")?;
 
         let config = RuleCachePruneConfig {
             max_entries: 0,

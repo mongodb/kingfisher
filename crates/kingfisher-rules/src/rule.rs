@@ -7,7 +7,7 @@
 use std::{
     borrow::Cow,
     cmp::Ordering,
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fmt,
     hash::Hash,
     path::Path,
@@ -300,6 +300,66 @@ pub enum BetterleaksExpr {
     Pointer {
         name: String,
     },
+}
+
+impl BetterleaksExpr {
+    /// Collect literal variable names from `env.get("NAME")` calls in this AST.
+    ///
+    /// Names retain their spelling and are sorted and deduplicated. This does not read
+    /// the environment, evaluate branches, or determine whether an input is mandatory.
+    /// Dynamic arguments and `env.getOrDefault` names are not included.
+    pub fn env_input_vars(&self) -> BTreeSet<String> {
+        let mut vars = BTreeSet::new();
+        let mut nodes = vec![self];
+        while let Some(node) = nodes.pop() {
+            match node {
+                Self::Call { callee, arguments } => {
+                    if let Self::Member { node, property, .. } = callee.as_ref()
+                        && matches!(node.as_ref(), Self::Identifier { value } if value == "env")
+                        && matches!(property.as_ref(), Self::String { value } if value == "get")
+                        && let [Self::String { value }] = arguments.as_slice()
+                    {
+                        vars.insert(value.clone());
+                    }
+                    nodes.push(callee);
+                    nodes.extend(arguments);
+                }
+                Self::Unary { node, .. } | Self::Chain { node } | Self::Predicate { node } => {
+                    nodes.push(node);
+                }
+                Self::Binary { left, right, .. } => {
+                    nodes.extend([left.as_ref(), right.as_ref()]);
+                }
+                Self::Member { node, property, .. } => {
+                    nodes.extend([node.as_ref(), property.as_ref()]);
+                }
+                Self::Slice { node, from, to } => {
+                    nodes.extend([node.as_ref(), from.as_ref(), to.as_ref()]);
+                }
+                Self::Builtin { arguments, .. } => nodes.extend(arguments),
+                Self::Conditional { cond, exp1, exp2 } => {
+                    nodes.extend([cond.as_ref(), exp1.as_ref(), exp2.as_ref()]);
+                }
+                Self::VariableDeclarator { value, expr, .. } => {
+                    nodes.extend([value.as_ref(), expr.as_ref()]);
+                }
+                Self::Sequence { nodes: children }
+                | Self::Array { nodes: children }
+                | Self::Map { pairs: children } => nodes.extend(children),
+                Self::Pair { key, value } => {
+                    nodes.extend([key.as_ref(), value.as_ref()]);
+                }
+                Self::Nil
+                | Self::Identifier { .. }
+                | Self::Integer { .. }
+                | Self::Float { .. }
+                | Self::Bool { .. }
+                | Self::String { .. }
+                | Self::Pointer { .. } => {}
+            }
+        }
+        vars
+    }
 }
 
 /// Ethereum key material that can be validated and mapped to a public address locally.
@@ -1877,6 +1937,50 @@ mod tests {
         assert!(rule.matches_keywords(&replacement));
         rule.syntax.keywords.clear();
         assert!(rule.matches_keywords(&bytes));
+    }
+
+    #[test]
+    fn betterleaks_env_inputs_collect_only_literal_get_calls() {
+        let program: BetterleaksValidation = serde_json::from_value(serde_json::json!({
+            "expression": r#"
+                let dynamic = "DYNAMIC";
+                [env.get("Z_ADMIN"), env.get("A_ID"), env.get("Z_ADMIN"),
+                 env.get(dynamic), env.get("COMPUTED" + "_NAME"),
+                 env.getOrDefault("OPTIONAL", "fallback"), other.get("OTHER"),
+                 "env.get(\"STRING_ONLY\")", false ? env.get("BRANCH_INPUT") : ""]
+            "#,
+            "analyze": "env.get('ANALYZE_ONLY')"
+        }))
+        .unwrap();
+        assert_eq!(
+            program.expression.env_input_vars().into_iter().collect::<Vec<_>>(),
+            ["A_ID", "BRANCH_INPUT", "Z_ADMIN"]
+        );
+    }
+
+    #[test]
+    fn betterleaks_env_inputs_traverse_nested_expression_nodes() {
+        let cases: &[(&str, &[&str])] = &[
+            (
+                "let admin = env.get('LET'); !env.get('UNARY') && (env.get('COND') ? env.get('YES') : env.get('NO'))",
+                &["COND", "LET", "NO", "UNARY", "YES"],
+            ),
+            ("{'entry': [env.get('ARRAY')]}[env.get('MEMBER')]", &["ARRAY", "MEMBER"]),
+            ("env.get('NODE')[env.get('FROM'):env.get('TO')]", &["FROM", "NODE", "TO"]),
+            ("map([1], env.get('PREDICATE'))", &["PREDICATE"]),
+            ("http.get(env.get('CALL_ARGUMENT'))", &["CALL_ARGUMENT"]),
+            ("env.get(env.get('DYNAMIC_ARGUMENT'))", &["DYNAMIC_ARGUMENT"]),
+            ("env.get('CHAIN')?.field", &["CHAIN"]),
+        ];
+        for (source, expected) in cases {
+            let program: BetterleaksValidation =
+                serde_json::from_value(serde_json::json!({"expression": source})).unwrap();
+            assert_eq!(
+                program.expression.env_input_vars().into_iter().collect::<Vec<_>>(),
+                *expected,
+                "{source}"
+            );
+        }
     }
 
     #[test]

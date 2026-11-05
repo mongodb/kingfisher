@@ -28,7 +28,7 @@ class ReleaseMakefileTests(unittest.TestCase):
         self.assertNotIn("scripts/release-packages.py", result.stdout)
 
     def test_package_selectors_infer_versions_and_execute_only_once_in_parallel(self):
-        for package in ("crates", "kingfisher-secret-scanner"):
+        for package in ("crates", "kingfisher-secret-scanner", "npm"):
             for goals in (("release", package), (package, "release")):
                 with self.subTest(goals=goals):
                     result = self.run_make("--jobs=2", *goals)
@@ -43,6 +43,11 @@ class ReleaseMakefileTests(unittest.TestCase):
         for args in (
             ("crates",),
             ("kingfisher-secret-scanner",),
+            ("npm",),
+            ("release", "npm", "crates"),
+            ("release", "npm", "kingfisher-secret-scanner"),
+            ("release", "npm", "VERSION=0.1.0"),
+            ("release", "npm", "tests"),
             ("release", "crates", "kingfisher-secret-scanner"),
             ("release", "crates", "tests"),
             ("release", "kingfisher-secret-scanner", "VERSION=1.5.0"),

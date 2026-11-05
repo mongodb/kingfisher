@@ -2,6 +2,73 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.17.0]
+
+### Added
+
+- Add explicit, credential-scoped revocation for Notion OAuth, Resend, Twilio key SIDs,
+  Vercel AI Gateway, GCP API keys, Anthropic ordinary keys, OpenAI project/admin keys,
+  and GitHub App user-token reports. Owner-ID actions are operator-assisted: supply
+  management credentials, IDs and exact full-token mappings via CLI `--var` or SDK
+  globals; `env.get` does not read OS environment variables. Document unsupported
+  families and accepted-versus-completed results with
+  [first-party contracts](crates/kingfisher-rules/data/revocation-sources.md).
+  Existing GitHub, Slack, Hugging Face and Vercel primary actions are unchanged.
+- Add the native `kingfisher-secret-scanner` JavaScript/TypeScript SDK 0.1.0 as a
+  preview of npm support, with typed subpaths for rules, scanning, local inputs,
+  Git, validation, analysis and explicit revocation. Reuse the Rust engine and
+  catalog, original credential snapshots and redacted reporting. See the
+  [Node SDK guide](docs/JAVASCRIPT.md). The SDK supports CommonJS and ESM
+  named/default imports on Node 22.13+, 24 and 26; bounded, cancellable
+  regular-file reads; filesystem `onWarning` callbacks (unreadable roots still
+  throw); and archive expansion that passes non-archives through unread.
+- Add exact workspace-wide third-party notices generation and verification
+  (`make notices`, `npm run check:notices`) across all features/targets, including
+  normal/build dependencies and proc macros. Reject stale or incomplete Cargo
+  attribution while preserving independent rule and Vectorscan notices.
+- Include allowlisted identity metadata in successful AWS, Hugging Face, GitHub,
+  GitLab, CircleCI, and Fastly validation responses. AWS includes the caller ARN,
+  account ID, and user ID. Reuse existing validation evidence without additional
+  requests or permission analysis; keep authentication tokens and other private
+  evidence out of reports. Preserve GCP and Azure's existing identity metadata.
+
+### Changed
+
+- Refresh Betterleaks to v2.0.0-rc.7, adding structured Mapbox secret-token detection
+  and updated Mapbox validation/scope analysis and Harness PAT/SAT identity analysis.
+  The catalog now has 502 rules; all 22 selected Veles rules remain bundled.
+- Prepare scanner 3.0.2 and Python SDK 1.6.2 for shared validation identity reporting
+  and `Send` validation/revocation futures, without changing public signatures or
+  high-level SDK result serialization. Strict budgeted archive behavior visibly
+  tightens: malformed/unsafe TAR/ZIP/ASAR members and staging failures reject the
+  whole root before returning any members. Legacy best-effort CLI defaults are unchanged.
+- Prepare rules 3.1.0 with additive public literal expression-input discovery, exact
+  Vectorscan pins, engine-aware compiled-cache identities, package documentation and
+  regenerated bundle provenance; the catalog retains 42 revocation bindings.
+- Pin Vectorscan binding/sys crates to published 0.1.4, adding MSVC x64/ARM64
+  embedding support with a VS 2022 / MSVC 14.44 runtime baseline and updating
+  compiled-rule cache build identities. Node Windows builds use checksum-verified
+  Vectorscan MSVC archives without a local override. Existing GNU/LLVM CLI release
+  targets are unchanged.
+- Add protected, tag-only npm OIDC publishing with complete platform checks,
+  native-package-first ordering, archive integrity checks and safe partial-release
+  retries. Development manifests remain private and unchanged by release staging.
+- Name the supported Kingfisher, Gitleaks and TruffleHog report imports in the
+  report viewer's upload instructions.
+
+### Fixed
+
+- Evaluate upstream `fromBase64` finding filters with bounded UTF-8 decoding, preserving
+  Mapbox payload checks and compatibility with existing custom YAML/TOML rules.
+- Preserve both filtering and revocation for Heroku/Slack overlay entries, rejecting
+  duplicate rule IDs. Limit Veles precedence filters to covered Git URLs,
+  case-sensitive OpenRouter formats, and Heroku suffixes so unrelated Betterleaks
+  findings are retained.
+- Do not mistake IAM identity IDs in AWS validation responses for access keys when
+  generating revocation commands. Keep validation status visible in response previews.
+- Keep shared validation and AWS revocation futures `Send` for multithreaded async
+  embedders without changing request ordering, retries or provider behavior.
+
 ## [v2.16.0]
 
 ### Added

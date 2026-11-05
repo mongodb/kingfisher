@@ -1,4 +1,4 @@
-# Publishing Cargo packages
+# Publishing Cargo and npm packages
 
 [← Back to README](../README.md)
 
@@ -7,6 +7,8 @@ The root Cargo package is `kingfisher-bin`; its executable and Rust library reta
 are `kingfisher-core`, `kingfisher-rules`, and `kingfisher-scanner`. The maintainer-only
 `kingfisher-rule-bundle` package is never published. The `kingfisher-python` binding
 crate is packaged by Maturin for the separate Python SDK release, not crates.io.
+The `kingfisher-node` binding crate is also private to its independently versioned
+JavaScript/TypeScript npm SDK; see [npm publishing with GitHub Actions](#npm-publishing-with-github-actions).
 
 Native Linux RPM and DEB packages use the system package name `kingfisher`; do not derive
 it from the Cargo or PyPI package name. Keep the RPM compatibility metadata for previously
@@ -21,27 +23,41 @@ The manifests currently prepare these releases; a Git tag does not override Carg
 | Package | Version | Published targets |
 | ------- | ------- | ----------------- |
 | `kingfisher-core` | `1.0.6` | `kingfisher_core` library |
-| `kingfisher-rules` | `3.0.1` | `kingfisher_rules` library |
-| `kingfisher-scanner` | `3.0.1` | `kingfisher_scanner` library |
-| `kingfisher-bin` | `2.16.0` | `kingfisher` executable and library |
+| `kingfisher-rules` | `3.1.0` | `kingfisher_rules` library |
+| `kingfisher-scanner` | `3.0.2` | `kingfisher_scanner` library |
+| `kingfisher-bin` | `2.17.0` | `kingfisher` executable and library |
 
 The Python SDK (`kingfisher-secret-scanner`) is independently versioned at
-`1.6.1` in `crates/kingfisher-python/Cargo.toml`; Python modules share that version.
+`1.6.2` in `crates/kingfisher-python/Cargo.toml`; Python modules share that version.
+The npm SDK preview uses **0.1.0** in `crates/kingfisher-node/Cargo.toml` and
+`javascript/package.json`, with six same-version native packages. Its `npm-v*`
+release tags do not publish the CLI or Python SDK.
 
 The libraries follow semantic versioning and do not inherit the CLI version.
 Rules/scanner 3.0.0 add public Rust schema fields and Expr variants; upgrade both
 crates together. Existing YAML/TOML files remain compatible. Core 1.0.6 refreshes
 dependency minimums without changing its public API. Python SDK 1.6.0 adds
 compatible APIs for explicit analysis and source attributes. Rules/scanner 3.0.1
-and Python SDK 1.6.1 include the private-key detection fixes.
+and Python SDK 1.6.1 include the private-key detection fixes. Rules 3.1.0 adds public
+literal expression-input discovery and credential-specific revocation overlays without changing
+existing YAML/TOML or primary-action behavior. Scanner stays at its unpublished prepared
+3.0.2 version; core 1.0.6 is unchanged.
+Scanner 3.0.2 and Python SDK 1.6.2 include the shared identity-response reporting fix;
+high-level SDK results still omit provider responses. Public signatures are unchanged,
+but strict budgeted TAR/ZIP/ASAR expansion now rejects malformed/unsafe members or
+staging errors for the whole root. Legacy best-effort CLI defaults are unchanged.
 See the [3.0 migration guide](LIBRARY.md#migrating-to-rules-and-scanner-30).
 `kingfisher-rule-bundle` is `0.1.0` with `publish = false`. The external
 `kingfisher-vectorscan` dependency is versioned separately.
+The binding and sys crate are now pinned to published **0.1.4**, including
+MSVC x64/ARM64 archives with a VS 2022 / MSVC 14.44 STL/CRT baseline. The compiled-rule
+cache identity includes both exact versions, so older engine-build entries cannot be
+reused silently.
 
 After publishing, consumers can install the CLI with:
 
 ```sh
-cargo install --locked kingfisher-bin --version 2.16.0
+cargo install --locked kingfisher-bin --version 2.17.0
 ```
 
 This installs the `kingfisher` command. See [library usage](LIBRARY.md#quick-start)
@@ -297,24 +313,130 @@ The original failed run uses its original commit and remains historical; rerunni
 cannot pick up a later metadata correction. The new recovery run publishes the missing
 crate versions without retagging `v2.15.0` or republishing its assets.
 
+## npm publishing with GitHub Actions
+
+The npm SDK publishes through [`.github/workflows/node-sdk.yml`](../.github/workflows/node-sdk.yml),
+not the Cargo release workflow. It uses **Trusted Publishing (OIDC)**: GitHub supplies
+a short-lived identity, so no `NPM_TOKEN` or `NODE_AUTH_TOKEN` publishing secret is needed.
+Account ownership, GitHub environment protection and npm trust must be configured by
+an authorized maintainer; committing workflow YAML does not configure them.
+
+### One-time setup
+
+1. Review and merge the SDK and workflow into public **`mongodb/kingfisher` `main`**.
+   The npm manifests' `repository.url` must match `https://github.com/mongodb/kingfisher.git`.
+2. In GitHub **Settings → Environments**, create an environment named exactly **`npm`**.
+   Add required reviewers (and **Prevent self-review** if required). Under deployment
+   branches/tags, allow the **tag** pattern `npm-v*`; a `main`-only branch rule blocks
+   tag releases. Do not add an npm write-token secret.
+3. In **Actions → Node SDK → Run workflow**, select `main`. This is a non-publishing
+   dry run. Require all six native artifact builds, package staging and the separate
+   sealed-tarball verification matrix to pass before configuring npm trust or creating a release tag.
+4. Sign into the intended npm owner account, verify its email, enable **account-level
+   2FA**, and confirm write access to all seven packages below. npm trust requires an
+   existing package entry. Handle absent names in a separately authorized npm
+   ownership/bootstrap setup, not an SDK release. Any dummy bootstrap stages must
+   remain unapproved and must not publish SDK `0.1.0`.
+   **Never approve the dummy bootstrap stages**; skip names already owned.
+5. For **each package**, open npmjs.com → package → **Settings → Trusted publishing**,
+   select **GitHub Actions**, and save these exact values:
+
+   | npm setting | Value |
+   | ----------- | ----- |
+   | Organization or user | `mongodb` |
+   | Repository | `kingfisher` |
+   | Workflow filename | `node-sdk.yml` (filename only, not `.github/workflows/node-sdk.yml`) |
+   | Environment name | `npm` |
+   | Allowed actions | Explicitly enable **Allow npm publish** |
+
+   New connections default to staging permission; this workflow uses direct
+   `npm publish`, so staging-only permission is insufficient. Complete the first
+   successful OIDC publication within **48 hours** of creating each connection.
+   If it expires, delete only that expired connection and recreate it.
+
+Configure trust on **all seven packages**, not only the main SDK:
+
+- `kingfisher-secret-scanner`
+- `kingfisher-secret-scanner-darwin-x64`
+- `kingfisher-secret-scanner-darwin-arm64`
+- `kingfisher-secret-scanner-linux-x64-gnu`
+- `kingfisher-secret-scanner-linux-arm64-gnu`
+- `kingfisher-secret-scanner-win32-x64-msvc`
+- `kingfisher-secret-scanner-win32-arm64-msvc`
+
+The `core`, `rules`, `scanner`, `inputs`, `git`, `validation` and `revocation` imports
+are subpaths of the main package, not separate package names. The npm owning account
+is independent of the GitHub organization name.
+
+### Publish and verify
+
+The publication job runs on a **GitHub-hosted runner**, uses Node **24.22.2**
+and npm **11.21.1**, and grants `id-token: write` only to that job. Use those
+exact publisher pins for local publishing setup as well; consumer runtime support
+is separate. Self-hosted publishers are unsupported.
+
+For the initial SDK release, use a clean, current, reviewed upstream `main` checkout.
+Confirm `origin` points to `mongodb/kingfisher`, not a private development remote,
+the SDK version is `0.1.0`, and `npm-v0.1.0` does not already exist before explicitly
+authorizing publication:
+
+```sh
+make release npm
+```
+
+The six native build jobs produce platform artifacts; staging then seals seven
+packages. A **separate verification matrix** tests those tarballs on all six hosts
+under Node **22.13.0, 22.23.4, 24.0.0, 24.22.2, 26.0.0 and 26.13.0**. Support is
+limited to majors **22/24/26** (`^22.13.0 || ^24.0.0 || ^26.0.0`), including a
+tested Node 22.13.0 minimum. Wait for all checks before approving the protected
+**`npm`** deployment. `npm run pack:release` creates the tarballs and a SHA-512
+integrity manifest once, before verification. The publisher uploads those exact tested
+`javascript/release/archives/*.tgz` files, native packages first and the main SDK last;
+consumer checks and publication never repack. Branch/PR/manual dry runs do not publish;
+CLI `v*` and Python `python-v*` tags are unrelated. Never upload the private development
+manifests or move an existing public tag.
+
+Verify all seven exact versions, npm provenance, and a fresh consumer installation
+with `npm audit signatures`.
+After OIDC succeeds, set **Settings → Publishing access → Require two-factor
+authentication and disallow tokens** on every package, revoke obsolete automation
+tokens, and reject only the unused dummy bootstrap stages. OIDC remains allowed.
+
+Later releases use `npm-v<SDK-version>` after synchronizing the Node/npm manifests
+and lockfiles. Stable releases use `latest`; if any package already has a newer
+`latest`, the release instead uses `backport-<major>.<minor>` without downgrading
+that tag. Prereleases use `next`. For partial failures, rerun only the failed
+publishing job in the original run to reuse the **same tested artifact**, including
+its archive manifest; identical published packages are skipped, conflicting bytes fail.
+See the [maintainer release procedure](../.github/RELEASING.md) and
+[npm Trusted Publishing guide](https://docs.npmjs.com/trusted-publishers/).
+
 ## Independent terminal commands
 
 ```sh
 make release crates
 make release kingfisher-secret-scanner
+make release npm
 ```
 
 The first command infers all four crates.io versions, checks the complete publication
 plan, and discovers the original passing CLI release run for a failed-job retry or
-metadata-only recovery. The second infers the SDK version from
-`crates/kingfisher-python/Cargo.toml` and starts the tested SDK publishing workflow.
-Neither command changes versions or accepts `VERSION`; commit and merge the intended
-version correction first. The full binary-release command remains
-`make release VERSION=X.Y.Z`.
+metadata-only recovery. The second infers the Python SDK version from
+`crates/kingfisher-python/Cargo.toml` and starts its tested publishing workflow.
+The third infers the independent Node SDK version from `javascript/package.json`,
+validates the matching native manifests/lockfiles, and pushes an annotated
+`npm-v<SDK-version>` tag. CI builds/verifies all packages before the protected `npm`
+deployment approval permits publication. Existing remote npm tags are rejected;
+retry the original run's failed job instead. A failed tag push can reuse an annotated
+local tag at the same commit.
+None changes versions or accepts `VERSION`; commit and merge the intended version
+correction first. The full binary-release command remains `make release VERSION=X.Y.Z`.
+Use `RELEASE_REMOTE=upstream` when that named remote points to public `mongodb/kingfisher`.
 
 The launcher requires a clean reviewed upstream checkout, authenticated GitHub access,
-current merged `main`, and a supported active workflow. It pins the expected SHA and
-checks registries before dispatch. A published SDK version, a conflicting crate payload,
+current merged `main`, and a supported active workflow. It pins the expected SHA.
+Python/crates check registries before dispatch; npm registry/integrity checks remain
+in CI, not the local tag command. A published Python SDK version, a conflicting crate payload,
 an all-published crates plan, invalid source history, or a registry lookup error stops the
 command instead of starting a doomed build. Identical unchanged crate dependencies can
 still be skipped. Full extracted-package checks and the original protected publication
@@ -329,7 +451,7 @@ publishing, first create fresh archives:
 
 ```sh
 cargo package --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner -p kingfisher-bin
-python3 scripts/publish-crates.py --tag v2.16.0
+python3 scripts/publish-crates.py --tag v2.17.0
 python3 -m unittest discover -s scripts/tests -v
 ```
 

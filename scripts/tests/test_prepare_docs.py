@@ -16,6 +16,18 @@ spec.loader.exec_module(prepare_docs)
 
 
 class PrepareDocsTests(unittest.TestCase):
+    def test_javascript_guide_and_source_links_are_mapped(self):
+        self.assertIn("JAVASCRIPT.md", prepare_docs.DOC_MAP)
+        self.assertEqual(
+            prepare_docs.rewrite_links("[guide](JAVASCRIPT.md#scan-content)"),
+            "[guide](../reference/javascript-bindings.md#scan-content)",
+        )
+        self.assertEqual(
+            prepare_docs.rewrite_links("[source](../javascript) [example](../javascript/examples/content.cjs)"),
+            "[source](https://github.com/mongodb/kingfisher/tree/main/javascript) "
+            "[example](https://github.com/mongodb/kingfisher/blob/main/javascript/examples/content.cjs)",
+        )
+
     def test_nested_pages_keep_existing_relative_links(self):
         for source, destination in prepare_docs.LINK_REWRITES.items():
             with self.subTest(source=source):
@@ -53,6 +65,30 @@ class PrepareDocsTests(unittest.TestCase):
             "[README](getting-started/quick-start.md) [changelog](changelog.md) "
             "![chart](assets/images/runtime-comparison.png)",
         )
+
+    def test_root_source_documents_preserve_anchors(self):
+        content = (
+            "[notices](../CONTRIBUTING.md#third-party-license-notices) "
+            "[build](../CONTRIBUTING.md#javascripttypescript-sdk-development) "
+            "[guidance](../AGENTS.md#scope) [security](../SECURITY.md) [license](../LICENSE)"
+        )
+        for root_level in (False, True):
+            with self.subTest(root_level=root_level):
+                self.assertEqual(
+                    prepare_docs.rewrite_links(content, root_level=root_level),
+                    content.replace("](../", "](https://github.com/mongodb/kingfisher/blob/main/"),
+                )
+
+    def test_provider_contract_links_resolve_to_repository_sources(self):
+        path = "crates/kingfisher-rules/data/revocation-sources.md#provider-contracts"
+        expected = f"[sources](https://github.com/mongodb/kingfisher/blob/main/{path})"
+        for target in ("revocation-sources.md#provider-contracts", "../" + path, path):
+            for root_level in (False, True):
+                with self.subTest(target=target, root_level=root_level):
+                    self.assertEqual(
+                        prepare_docs.rewrite_links(f"[sources]({target})", root_level=root_level),
+                        expected,
+                    )
 
     def test_external_links_and_inline_source_paths_remain_unchanged(self):
         content = (

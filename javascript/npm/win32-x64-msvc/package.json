@@ -1,0 +1,26 @@
+{
+  "name": "kingfisher-secret-scanner-win32-x64-msvc",
+  "version": "0.1.0",
+  "cpu": [
+    "x64"
+  ],
+  "main": "kingfisher_sdk.win32-x64-msvc.node",
+  "files": [
+    "kingfisher_sdk.win32-x64-msvc.node",
+    "README.md"
+  ],
+  "description": "Native Kingfisher secret detection, credential validation and explicit revocation for Node.js",
+  "license": "Apache-2.0 AND MIT AND BSD-3-Clause AND CC-BY-SA-4.0",
+  "engines": {
+    "node": "^22.13.0 || ^24.0.0 || ^26.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mongodb/kingfisher.git",
+    "directory": "javascript"
+  },
+  "os": [
+    "win32"
+  ],
+  "private": true
+}

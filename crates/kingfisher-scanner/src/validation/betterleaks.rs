@@ -15,6 +15,8 @@ use serde_json::Value as JsonValue;
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 
+mod response_metadata;
+
 const MAX_RESPONSE_BODY: usize = 1 << 20;
 
 pub struct BetterleaksValidationOutcome {
@@ -23,7 +25,9 @@ pub struct BetterleaksValidationOutcome {
     pub status: StatusCode,
     pub body: String,
     pub outcome: ValidationOutcome,
-    /// Private provider evidence passed only to an explicit analysis operation.
+    /// Private provider evidence retained for explicit analysis. `body` contains the
+    /// validation result, rule-authored metadata, and allowlisted provider identity
+    /// fields, never this private handoff.
     pub analysis_data: Option<JsonValue>,
 }
 
@@ -178,7 +182,11 @@ pub async fn validate(
 ) -> BetterleaksValidationOutcome {
     let mut evaluator = evaluator(validation, captures, globals, client, allow_internal_ips, false);
     match evaluator.eval(&validation.expression).await {
-        Ok(value) => classify(value, evaluator.last_status),
+        Ok(value) => {
+            let mut result = classify(value, evaluator.last_status);
+            response_metadata::include(&mut result, validation, &evaluator.variables);
+            result
+        }
         Err(error) => BetterleaksValidationOutcome {
             reason: Some(super::ValidationReason::RequestFailed),
             valid: false,
@@ -2090,10 +2098,729 @@ mod tests {
     use kingfisher_rules::{Validation, get_betterleaks_rules};
 
     use liquid_core::Value as LiquidValue;
-    use std::collections::BTreeSet;
+    use std::{
+        collections::BTreeSet,
+        sync::{Arc, Mutex},
+    };
 
     fn program(source: &str) -> BetterleaksValidation {
         serde_json::from_value(serde_json::json!({"expression": source})).unwrap()
+    }
+
+    const MAPBOX_LOCAL_URLS: &[(&str, &str)] = &[
+        ("https://api.mapbox.com/tokens/v2?access_token=", "/tokens/v2?access_token="),
+        ("https://api.mapbox.com/tokens/v2/", "/tokens/v2/"),
+    ];
+    const HARNESS_LOCAL_URLS: &[(&str, &str)] = &[
+        ("https://app.harness.io/v1/orgs?limit=1&page=1", "/v1/orgs?limit=1&page=1"),
+        ("https://app.harness.io/ng/api/user/currentUser", "/ng/api/user/currentUser"),
+    ];
+
+    struct LocalProvider {
+        endpoint: String,
+        requests: Arc<Mutex<Vec<http::request::Parts>>>,
+        server: tokio::task::JoinHandle<()>,
+    }
+
+    impl LocalProvider {
+        async fn new(responses: Vec<(StatusCode, String)>) -> Self {
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let observed = requests.clone();
+            let app = Router::new().fallback(move |request: axum::extract::Request| {
+                let (request, _) = request.into_parts();
+                let mut requests = observed.lock().unwrap();
+                let response = responses.get(requests.len()).cloned().unwrap_or_else(|| {
+                    (StatusCode::INTERNAL_SERVER_ERROR, "unexpected local request".into())
+                });
+                requests.push(request);
+                async move { (response.0, [("content-type", "application/json")], response.1) }
+            });
+            let listener =
+                tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            Self { endpoint, requests, server }
+        }
+
+        fn request_count(&self) -> usize {
+            self.requests.lock().unwrap().len()
+        }
+    }
+
+    impl Drop for LocalProvider {
+        fn drop(&mut self) {
+            self.server.abort();
+        }
+    }
+
+    fn builtin_program(rule_id: &str) -> BetterleaksValidation {
+        let rules = get_betterleaks_rules(None).unwrap();
+        let Some(Validation::Betterleaks(validation)) = rules
+            .rules
+            .get(rule_id)
+            .unwrap_or_else(|| panic!("missing {rule_id}"))
+            .validation
+            .clone()
+        else {
+            panic!("expected imported Betterleaks validation for {rule_id}");
+        };
+        assert!(validation.analyze.is_some(), "missing imported analysis for {rule_id}");
+        validation
+    }
+
+    fn localize_program(
+        validation: &BetterleaksValidation,
+        endpoint: &str,
+        urls: &[(&str, &str)],
+    ) -> BetterleaksValidation {
+        let mut validation = validation.clone();
+        // Preserve the complete imported programs; rewrite only exact provider URL
+        // literals, and fail before execution if an upstream URL was not redirected.
+        for (from, path) in urls {
+            let before =
+                serde_json::to_string(&(&validation.expression, &validation.analyze)).unwrap();
+            assert!(before.contains(from), "missing expected provider URL: {from}");
+            let to = format!("{endpoint}{path}");
+            replace_string_literal(&mut validation.expression, from, &to);
+            replace_string_literal(validation.analyze.as_mut().unwrap(), from, &to);
+        }
+        let ast = serde_json::to_string(&(&validation.expression, &validation.analyze)).unwrap();
+        assert!(!ast.contains("https://"), "unredirected provider URL in imported AST");
+        validation
+    }
+
+    fn local_provider_client() -> Client {
+        Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap()
+    }
+
+    fn assert_local_get(request: &http::request::Parts, path: &str, query: &[(&str, &str)]) {
+        assert_eq!(request.method, Method::GET);
+        assert_eq!(request.uri.path(), path);
+        assert_eq!(request.headers["accept"], "application/json");
+        let url = Url::parse(&format!("http://localhost{}", request.uri)).unwrap();
+        let actual: BTreeMap<_, _> = url.query_pairs().into_owned().collect();
+        let expected: BTreeMap<_, _> =
+            query.iter().map(|(key, value)| (key.to_string(), value.to_string())).collect();
+        assert_eq!(actual, expected);
+        assert_eq!(url.query_pairs().count(), query.len());
+    }
+
+    #[tokio::test]
+    async fn rc7_mapbox_validation_requires_provider_evidence_and_keeps_analysis_private() {
+        let client = local_provider_client();
+        for (rule_id, usage) in
+            [("betterleaks.mapbox-api-token", "pk"), ("betterleaks.mapbox-secret-token", "sk")]
+        {
+            let template = builtin_program(rule_id);
+            let secret = format!("{usage}.synthetic+token/with?reserved=&");
+            let cases = [
+                (StatusCode::OK, serde_json::json!({"code":"TokenValid", "token":{"user":"private-owner", "authorization":"private-token-id", "usage":usage}, "secret":"provider-minted-secret"}).to_string(), "valid", ValidationOutcome::VerifiedActive),
+                (StatusCode::OK, r#"{"code":"TokenRevoked"}"#.into(), "revoked", ValidationOutcome::VerifiedInactive),
+                (StatusCode::OK, r#"{"code":"TokenExpired"}"#.into(), "revoked", ValidationOutcome::VerifiedInactive),
+                (StatusCode::OK, r#"{"code":"TokenInvalid"}"#.into(), "invalid", ValidationOutcome::VerifiedInactive),
+                (StatusCode::OK, r#"{"code":"TokenMalformed"}"#.into(), "invalid", ValidationOutcome::VerifiedInactive),
+                (StatusCode::UNAUTHORIZED, r#"{"message":"Not Authorized"}"#.into(), "invalid", ValidationOutcome::VerifiedInactive),
+                (StatusCode::UNAUTHORIZED, "{}".into(), "unknown", ValidationOutcome::Unavailable),
+                (StatusCode::UNAUTHORIZED, r#"{"message":""}"#.into(), "unknown", ValidationOutcome::Unavailable),
+                (StatusCode::UNAUTHORIZED, r#"{"message":7}"#.into(), "unknown", ValidationOutcome::Unavailable),
+                (StatusCode::OK, r#"{"code":"TokenUnknown"}"#.into(), "unknown", ValidationOutcome::Unavailable),
+                (StatusCode::OK, r#"{"code":7}"#.into(), "unknown", ValidationOutcome::Unavailable),
+                (StatusCode::OK, "[]".into(), "unknown", ValidationOutcome::Unavailable),
+                (StatusCode::OK, "null".into(), "unknown", ValidationOutcome::Unavailable),
+                (StatusCode::OK, "not JSON".into(), "unknown", ValidationOutcome::Unavailable),
+                (StatusCode::TOO_MANY_REQUESTS, r#"{"code":"TokenValid"}"#.into(), "unknown", ValidationOutcome::Unavailable),
+                (StatusCode::INTERNAL_SERVER_ERROR, r#"{"code":"TokenValid"}"#.into(), "unknown", ValidationOutcome::Unavailable),
+                (StatusCode::SERVICE_UNAVAILABLE, "unavailable".into(), "unknown", ValidationOutcome::Unavailable),
+            ];
+            for (status, body, expected_result, expected_outcome) in cases {
+                let provider = LocalProvider::new(vec![(status, body)]).await;
+                let validation = localize_program(&template, &provider.endpoint, MAPBOX_LOCAL_URLS);
+                let captures = [("TOKEN".into(), secret.clone(), 0, secret.len())];
+                let result =
+                    validate(&validation, &captures, &LiquidObject::new(), &client, true).await;
+                assert_eq!(result.outcome, expected_outcome, "{rule_id}/{status}: {}", result.body);
+                assert_eq!(result.valid, expected_result == "valid");
+                let private = result.analysis_data.as_ref().expect("imported AST must evaluate");
+                assert_eq!(private["result"], expected_result, "{rule_id}/{status}");
+                if result.valid {
+                    assert_eq!(
+                        private["analysis"],
+                        serde_json::json!({"username":"private-owner", "token_id":"private-token-id", "usage":usage})
+                    );
+                    assert_eq!(private["reason"], "TokenValid");
+                    assert_eq!(result.status, status);
+                } else if expected_result != "unknown" {
+                    assert_eq!(result.status, status);
+                    if status == StatusCode::UNAUTHORIZED {
+                        assert_eq!(private["reason"], "401 Unauthorized: Not Authorized");
+                    }
+                }
+                for private_value in [
+                    "analysis",
+                    "username",
+                    "token_id",
+                    "usage",
+                    "private-owner",
+                    "private-token-id",
+                    "provider-minted-secret",
+                    secret.as_str(),
+                ] {
+                    assert!(!result.body.contains(private_value), "{rule_id}: {}", result.body);
+                }
+                // Ordinary validation must never execute the token-listing analysis.
+                assert_eq!(provider.request_count(), 1, "{rule_id}/{status}");
+                assert_local_get(
+                    &provider.requests.lock().unwrap()[0],
+                    "/tokens/v2",
+                    &[("access_token", &secret)],
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn rc7_mapbox_secret_analysis_lists_once_and_uses_only_the_matching_token() {
+        let template = builtin_program("betterleaks.mapbox-secret-token");
+        let client = local_provider_client();
+        let secret = "sk.synthetic+token/with?reserved=&";
+        let cases = [
+            (StatusCode::OK, serde_json::json!([
+                {"id":"different-id", "note":"unrelated-token-note", "scopes":["admin", "tokens:write"]},
+                7, "not a token", {"scopes":["unmatched:scope"]},
+                {"id":"token-42", "note":"matching token", "scopes":["styles:read", 7, null, "tokens:read", {"scope":"admin"}, false]},
+                {"id":"another-id", "note":"another token", "scopes":["another:scope"]}
+            ]).to_string(), "matching token", serde_json::json!(["styles:read", "tokens:read"])),
+            (StatusCode::FORBIDDEN, r#"{"message":"Missing tokens:read scope"}"#.into(), "", serde_json::json!([])),
+            (StatusCode::OK, r#"[{"id":"different-id","scopes":["admin"]}]"#.into(), "", serde_json::json!([])),
+            (StatusCode::OK, r#"[{"id":"token-42","note":7,"scopes":"admin"}]"#.into(), "", serde_json::json!([])),
+            (StatusCode::OK, "not JSON".into(), "", serde_json::json!([])),
+        ];
+        for (status, listing, note, scopes) in cases {
+            let provider = LocalProvider::new(vec![
+                (StatusCode::OK, r#"{"code":"TokenValid","token":{"user":"mapbox_owner-7","authorization":"token-42","usage":"sk"}}"#.into()),
+                (status, listing),
+            ]).await;
+            let validation = localize_program(&template, &provider.endpoint, MAPBOX_LOCAL_URLS);
+            let captures = [("TOKEN".into(), secret.into(), 0, secret.len())];
+            let result =
+                validate(&validation, &captures, &LiquidObject::new(), &client, true).await;
+            assert!(result.valid, "{}", result.body);
+            assert_eq!(provider.request_count(), 1, "validation must not list tokens");
+            let analysis = analyze(
+                &validation,
+                &captures,
+                &LiquidObject::new(),
+                &client,
+                true,
+                result.analysis_data.as_ref().unwrap(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(analysis["identity"], serde_json::json!({"username":"mapbox_owner-7"}));
+            assert_eq!(
+                analysis["metadata"],
+                serde_json::json!({"token_id":"token-42", "usage":"sk", "note":note, "scopes":scopes})
+            );
+            assert_eq!(analysis["severity"], "unknown");
+            assert!(
+                analysis.get("capabilities").is_none(),
+                "scopes are evidence, not inferred grants"
+            );
+            assert!(!analysis.to_string().contains("unrelated-token-note"));
+            assert_eq!(
+                provider.request_count(),
+                2,
+                "analysis must make exactly one bounded lookup"
+            );
+            let requests = provider.requests.lock().unwrap();
+            assert_local_get(&requests[0], "/tokens/v2", &[("access_token", secret)]);
+            assert_local_get(
+                &requests[1],
+                "/tokens/v2/mapbox_owner-7",
+                &[("access_token", secret), ("usage", "sk"), ("limit", "100")],
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn rc7_mapbox_analysis_skips_listing_for_public_or_incomplete_evidence() {
+        let client = local_provider_client();
+        let cases = [
+            (
+                "betterleaks.mapbox-api-token",
+                "pk.synthetic",
+                serde_json::json!({"user":"public-owner", "authorization":"public-id", "usage":"pk"}),
+                serde_json::json!({"token_id":"public-id", "usage":"pk", "note":"", "scopes":[]}),
+            ),
+            (
+                "betterleaks.mapbox-secret-token",
+                "sk.synthetic",
+                serde_json::json!({"user":"owner/../../elsewhere", "authorization":"token-42", "usage":"sk"}),
+                serde_json::json!({"token_id":"token-42", "usage":"sk", "note":"", "scopes":[]}),
+            ),
+            (
+                "betterleaks.mapbox-secret-token",
+                "sk.synthetic",
+                serde_json::json!({"user":"private-owner", "usage":"sk"}),
+                serde_json::json!({"token_id":"", "usage":"sk", "note":"", "scopes":[]}),
+            ),
+            (
+                "betterleaks.mapbox-secret-token",
+                "sk.synthetic",
+                serde_json::json!({"authorization":"token-42", "usage":"sk"}),
+                serde_json::json!({"token_id":"token-42", "usage":"sk", "note":"", "scopes":[]}),
+            ),
+            (
+                "betterleaks.mapbox-secret-token",
+                "sk.synthetic",
+                serde_json::json!({"user":7, "authorization":false, "usage":[]}),
+                serde_json::json!({"token_id":"", "usage":"", "note":"", "scopes":[]}),
+            ),
+        ];
+        for (rule_id, secret, token, expected_metadata) in cases {
+            let template = builtin_program(rule_id);
+            let provider = LocalProvider::new(vec![(
+                StatusCode::OK,
+                serde_json::json!({"code":"TokenValid", "token":token}).to_string(),
+            )])
+            .await;
+            let validation = localize_program(&template, &provider.endpoint, MAPBOX_LOCAL_URLS);
+            let captures = [("TOKEN".into(), secret.into(), 0, secret.len())];
+            let result =
+                validate(&validation, &captures, &LiquidObject::new(), &client, true).await;
+            assert!(result.valid, "{}", result.body);
+            let analysis = analyze(
+                &validation,
+                &captures,
+                &LiquidObject::new(),
+                &client,
+                true,
+                result.analysis_data.as_ref().unwrap(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(analysis["metadata"], expected_metadata, "{rule_id}");
+            if rule_id == "betterleaks.mapbox-api-token" {
+                assert_eq!(analysis["identity"], serde_json::json!({"username":"public-owner"}));
+            }
+            assert_eq!(provider.request_count(), 1, "{rule_id}: no token lookup is permitted");
+            assert_local_get(
+                &provider.requests.lock().unwrap()[0],
+                "/tokens/v2",
+                &[("access_token", secret)],
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn rc7_harness_validation_retains_read_evidence_without_fetching_profiles() {
+        let template = builtin_program("betterleaks.harness-api-key");
+        let client = local_provider_client();
+        for prefix in ["pat", "sat"] {
+            let secret = format!(
+                "{prefix}.account_12345678901234.0123456789abcdef01234567.AbCdEfGhIjKlMn012345"
+            );
+            let cases = [
+                (StatusCode::OK, "[]", "valid", Some(true), ValidationOutcome::VerifiedActive),
+                (
+                    StatusCode::OK,
+                    "[{\"role\":\"ADMIN\"}]",
+                    "valid",
+                    Some(true),
+                    ValidationOutcome::VerifiedActive,
+                ),
+                (
+                    StatusCode::OK,
+                    "{\"data\":[]}",
+                    "valid",
+                    Some(false),
+                    ValidationOutcome::VerifiedActive,
+                ),
+                (
+                    StatusCode::OK,
+                    "not JSON",
+                    "valid",
+                    Some(false),
+                    ValidationOutcome::VerifiedActive,
+                ),
+                (
+                    StatusCode::FORBIDDEN,
+                    "{\"message\":\"No organization access\"}",
+                    "valid",
+                    Some(false),
+                    ValidationOutcome::VerifiedActive,
+                ),
+                (
+                    StatusCode::UNAUTHORIZED,
+                    "{\"message\":\"Bad token\"}",
+                    "invalid",
+                    None,
+                    ValidationOutcome::VerifiedInactive,
+                ),
+                (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "[]",
+                    "unknown",
+                    None,
+                    ValidationOutcome::Unavailable,
+                ),
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "[]",
+                    "unknown",
+                    None,
+                    ValidationOutcome::Unavailable,
+                ),
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "unavailable",
+                    "unknown",
+                    None,
+                    ValidationOutcome::Unavailable,
+                ),
+            ];
+            for (status, body, expected_result, can_read, expected_outcome) in cases {
+                let provider = LocalProvider::new(vec![(status, body.into())]).await;
+                let validation =
+                    localize_program(&template, &provider.endpoint, HARNESS_LOCAL_URLS);
+                let captures = [("TOKEN".into(), secret.clone(), 0, secret.len())];
+                let result =
+                    validate(&validation, &captures, &LiquidObject::new(), &client, true).await;
+                assert_eq!(result.outcome, expected_outcome, "{prefix}/{status}: {}", result.body);
+                assert_eq!(result.valid, expected_result == "valid");
+                let private = result.analysis_data.as_ref().expect("imported AST must evaluate");
+                assert_eq!(private["result"], expected_result);
+                if let Some(can_read) = can_read {
+                    assert_eq!(private["analysis"], serde_json::json!({"can_read":can_read}));
+                    assert_eq!(result.status, status);
+                } else {
+                    assert!(private.get("analysis").is_none());
+                }
+                if expected_result == "invalid" {
+                    assert_eq!(private["reason"], "Unauthorized");
+                }
+                for private_value in ["analysis", "can_read", "ADMIN", secret.as_str()] {
+                    assert!(!result.body.contains(private_value), "{}", result.body);
+                }
+                assert_eq!(provider.request_count(), 1, "validation must not fetch currentUser");
+                let requests = provider.requests.lock().unwrap();
+                assert_local_get(&requests[0], "/v1/orgs", &[("limit", "1"), ("page", "1")]);
+                assert_eq!(requests[0].headers["x-api-key"], secret);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn rc7_harness_analysis_fetches_only_pat_profiles_and_never_infers_permissions() {
+        let template = builtin_program("betterleaks.harness-api-key");
+        let client = local_provider_client();
+        let account_id = "account_12345678901234";
+        let profile = serde_json::json!({"status":"SUCCESS", "data":{
+            "uuid":"pat-user-42", "name":"PAT User", "email":"pat@example.test",
+            "accounts":[{"uuid":"unrelated-account", "accountName":"Unrelated Account"}, 7,
+                {"uuid":account_id, "accountName":"Matching Account", "role":"ADMIN", "permissions":["write", "admin"]}],
+            "role":"ADMIN", "permissions":["write", "admin"], "token":"provider-minted-secret"
+        }});
+        for prefix in ["pat", "sat"] {
+            let secret =
+                format!("{prefix}.{account_id}.0123456789abcdef01234567.AbCdEfGhIjKlMn012345");
+            for org_status in [StatusCode::OK, StatusCode::FORBIDDEN] {
+                for (profile_status, profile_body, has_profile) in [
+                    (StatusCode::OK, profile.to_string(), true),
+                    (StatusCode::FORBIDDEN, r#"{"message":"Profile access denied"}"#.into(), false),
+                    (
+                        StatusCode::OK,
+                        r#"{"status":"SUCCESS","data":{"uuid":7,"name":"Not a user"}}"#.into(),
+                        false,
+                    ),
+                    (StatusCode::OK, "not JSON".into(), false),
+                ] {
+                    let provider = LocalProvider::new(vec![
+                        (org_status, "[]".into()),
+                        (profile_status, profile_body),
+                    ])
+                    .await;
+                    let validation =
+                        localize_program(&template, &provider.endpoint, HARNESS_LOCAL_URLS);
+                    let captures = [("TOKEN".into(), secret.clone(), 0, secret.len())];
+                    let result =
+                        validate(&validation, &captures, &LiquidObject::new(), &client, true).await;
+                    assert!(result.valid, "{prefix}/{org_status}: {}", result.body);
+                    assert_eq!(
+                        provider.request_count(),
+                        1,
+                        "validation must not fetch currentUser"
+                    );
+                    let analysis = analyze(
+                        &validation,
+                        &captures,
+                        &LiquidObject::new(),
+                        &client,
+                        true,
+                        result.analysis_data.as_ref().unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                    let is_pat = prefix == "pat";
+                    let expected_identity = if is_pat && has_profile {
+                        serde_json::json!({"id":"pat-user-42", "name":"PAT User", "email":"pat@example.test", "account":{"id":account_id, "name":"Matching Account"}})
+                    } else {
+                        serde_json::json!({"account":{"id":account_id}})
+                    };
+                    assert_eq!(
+                        analysis["identity"], expected_identity,
+                        "{prefix}/{org_status}/{profile_status}"
+                    );
+                    assert_eq!(
+                        analysis["metadata"],
+                        serde_json::json!({"token_type":if is_pat { "personal_access_token" } else { "service_account_token" }})
+                    );
+                    if org_status == StatusCode::OK {
+                        assert_eq!(analysis["capabilities"], serde_json::json!(["read"]));
+                        assert_eq!(analysis["severity"], "medium");
+                    } else {
+                        assert!(
+                            analysis.get("capabilities").is_none(),
+                            "403 is valid, not a read grant"
+                        );
+                        assert_eq!(analysis["severity"], "unknown");
+                    }
+                    if is_pat && !has_profile {
+                        assert_eq!(
+                            analysis["reason"],
+                            "Harness user profile was unavailable; effective permissions were not returned"
+                        );
+                    }
+                    assert!(!analysis.to_string().contains("provider-minted-secret"));
+                    assert!(!analysis.to_string().contains("Unrelated Account"));
+                    assert_eq!(
+                        provider.request_count(),
+                        if is_pat { 2 } else { 1 },
+                        "{prefix}: SAT must never request currentUser"
+                    );
+                    let requests = provider.requests.lock().unwrap();
+                    assert_local_get(&requests[0], "/v1/orgs", &[("limit", "1"), ("page", "1")]);
+                    if is_pat {
+                        assert_local_get(&requests[1], "/ng/api/user/currentUser", &[]);
+                    }
+                    for request in requests.iter() {
+                        assert_eq!(request.headers["x-api-key"], secret);
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn identity_metadata_from_builtin_http_rules_reuses_the_validation_request() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let rules = get_betterleaks_rules(None).unwrap();
+        let cases = [
+            (
+                "betterleaks.huggingface-access-token",
+                "https://huggingface.co/api/whoami-v2",
+                serde_json::json!({"id":"user-7", "name":"alice", "email":"private@example.test", "auth":{"accessToken":{"role":"read", "token":"minted-secret"}}}),
+                serde_json::json!({"id":"user-7", "username":"alice", "role":"read"}),
+            ),
+            (
+                "betterleaks.huggingface-organization-api-token",
+                "https://huggingface.co/api/whoami-v2",
+                serde_json::json!({"id":"org-7", "name":"example-org", "orgs":[{"id":"other-org"}]}),
+                serde_json::json!({"id":"org-7", "username":"example-org"}),
+            ),
+            (
+                "betterleaks.github-pat",
+                "https://api.github.com",
+                serde_json::json!({"id":7, "login":"alice", "email":"private@example.test", "token":"minted-secret"}),
+                serde_json::json!({"id":"7", "username":"alice"}),
+            ),
+            (
+                "betterleaks.github-fine-grained-pat",
+                "https://api.github.com",
+                serde_json::json!({"id":7, "login":"alice"}),
+                serde_json::json!({"id":"7", "username":"alice"}),
+            ),
+            (
+                "betterleaks.gitlab-pat",
+                "https://gitlab.com",
+                serde_json::json!({"id":42, "user_id":7, "name":"test-token", "scopes":["api"], "token":"minted-secret"}),
+                serde_json::json!({"user_id":"7", "token_id":"42"}),
+            ),
+            (
+                "betterleaks.gitlab-pat-routable",
+                "https://gitlab.com",
+                serde_json::json!({"id":42, "user_id":7, "granular":true, "scopes":["api"]}),
+                serde_json::json!({"user_id":"7", "token_id":"42"}),
+            ),
+            (
+                "betterleaks.gitlab-pat-routable-versioned",
+                "https://gitlab.com",
+                serde_json::json!({"id":42, "user_id":7, "granular":true, "scopes":["api"]}),
+                serde_json::json!({"user_id":"7", "token_id":"42"}),
+            ),
+            (
+                "betterleaks.circleci-personal-token",
+                "https://circleci.com/api/v2/me",
+                serde_json::json!({"id":"user-7", "login":"alice", "name":"Private Name"}),
+                serde_json::json!({"id":"user-7", "username":"alice"}),
+            ),
+            (
+                "betterleaks.fastly-api-token",
+                "https://api.fastly.com/tokens/self",
+                serde_json::json!({"id":"token-42", "user_id":"user-7", "scope":"global:read", "token":"minted-secret"}),
+                serde_json::json!({"user_id":"user-7", "token_id":"token-42"}),
+            ),
+        ];
+        let client = Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        for (rule_id, upstream_url, provider_body, expected) in cases {
+            for status in [StatusCode::OK, StatusCode::UNAUTHORIZED] {
+                let calls = Arc::new(AtomicUsize::new(0));
+                let observed = calls.clone();
+                let provider_body = provider_body.clone();
+                let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                    .await
+                    .unwrap();
+                let endpoint = format!("http://{}", listener.local_addr().unwrap());
+                let app = Router::new().fallback(move || {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    let body = provider_body.clone();
+                    async move {
+                        (status, [("content-type", "application/json")], body.to_string())
+                    }
+                });
+                let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+                let Some(Validation::Betterleaks(mut validation)) =
+                    rules.rules.get(rule_id).unwrap().validation.clone()
+                else {
+                    panic!("expected Betterleaks validation for {rule_id}");
+                };
+                replace_string_literal(&mut validation.expression, upstream_url, &endpoint);
+                let mut globals = LiquidObject::new();
+                for name in ["GITHUB_BASE_URL", "GITLAB_BASE_URL"] {
+                    globals.insert(name.into(), LiquidValue::scalar(endpoint.clone()));
+                }
+                let result = validate(
+                    &validation,
+                    &[("TOKEN".into(), "synthetic-primary-secret".into(), 0, 0)],
+                    &globals,
+                    &client,
+                    true,
+                )
+                .await;
+                server.abort();
+                assert_eq!(calls.load(Ordering::SeqCst), 1, "{rule_id}: {status}");
+                let body: JsonValue = serde_json::from_str(&result.body).unwrap();
+                if status == StatusCode::OK {
+                    assert!(result.valid, "{rule_id}: {}", result.body);
+                    assert_eq!(body["metadata"], expected, "{rule_id}");
+                    assert!(result.analysis_data.as_ref().unwrap()["analysis"].is_object());
+                } else {
+                    assert!(!result.valid, "{rule_id}");
+                    assert!(body.get("metadata").is_none(), "{rule_id}: {}", result.body);
+                }
+                for private in [
+                    "analysis",
+                    "minted-secret",
+                    "private@example.test",
+                    "synthetic-primary-secret",
+                    "other-org",
+                    "Private Name",
+                ] {
+                    assert!(!result.body.contains(private), "{rule_id}: {private}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn identity_metadata_from_builtin_cloud_programs_preserves_approved_fields() {
+        // Stub only the initial provider helper result. The pinned rule's complete
+        // classification and metadata expressions still execute, without live keys.
+        fn stub_response(expression: &mut BetterleaksExpr, response: &BetterleaksExpr) -> bool {
+            match expression {
+                BetterleaksExpr::VariableDeclarator { name, value, expr } => {
+                    if name == "r" {
+                        **value = response.clone();
+                        true
+                    } else {
+                        stub_response(expr, response)
+                    }
+                }
+                _ => false,
+            }
+        }
+        let rules = get_betterleaks_rules(None).unwrap();
+        let cases = [
+            (
+                "betterleaks.aws-access-token",
+                serde_json::json!({"arn":"arn:aws:iam::123456789012:user/example", "account":"123456789012", "userid":"user-7"}),
+            ),
+            (
+                "betterleaks.aws-access-token",
+                serde_json::json!({"arn":"arn:aws:sts::123456789012:assumed-role/example/session", "account":"123456789012", "userid":"role-7:session"}),
+            ),
+            (
+                "betterleaks.gcp-service-account",
+                serde_json::json!({"credential_type":"service_account", "project_id":"example-project", "client_email":"scanner@example-project.iam.gserviceaccount.com"}),
+            ),
+            (
+                "betterleaks.gcp-application-default-credentials",
+                serde_json::json!({"credential_type":"authorized_user", "client_id":"example-client.apps.googleusercontent.com"}),
+            ),
+            (
+                "betterleaks.azure-ad-client-secret",
+                serde_json::json!({"tenant_id":"example-tenant", "client_id":"example-client"}),
+            ),
+            (
+                "betterleaks.azure-storage-account-key",
+                serde_json::json!({"account":"examplestorage", "containers":["first", "second"]}),
+            ),
+            (
+                "betterleaks.azure-app-configuration-connection-string",
+                serde_json::json!({"endpoint":"https://example.azconfig.io", "id":"example-id"}),
+            ),
+            (
+                "betterleaks.azure-servicebus-connection-string",
+                serde_json::json!({"host":"example.servicebus.windows.net", "entity_path":"example-queue"}),
+            ),
+        ];
+        let client = Client::new();
+        for (rule_id, expected) in cases {
+            let Some(Validation::Betterleaks(mut validation)) =
+                rules.rules.get(rule_id).unwrap().validation.clone()
+            else {
+                panic!("expected Betterleaks validation for {rule_id}");
+            };
+            let mut provider = expected.clone();
+            provider["status"] = JsonValue::from(200);
+            provider["access_token"] = JsonValue::from("minted-secret");
+            assert!(
+                stub_response(
+                    &mut validation.expression,
+                    &program(&provider.to_string()).expression
+                ),
+                "{rule_id}"
+            );
+            let result = validate(&validation, &[], &LiquidObject::new(), &client, true).await;
+            assert!(result.valid, "{rule_id}: {}", result.body);
+            let body: JsonValue = serde_json::from_str(&result.body).unwrap();
+            assert_eq!(body["metadata"], expected, "{rule_id}");
+            assert!(body.get("analysis").is_none(), "{rule_id}");
+            assert!(!result.body.contains("minted-secret"), "{rule_id}");
+        }
     }
 
     #[test]

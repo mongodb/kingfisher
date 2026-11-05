@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def windows_recipe(architecture):
-    """Read just the shared release/CI dependency setup recipe for one architecture."""
+    """Read one Windows native build/test recipe without executing it."""
     lines = (ROOT / "Makefile").read_text(encoding="utf-8").splitlines(keepends=True)
     header = f"windows-{architecture}:"
     start = next(index for index, line in enumerate(lines) if line.startswith(header))
@@ -115,6 +115,77 @@ class WindowsBuildDependenciesTests(unittest.TestCase):
         self.assertIn("-C link-arg=-fuse-ld=lld", x64)
         self.assertNotIn("-fuse-ld=lld", arm64)
         self.assertNotIn("-fuse-ld=lld", windows_recipe("x64"))
+
+    def test_windows_workspace_tests_exclude_only_the_node_addon_tested_on_msvc(self):
+        # napi-build needs libnode.dll on GNU Windows even with dyn-symbols.
+        # Keep all other workspace suites here; native Node tests must run on
+        # the supported MSVC toolchain, including portable Rust unit tests.
+        for architecture in ("x64", "arm64"):
+            with self.subTest(architecture=architecture):
+                recipe = windows_recipe(f"test-{architecture}")
+                commands = re.findall(r"(?m)^\t[ \t]*cargo[ \t]+(test[^;]+);", recipe)
+                self.assertEqual(len(commands), 1)
+                self.assertEqual(shlex.split(commands[0]), [
+                    "test", "--locked", "--profile", "ci-test", "--workspace",
+                    "--all-targets", "--exclude", "kingfisher-node",
+                    "--target", "$$target_triple",
+                ])
+
+    def test_node_addon_retains_native_and_runtime_tests_on_all_supported_targets(self):
+        workflow = (ROOT / ".github/workflows/node-sdk.yml").read_text(encoding="utf-8")
+        build = workflow.split("  build:", 1)[1].split("  package:", 1)[0]
+        for target in ("x86_64-apple-darwin", "aarch64-apple-darwin",
+                       "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu",
+                       "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"):
+            with self.subTest(target=target):
+                self.assertIn(f"target: {target}", build)
+        self.assertIn("      - name: Rust native unit tests", build)
+        native_tests = build.split("      - name: Rust native unit tests", 1)[1].split("      - ", 1)[0]
+        # --all-targets is necessary: the addon's test=false disables only
+        # automatic selection, not its existing portable Rust unit tests.
+        self.assertEqual(re.findall(r"(?m)^\s+run: (.+)$", native_tests), [
+            'cargo test --locked -p kingfisher-node --all-targets --target "${{ matrix.target }}"',
+        ])
+        self.assertNotIn("if:", native_tests)
+        self.assertNotIn("continue-on-error:", build)
+        self.assertLess(build.index("name: Rust native unit tests"),
+                        build.index("name: Build production addon"))
+        self.assertIn('npm run build -- --target "${{ matrix.target }}"', build)
+        self.assertRegex(build, r"(?m)^\s+npm test$")
+
+    def test_node_windows_compilation_keeps_the_native_shell_and_msvc_linker(self):
+        workflow = (ROOT / ".github/workflows/node-sdk.yml").read_text(encoding="utf-8")
+        build = workflow.split("  build:", 1)[1].split("  package:", 1)[0]
+        # In Git Bash, /usr/bin/link shadows MSVC even after VsDevCmd succeeds.
+        # Both Cargo tests and npm's Cargo build must inherit PowerShell on
+        # Windows (and Bash on Unix), without a Unix-only environment expansion.
+        self.assertNotIn("shell:", workflow.split("jobs:", 1)[0])
+        self.assertNotIn("shell:", build.split("    steps:", 1)[0])
+        for name in ("Rust native unit tests", "Build production addon"):
+            with self.subTest(step=name):
+                step = build.split(f"      - name: {name}", 1)[1].split("      - ", 1)[0]
+                self.assertNotIn("shell:", step)
+                self.assertIn('--target "${{ matrix.target }}"', step)
+                self.assertNotIn("$NATIVE_TARGET", step)
+
+    def test_node_windows_abi_selects_an_installation_containing_the_pinned_toolset(self):
+        workflow = (ROOT / ".github/workflows/node-sdk.yml").read_text(encoding="utf-8")
+        step = workflow.split("      - name: Pin Windows C++ ABI", 1)[1].split("      - name:", 1)[0]
+        selection = next(line.strip() for line in step.splitlines()
+                         if line.strip().startswith("$installation ="))
+        self.assertIn("& $vswhere -all -products '*' -property installationPath", selection)
+        self.assertIn("Where-Object { Test-Path (Join-Path $_ 'VC\\Tools\\MSVC\\14.44.*') }", selection)
+        self.assertTrue(selection.endswith("| Select-Object -First 1"))
+        self.assertNotIn("-latest", step)
+        # VS 2026 may contain the legacy pinned toolset, including on ARM64;
+        # do not select by a hard-coded Visual Studio product-version range.
+        self.assertNotIn("-version ", step)
+        guard = "if (-not $installation) { throw 'No Visual Studio installation contains the MSVC 14.44 toolset' }"
+        self.assertIn(guard, step)
+        self.assertLess(step.index(guard), step.index("$devcmd = Join-Path $installation"))
+        self.assertIn("-arch={1} -host_arch={1} -vcvars_ver=14.44", step)
+        self.assertIn("if ($LASTEXITCODE -ne 0) { throw 'Could not initialize MSVC 14.44' }", step)
+        self.assertIn("if ($version -notmatch '^14\\.44\\.') { throw \"Expected MSVC 14.44, received $version\" }", step)
 
     def test_windows_hash_preflight_runs_before_expensive_native_setup(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")

@@ -1,0 +1,5 @@
+# Custom TOML IDs gain the custom. namespace when loaded by Kingfisher.
+[[rules]]
+id = "acme-example-toml"
+description = "Acme example TOML token"
+regex = '''\b(acme_toml_[A-Za-z0-9]{16})\b'''

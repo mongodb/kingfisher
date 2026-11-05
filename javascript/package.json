@@ -1,0 +1,75 @@
+{
+  "name": "kingfisher-secret-scanner",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Native Kingfisher secret detection, credential validation and explicit revocation for Node.js",
+  "license": "Apache-2.0 AND MIT AND BSD-3-Clause AND CC-BY-SA-4.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mongodb/kingfisher.git",
+    "directory": "javascript"
+  },
+  "engines": {
+    "node": "^22.13.0 || ^24.0.0 || ^26.0.0"
+  },
+  "main": "index.cjs",
+  "module": "index.mjs",
+  "types": "index.d.ts",
+  "exports": {
+    ".": { "types": "./index.d.ts", "import": "./index.mjs", "require": "./index.cjs" },
+    "./core": { "types": "./core.d.ts", "import": "./core.mjs", "require": "./core.cjs" },
+    "./rules": { "types": "./rules.d.ts", "import": "./rules.mjs", "require": "./rules.cjs" },
+    "./scanner": { "types": "./scanner.d.ts", "import": "./scanner.mjs", "require": "./scanner.cjs" },
+    "./inputs": { "types": "./inputs.d.ts", "import": "./inputs.mjs", "require": "./inputs.cjs" },
+    "./git": { "types": "./git.d.ts", "import": "./git.mjs", "require": "./git.cjs" },
+    "./validation": { "types": "./validation.d.ts", "import": "./validation.mjs", "require": "./validation.cjs" },
+    "./revocation": { "types": "./revocation.d.ts", "import": "./revocation.mjs", "require": "./revocation.cjs" },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "*.cjs", "*.mjs", "*.d.ts", "lib/", "examples/", "README.md", "LICENSE*", "NOTICE*", "THIRD_PARTY_NOTICES"
+  ],
+  "scripts": {
+    "prebuild": "node scripts/prepare-package.cjs",
+    "prebuild:debug": "node scripts/prepare-package.cjs",
+    "build": "node scripts/build.cjs",
+    "build:debug": "node scripts/build.cjs --debug",
+    "test": "node --test tests/*.test.cjs",
+    "test:types": "tsc --noEmit -p tsconfig.json",
+    "test:release": "node --test tests/packaging.test.cjs tests/publishing.test.cjs",
+    "check:names": "node scripts/check-npm-names.cjs",
+    "prepare:package": "node scripts/prepare-package.cjs",
+    "prepare:platforms": "node scripts/prepare-platforms.cjs",
+    "collect:artifacts": "node scripts/collect-artifacts.cjs",
+    "check:release": "node scripts/check-release.cjs",
+    "check:notices": "node --test ../scripts/tests/third-party-notices.test.cjs && node ../scripts/third-party-notices.cjs --check",
+    "pack:release": "node scripts/pack-release.cjs",
+    "test:package": "node scripts/test-package.cjs",
+    "plan:publish": "node scripts/publish-packages.cjs",
+    "publish:registry": "node scripts/publish-packages.cjs --publish"
+  },
+  "napi": {
+    "binaryName": "kingfisher_sdk",
+    "targets": [
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-pc-windows-msvc",
+      "aarch64-pc-windows-msvc"
+    ]
+  },
+  "optionalDependencies": {
+    "kingfisher-secret-scanner-darwin-x64": "file:./npm/darwin-x64",
+    "kingfisher-secret-scanner-darwin-arm64": "file:./npm/darwin-arm64",
+    "kingfisher-secret-scanner-linux-x64-gnu": "file:./npm/linux-x64-gnu",
+    "kingfisher-secret-scanner-linux-arm64-gnu": "file:./npm/linux-arm64-gnu",
+    "kingfisher-secret-scanner-win32-x64-msvc": "file:./npm/win32-x64-msvc",
+    "kingfisher-secret-scanner-win32-arm64-msvc": "file:./npm/win32-arm64-msvc"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "3.10.9",
+    "@types/node": "^22.0.0",
+    "typescript": "^6.0.0"
+  }
+}

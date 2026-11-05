@@ -1,0 +1,289 @@
+name: Node SDK
+
+on:
+  push:
+    branches: [main, development]
+    tags: ['npm-v*']
+    paths: ['javascript/**', 'crates/**', 'Cargo.toml', 'Cargo.lock', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES', 'third-party/kingfisher-vectorscan/**', 'scripts/third-party-notices.cjs', 'scripts/tests/third-party-notices.test.cjs', 'scripts/license-overrides/**', 'Makefile', '.gitattributes', 'docs/JAVASCRIPT.md', 'scripts/tests/test_node_sdk*.py', '.github/workflows/node-sdk.yml']
+  pull_request:
+    paths: ['javascript/**', 'crates/**', 'Cargo.toml', 'Cargo.lock', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES', 'third-party/kingfisher-vectorscan/**', 'scripts/third-party-notices.cjs', 'scripts/tests/third-party-notices.test.cjs', 'scripts/license-overrides/**', 'Makefile', '.gitattributes', 'docs/JAVASCRIPT.md', 'scripts/tests/test_node_sdk*.py', '.github/workflows/node-sdk.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  source:
+    name: Check SDK version and release source
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.22.2'
+          package-manager-cache: false
+      - name: Check source manifests before native builds
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const assert = require('node:assert/strict');
+          const fs = require('node:fs');
+          const sdk = require('./javascript/package.json');
+          const rust = fs.readFileSync('crates/kingfisher-node/Cargo.toml', 'utf8');
+          assert.equal(sdk.version, /^version\s*=\s*"([^"]+)"/m.exec(rust)?.[1]);
+          assert.equal(sdk.private, true, 'Development manifests must not be published');
+          if (process.env.GITHUB_REF_TYPE === 'tag') {
+            assert.equal(process.env.GITHUB_REPOSITORY, 'mongodb/kingfisher');
+            assert.equal(process.env.GITHUB_REF_NAME, `npm-v${sdk.version}`);
+          }
+          NODE
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            git merge-base --is-ancestor HEAD origin/main
+          fi
+      - name: Check public Node-only TypeScript consumers before native builds
+        working-directory: javascript
+        run: |
+          npm ci --ignore-scripts
+          npm run test:types
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with: { toolchain: 1.99.0 }
+      - name: Check locked all-target dependency attribution
+        run: |
+          cargo fetch --locked
+          make check-notices
+      - name: Check SDK documentation and release guards
+        run: python3 -m unittest discover -s scripts/tests -p 'test_node_sdk*.py'
+
+  build:
+    name: Native (${{ matrix.target }})
+    needs: source
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-15-intel, target: x86_64-apple-darwin }
+          - { os: macos-15, target: aarch64-apple-darwin }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu }
+          - { os: windows-2022, target: x86_64-pc-windows-msvc }
+          # Check the VS 2022-baseline archive with a newer VS 2026 ARM64 consumer.
+          - { os: windows-11-vs2026-arm, target: aarch64-pc-windows-msvc }
+    defaults:
+      run:
+        working-directory: javascript
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.23.4'
+          cache: npm
+          cache-dependency-path: javascript/package-lock.json
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.99.0
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
+      - name: Linux native prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake g++ libboost-dev pkg-config binutils
+      - name: Pin Windows C++ ABI to the VS 2022 14.44 toolset
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          NATIVE_TARGET: ${{ matrix.target }}
+        run: |
+          $arch = if ($env:NATIVE_TARGET.StartsWith('aarch64')) { 'arm64' } else { 'x64' }
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installation = & $vswhere -all -products '*' -property installationPath | Where-Object { Test-Path (Join-Path $_ 'VC\Tools\MSVC\14.44.*') } | Select-Object -First 1
+          if (-not $installation) { throw 'No Visual Studio installation contains the MSVC 14.44 toolset' }
+          $devcmd = Join-Path $installation 'Common7\Tools\VsDevCmd.bat'
+          $command = 'call "{0}" -no_logo -arch={1} -host_arch={1} -vcvars_ver=14.44 && set' -f $devcmd, $arch
+          $variables = & $env:ComSpec /d /s /c $command
+          if ($LASTEXITCODE -ne 0) { throw 'Could not initialize MSVC 14.44' }
+          $version = ($variables | Where-Object { $_ -match '^VCToolsVersion=' }) -replace '^VCToolsVersion=', ''
+          if ($version -notmatch '^14\.44\.') { throw "Expected MSVC 14.44, received $version" }
+          foreach ($line in $variables) {
+            if ($line -match '^([^=]+)=(.*)$') { $line | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append }
+          }
+      - name: macOS native prerequisites
+        if: runner.os == 'macOS'
+        run: brew install cmake boost
+      - run: npm ci --ignore-scripts
+      - name: Rust formatting and binding lint
+        run: |
+          cargo fmt --all --check
+          cargo clippy --locked -p kingfisher-node -- -D warnings
+      # Keep the platform's native shell: Git Bash puts its GNU link utility
+      # ahead of the pinned MSVC linker on Windows.
+      - name: Rust native unit tests
+        run: cargo test --locked -p kingfisher-node --all-targets --target "${{ matrix.target }}"
+      - name: Build production addon
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '11.0'
+        run: npm run build -- --target "${{ matrix.target }}"
+      - name: Audit GNU/Linux imported runtime symbols
+        if: runner.os == 'Linux'
+        shell: bash
+        run: node scripts/check-linux-abi.cjs kingfisher_sdk.*.node
+      - name: Node 22 integration and TypeScript API
+        run: |
+          npm test
+          npm run test:types
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with: { node-version: '24.22.2' }
+      - name: Node 24 tests against the same native artifact
+        run: |
+          npm test
+          npm run test:types
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with: { node-version: '22.13.0' }
+      - name: Minimum Node 22 runtime against the same native artifact
+        run: |
+          npm test
+          npm run test:types
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with: { node-version: '24.0.0' }
+      - name: Minimum Node 24 runtime against the same native artifact
+        run: |
+          npm test
+          npm run test:types
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with: { node-version: '26.0.0' }
+      - name: Minimum Node 26 runtime against the same native artifact
+        run: |
+          npm test
+          npm run test:types
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with: { node-version: '26.13.0' }
+      - name: Node 26 integration and TypeScript API against the same native artifact
+        run: |
+          npm test
+          npm run test:types
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: node-sdk-${{ matrix.target }}
+          path: |
+            javascript/*.node
+            javascript/_native.cjs
+            javascript/_native.d.ts
+          if-no-files-found: error
+
+  package:
+    name: Validate all target packages (no publication)
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with: { node-version: '22.23.4' }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: node-sdk-*
+          path: javascript/artifacts
+      - name: Stage exact-version registry packages and license notices
+        working-directory: javascript
+        run: |
+          npm ci --ignore-scripts
+          npm run prepare:package
+          npm run prepare:platforms
+          cp artifacts/node-sdk-x86_64-unknown-linux-gnu/_native.cjs .
+          cp artifacts/node-sdk-x86_64-unknown-linux-gnu/_native.d.ts .
+          npm run collect:artifacts
+          npm run check:release
+          npm run pack:release
+          npm run test:package
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: node-sdk-registry-staging
+          path: javascript/release/
+          if-no-files-found: error
+
+  verify:
+    name: Test sealed tarballs (${{ matrix.os }})
+    needs: package
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15-intel, macos-15, ubuntu-22.04, ubuntu-22.04-arm, windows-2022, windows-11-vs2026-arm]
+    defaults:
+      run:
+        working-directory: javascript
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: node-sdk-registry-staging
+          path: javascript/release
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with: { node-version: '22.23.4' }
+      - name: Clean offline Node 22 consumer of the exact publish archives
+        run: npm run test:package
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with: { node-version: '24.22.2' }
+      - name: Clean offline Node 24 consumer of the same archives
+        run: npm run test:package
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with: { node-version: '22.13.0' }
+      - name: Clean offline minimum Node 22 consumer of the same archives
+        run: npm run test:package
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with: { node-version: '24.0.0' }
+      - name: Clean offline minimum Node 24 consumer of the same archives
+        run: npm run test:package
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with: { node-version: '26.0.0' }
+      - name: Clean offline minimum Node 26 consumer of the same archives
+        run: npm run test:package
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with: { node-version: '26.13.0' }
+      - name: Clean offline Node 26 consumer of the same archives
+        run: npm run test:package
+
+  publish:
+    name: Publish validated npm packages with OIDC
+    if: github.repository == 'mongodb/kingfisher' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/npm-v')
+    needs: [package, verify]
+    runs-on: ubuntu-24.04
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: npm-sdk-publish-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.22.2'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+      - name: Install pinned OIDC-capable npm CLI
+        run: npm install --global npm@11.21.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: node-sdk-registry-staging
+          path: javascript/release
+      - name: Check released manifests and upstream ancestry
+        run: |
+          git merge-base --is-ancestor HEAD origin/main
+          node javascript/scripts/check-release.cjs
+      - name: Publish exact tested archives, platforms first
+        working-directory: javascript
+        run: npm run publish:registry

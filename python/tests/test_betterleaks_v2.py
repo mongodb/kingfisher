@@ -58,6 +58,34 @@ response.status == 204 ? {result: "revoked"} : revoke.unknown(response)
             validator.analyze(synthetic)
 
 
+def test_identity_response_summaries_preserve_python_serialization_and_private_analysis(tmp_path):
+    path = tmp_path / "identity.yml"
+    path.write_text(json.dumps({"rules": [{
+        "id": "acme.identity", "name": "Synthetic identity", "pattern": "(demo_[a-z0-9]{16})",
+        "validation": {"type": "Betterleaks", "content": {
+            "expression": '''{result: "valid", analysis: {
+                id: "account-7", username: "alice",
+                auth: {accessToken: {role: "read", token: "PRIVATE_AUTH_MARKER"}}
+            }}''',
+            "analyze": '''{identity: {
+                id: validation.analysis.id, username: validation.analysis.username
+            }}''',
+            "capabilities": {"access_map": {"handler": "huggingface"}},
+        }},
+    }]}), encoding="utf-8")
+    rules = Rules([path], builtins=False)
+    validator = Validator()
+    result, = validator.validate(Scanner(rules).scan(TOKEN))
+    assert result.outcome == "verified_active"
+    serialized = result.to_dict()
+    assert set(serialized) == {"finding", "outcome", "reason", "http_status"}
+    public = repr(result) + json.dumps(serialized)
+    for private in ["account-7", "alice", "PRIVATE_AUTH_MARKER", TOKEN]:
+        assert private not in public
+    analysis = validator.analyze(result)
+    assert analysis["identity"] == {"id": "account-7", "username": "alice"}
+
+
 def test_v2_source_attributes_preserve_policy_controls_and_deduplication(tmp_path):
     path = tmp_path / "attributes.toml"
     path.write_text("""

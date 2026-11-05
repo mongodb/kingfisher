@@ -512,8 +512,10 @@ impl Validator {
     /// unrelated inputs into separate calls even if their bytes are identical.
     pub async fn validate_findings(&self, findings: Vec<Finding>) -> Vec<ValidatedFinding> {
         let cache = ValidationCache::default();
-        let checked: Vec<_> = stream::iter(findings.iter())
-            .map(|finding| self.check_finding(finding, &findings, false, &cache))
+        // Scalar stream items avoid a higher-ranked borrowed-item lifetime in
+        // Map's future type, keeping this batch future Send for async embedders.
+        let checked: Vec<_> = stream::iter(0..findings.len())
+            .map(|index| self.check_finding(&findings[index], &findings, false, &cache))
             .buffered(self.concurrency)
             .collect()
             .await;
@@ -536,8 +538,8 @@ impl Validator {
         context: &[Finding],
     ) -> Vec<ValidatedFinding> {
         let cache = ValidationCache::default();
-        let checked: Vec<_> = stream::iter(candidates.iter())
-            .map(|finding| self.check_finding(finding, context, true, &cache))
+        let checked: Vec<_> = stream::iter(0..candidates.len())
+            .map(|index| self.check_finding(&candidates[index], context, true, &cache))
             .buffered(self.concurrency)
             .collect()
             .await;
