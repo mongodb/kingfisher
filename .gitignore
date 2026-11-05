@@ -12,6 +12,7 @@
 !testdata/parsers/context_verifier_golden.json
 !testdata/parsers/scan_findings_baseline.json
 !testdata/parsers/tree_sitter_capture_baseline.json
+!scripts/license-overrides/index.json
 *.jsonl
 *.bson
 .prettierrc

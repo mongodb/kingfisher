@@ -19,4 +19,5 @@ testdata/* linguist-vendored
 /javascript/LICENSE* text eol=lf
 /javascript/NOTICE* text eol=lf
 /javascript/npm/*/README.md text eol=lf
-/scripts/license-overrides/*.txt text eol=lf
+# Verbatim upstream archives may use CRLF; preserve their pinned SHA-256 bytes.
+/scripts/license-overrides/*.txt -text whitespace=cr-at-eol

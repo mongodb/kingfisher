@@ -117,7 +117,8 @@ The `crates-io`, `pypi-sdk`, and `npm` environments and registry Trusted Publish
 permissions must already be configured. Read-only local checks cannot prove external registry
 authorization or prevent a later outage/race; the protected publish jobs remain authoritative.
 See the [crate publishing guide](../docs/PUBLISHING.md),
-[Python SDK publishing guide](../docs/PYPI.md), and [npm runbook](../javascript/PUBLISHING.md).
+[Python SDK publishing guide](../docs/PYPI.md), and
+[npm publishing guide](../docs/PUBLISHING.md#npm-publishing-with-github-actions).
 
 ## Run through GitHub Actions
 

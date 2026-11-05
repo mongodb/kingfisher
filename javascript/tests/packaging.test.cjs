@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const source = path.resolve(__dirname, '..');
 const targets = require('../scripts/targets.cjs');
 const pkg = require('../package.json');
@@ -106,8 +107,11 @@ test('platform packages must include the documented README and exclude maintaine
     assert.notEqual(run(value.root, 'check-release.cjs').status, 0);
     success(run(value.root, 'collect-artifacts.cjs'));
     assert.ok(!fs.existsSync(path.join(release, 'PUBLISHING.md')));
-    fs.copyFileSync(path.join(value.root, 'PUBLISHING.md'), path.join(release, 'PUBLISHING.md'));
-    assert.notEqual(run(value.root, 'check-release.cjs').status, 0);
+    // Inject a forbidden staged file without depending on the intentionally removed source guide.
+    fs.writeFileSync(path.join(release, 'PUBLISHING.md'), 'Maintainer-only publishing fixture.\n');
+    const result = run(value.root, 'check-release.cjs');
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Do not stage the maintainer publishing runbook/);
   } finally { cleanup(value); }
 });
 
@@ -120,7 +124,43 @@ test('fresh npm tarballs load the genuine host addon without a source-tree fallb
     fs.copyFileSync(path.join(source, name), path.join(value.artifacts, name));
     success(run(value.root, 'collect-artifacts.cjs'));
     success(run(value.root, 'pack-release.cjs'));
-    success(run(value.root, 'test-package.cjs'));
+    // Exercise awaited cleanup on success and failure, without the native rmSync
+    // retry bugs in the supported Node 24.0 and 26.0 floors.
+    const marker = path.join(value.directory, 'consumer-cleanups.jsonl');
+    const preload = path.join(value.directory, 'check-consumer-cleanup.cjs');
+    fs.writeFileSync(preload, `
+      const assert = require('node:assert/strict');
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const remove = fs.promises.rm.bind(fs.promises);
+      fs.rmSync = () => assert.fail('Consumer cleanup must use the asynchronous remover');
+      fs.promises.rm = async (directory, options) => {
+        assert.ok(path.basename(directory).startsWith('kingfisher-npm-check-'));
+        assert.deepEqual(options, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+        const readonly = path.join(directory, 'readonly-cleanup-fixture');
+        fs.writeFileSync(readonly, 'owned temporary fixture');
+        fs.chmodSync(readonly, 0o444);
+        await remove(directory, options);
+        assert.equal(fs.existsSync(directory), false);
+        fs.appendFileSync(${JSON.stringify(marker)}, JSON.stringify(directory) + '\\n');
+      };
+    `);
+    const consume = () => spawnSync(process.execPath,
+      ['--require', preload, path.join(value.root, 'scripts', 'test-package.cjs')],
+      { cwd: value.root, encoding: 'utf8', env: process.env });
+    success(consume());
+    const completed = () => fs.readFileSync(marker, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    assert.equal(completed().length, 1);
+
+    const manifest = path.join(value.root, 'release', 'archives', 'manifest.json');
+    const invalid = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+    invalid.packages[0].integrity = 'sha512-invalid';
+    fs.writeFileSync(manifest, JSON.stringify(invalid));
+    const failure = consume();
+    assert.notEqual(failure.status, 0);
+    assert.match(failure.stderr, /Tested archive changed/);
+    assert.equal(completed().length, 2);
+    for (const directory of completed()) assert.equal(fs.existsSync(directory), false);
   } finally { cleanup(value); }
 });
 

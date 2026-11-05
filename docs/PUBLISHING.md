@@ -8,7 +8,7 @@ are `kingfisher-core`, `kingfisher-rules`, and `kingfisher-scanner`. The maintai
 `kingfisher-rule-bundle` package is never published. The `kingfisher-python` binding
 crate is packaged by Maturin for the separate Python SDK release, not crates.io.
 The `kingfisher-node` binding crate is also private to its independently versioned
-JavaScript/TypeScript npm SDK; see the [npm runbook](../javascript/PUBLISHING.md).
+JavaScript/TypeScript npm SDK; see [npm publishing with GitHub Actions](#npm-publishing-with-github-actions).
 
 Native Linux RPM and DEB packages use the system package name `kingfisher`; do not derive
 it from the Cargo or PyPI package name. Keep the RPM compatibility metadata for previously
@@ -334,10 +334,10 @@ an authorized maintainer; committing workflow YAML does not configure them.
    sealed-tarball verification matrix to pass before configuring npm trust or creating a release tag.
 4. Sign into the intended npm owner account, verify its email, enable **account-level
    2FA**, and confirm write access to all seven packages below. npm trust requires an
-   existing package entry. For absent names, follow the
-   [one-time bootstrap instructions](../javascript/PUBLISHING.md#5-bootstrap-absent-package-entries-once):
-   unapproved stages create public `0.0.0-stage` placeholders without publishing SDK
-   `0.1.0`. **Never approve the dummy bootstrap stages**; skip names already owned.
+   existing package entry. Handle absent names in a separately authorized npm
+   ownership/bootstrap setup, not an SDK release. Any dummy bootstrap stages must
+   remain unapproved and must not publish SDK `0.1.0`.
+   **Never approve the dummy bootstrap stages**; skip names already owned.
 5. For **each package**, open npmjs.com → package → **Settings → Trusted publishing**,
    select **GitHub Actions**, and save these exact values:
 
@@ -376,8 +376,9 @@ exact publisher pins for local publishing setup as well; consumer runtime suppor
 is separate. Self-hosted publishers are unsupported.
 
 For the initial SDK release, use a clean, current, reviewed upstream `main` checkout.
-Confirm `origin` points to `mongodb/kingfisher`, the SDK version is `0.1.0`, and
-`npm-v0.1.0` does not already exist before explicitly authorizing publication:
+Confirm `origin` points to `mongodb/kingfisher`, not a private development remote,
+the SDK version is `0.1.0`, and `npm-v0.1.0` does not already exist before explicitly
+authorizing publication:
 
 ```sh
 make release npm
@@ -396,8 +397,7 @@ CLI `v*` and Python `python-v*` tags are unrelated. Never upload the private dev
 manifests or move an existing public tag.
 
 Verify all seven exact versions, npm provenance, and a fresh consumer installation
-with `npm audit signatures`; follow the
-[verification commands](../javascript/PUBLISHING.md#8-verify-every-package-and-a-fresh-consumer-install).
+with `npm audit signatures`.
 After OIDC succeeds, set **Settings → Publishing access → Require two-factor
 authentication and disallow tokens** on every package, revoke obsolete automation
 tokens, and reject only the unused dummy bootstrap stages. OIDC remains allowed.
@@ -407,7 +407,8 @@ and lockfiles. Stable releases use `latest`; if any package already has a newer
 `latest`, the release instead uses `backport-<major>.<minor>` without downgrading
 that tag. Prereleases use `next`. For partial failures, rerun only the failed
 publishing job in the original run to reuse the **same tested artifact**, including
-its archive manifest; identical published packages are skipped, conflicting bytes fail. See the [complete npm runbook](../javascript/PUBLISHING.md) and
+its archive manifest; identical published packages are skipped, conflicting bytes fail.
+See the [maintainer release procedure](../.github/RELEASING.md) and
 [npm Trusted Publishing guide](https://docs.npmjs.com/trusted-publishers/).
 
 ## Independent terminal commands

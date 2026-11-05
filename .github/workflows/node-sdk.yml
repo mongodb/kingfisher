@@ -104,7 +104,8 @@ jobs:
         run: |
           $arch = if ($env:NATIVE_TARGET.StartsWith('aarch64')) { 'arm64' } else { 'x64' }
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $installation = & $vswhere -latest -products '*' -property installationPath
+          $installation = & $vswhere -all -products '*' -property installationPath | Where-Object { Test-Path (Join-Path $_ 'VC\Tools\MSVC\14.44.*') } | Select-Object -First 1
+          if (-not $installation) { throw 'No Visual Studio installation contains the MSVC 14.44 toolset' }
           $devcmd = Join-Path $installation 'Common7\Tools\VsDevCmd.bat'
           $command = 'call "{0}" -no_logo -arch={1} -host_arch={1} -vcvars_ver=14.44 && set' -f $devcmd, $arch
           $variables = & $env:ComSpec /d /s /c $command
@@ -122,6 +123,11 @@ jobs:
         run: |
           cargo fmt --all --check
           cargo clippy --locked -p kingfisher-node -- -D warnings
+      - name: Rust native unit tests
+        env:
+          NATIVE_TARGET: ${{ matrix.target }}
+        shell: bash
+        run: cargo test --locked -p kingfisher-node --all-targets --target "$NATIVE_TARGET"
       - name: Build production addon
         env:
           NATIVE_TARGET: ${{ matrix.target }}

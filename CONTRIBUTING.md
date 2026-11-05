@@ -104,8 +104,8 @@ above does not imply Node SDK musl or additional Node-major support.
 Rebuild the addon after native changes. For loader/packaging changes, also run
 `npm run test:package` against a correctly staged release tree to verify a clean,
 offline consumer install from packed tarballs without source-tree addon fallback or
-a consumer Rust build. Follow the [publishing runbook](javascript/PUBLISHING.md) for
-staging and release checks; these development commands do not publish anything.
+a consumer Rust build. Follow the [npm publishing guide](docs/PUBLISHING.md#npm-publishing-with-github-actions)
+for staging and release checks; these development commands do not publish anything.
 Documentation-only changes do not require a native rebuild.
 
 ### Third-party license notices

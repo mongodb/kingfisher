@@ -34,7 +34,7 @@ credential disclosure, revocation, package publication, or release tags from a r
 | Inspect catalog metadata and CLI detection controls | [Rules and controls](../javascript/examples/rules-and-controls.mjs) | Offline rule loading and detection |
 | Prepare trusted custom-rule operations | [Validate/revoke](../javascript/examples/validate-revoke.cjs) | Offline by default; provider requests and mutation require separate flags/authorization |
 | Use TypeScript in an application | [TypeScript recipe](#typescript-application), [typed source](../javascript/examples/typed-scan.mts) | Local detection |
-| Configure/release on npm | [Complete publishing runbook](../javascript/PUBLISHING.md) | Explicit account changes, registry writes and release tags |
+| Configure/release on npm | [npm publishing setup](PUBLISHING.md#npm-publishing-with-github-actions) | Explicit account changes, registry writes and release tags |
 
 ### Run the safe teaching examples before publication
 
@@ -510,12 +510,12 @@ texts fail closed. See the
 
 ## Publish with npm trusted publishing
 
-The [npm publishing runbook](../javascript/PUBLISHING.md) covers first-package
-bootstrap, the seven per-package trusted publishers, GitHub environment setup,
-SDK version updates and failed-job recovery. Reviewed `npm-vX.Y.Z` tags build
+The [publishing guide](PUBLISHING.md#npm-publishing-with-github-actions) covers
+npm trusted publishing, GitHub environment setup, SDK version updates and
+failed-job recovery. Reviewed `npm-vX.Y.Z` tags build
 all six native artifacts, seal packages once, and verify the exact tarballs in a
 separate six-host/runtime-matrix job. The publisher uses pinned Node **24.22.2**
 and npm **11.21.1** to publish those same bytes through protected GitHub OIDC.
-PRs, branch pushes and ordinary manual checks never publish. The runbook is the
+PRs, branch pushes and ordinary manual checks never publish. The guide is the
 canonical source for account/trust setup, exact tool versions and partial-release
 recovery; no account changes or publication happen merely by building the SDK.

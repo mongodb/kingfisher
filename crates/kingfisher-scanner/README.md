@@ -470,9 +470,10 @@ preserving their logical names, including repeated names.
 `decompress_file_with_budget` and `extract_zip_archive_in_memory_with_budget`
 also enforce strict byte/entry budgets with `ScanControl` and return inspected
 entry usage, allowing nested callers to debit one aggregate root budget.
-The budgeted TAR/ZIP path propagates malformed member and staging I/O errors
-instead of reporting partial extraction as success. Unsafe paths remain skipped;
-these checks do not guarantee complete coverage of every archive format.
+Budgeted TAR/ZIP/ASAR extraction rejects malformed or unsafe members and staging
+I/O errors for the whole root, without returning partial members. Legacy
+best-effort entry points still skip unsafe entries; these checks do not guarantee
+complete coverage of every archive format.
 
 Owned directories from `decompress_file_to_temp` use Unix mode 0700; standalone
 decoded files created without an output directory use mode 0600 and require caller

@@ -28,7 +28,7 @@ authoritative Kingfisher documentation for each task.
 | Embed the Python SDK or maintain PyPI distributions | [Python/PyPI](PYPI.md) |
 | Embed the JavaScript/TypeScript SDK preview in Node.js or VS Code | [Node SDK](JAVASCRIPT.md) |
 | Run Node SDK teaching examples or integrate from an LLM | [Executable recipe walkthrough](../javascript/examples/README.md) |
-| Configure npm trusted publishing and release the Node SDK | [Complete npm setup runbook](../javascript/PUBLISHING.md) |
+| Configure npm trusted publishing and release the Node SDK | [npm publishing setup](PUBLISHING.md#npm-publishing-with-github-actions) |
 
 ## Response Workflow
 

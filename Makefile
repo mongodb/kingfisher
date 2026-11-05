@@ -468,6 +468,9 @@ windows-arm64: require-windows-host prepare-release-notices
 
 # MSYS2's shared /tmp permits other users to replace cache fixtures. Native tests
 # use the protected user temporary directory so cache trust checks remain meaningful.
+# napi-build requires libnode.dll on GNU Windows. The Node addon's native unit
+# and runtime tests run on supported MSVC x64/arm64 targets in node-sdk.yml;
+# exclude only that addon here, retaining all other workspace test suites.
 windows-test-x64: require-windows-host
 	@bash -eu -o pipefail -c '\
 	  case "$${MSYSTEM:-}" in \
@@ -500,8 +503,8 @@ windows-test-x64: require-windows-host
 	  mkdir -p "$$test_tmp_dir"; \
 	  native_test_tmp="$$(cygpath -w "$$test_tmp_dir")"; \
 	  export TMP="$$native_test_tmp" TEMP="$$native_test_tmp"; unset TMPDIR; \
-	  echo "▶ cargo test --locked --profile ci-test --workspace --all-targets --target $$target_triple (published Vectorscan archive, LLD)"; \
-	  cargo test --locked --profile ci-test --workspace --all-targets --target "$$target_triple"; \
+	  echo "▶ cargo test --locked --profile ci-test --workspace --all-targets --exclude kingfisher-node --target $$target_triple (published Vectorscan archive, LLD)"; \
+	  cargo test --locked --profile ci-test --workspace --all-targets --exclude kingfisher-node --target "$$target_triple"; \
 	'
 
 windows-test-arm64: require-windows-host
@@ -524,8 +527,8 @@ windows-test-arm64: require-windows-host
 	  mkdir -p "$$test_tmp_dir"; \
 	  native_test_tmp="$$(cygpath -w "$$test_tmp_dir")"; \
 	  export TMP="$$native_test_tmp" TEMP="$$native_test_tmp"; unset TMPDIR; \
-	  echo "▶ cargo test --locked --profile ci-test --workspace --all-targets --target $$target_triple (published Vectorscan archive)"; \
-	  cargo test --locked --profile ci-test --workspace --all-targets --target "$$target_triple"; \
+	  echo "▶ cargo test --locked --profile ci-test --workspace --all-targets --exclude kingfisher-node --target $$target_triple (published Vectorscan archive)"; \
+	  cargo test --locked --profile ci-test --workspace --all-targets --exclude kingfisher-node --target "$$target_triple"; \
 	'
 
 windows-test: windows-test-x64 windows-test-arm64

@@ -37,7 +37,7 @@ credential disclosure, revocation, package publication, or release tags from a r
 | Inspect catalog metadata and CLI detection controls | [Rules and controls](https://github.com/mongodb/kingfisher/blob/main/javascript/examples/rules-and-controls.mjs) | Offline rule loading and detection |
 | Prepare trusted custom-rule operations | [Validate/revoke](https://github.com/mongodb/kingfisher/blob/main/javascript/examples/validate-revoke.cjs) | Offline by default; provider requests and mutation require separate flags/authorization |
 | Use TypeScript in an application | [TypeScript recipe](#typescript-application), [typed source](https://github.com/mongodb/kingfisher/blob/main/javascript/examples/typed-scan.mts) | Local detection |
-| Configure/release on npm | [Complete publishing runbook](https://github.com/mongodb/kingfisher/blob/main/javascript/PUBLISHING.md) | Explicit account changes, registry writes and release tags |
+| Configure/release on npm | [npm publishing setup](https://github.com/mongodb/kingfisher/blob/main/docs/PUBLISHING.md#npm-publishing-with-github-actions) | Explicit account changes, registry writes and release tags |
 
 ### Run the safe teaching examples before publication
 
@@ -244,6 +244,34 @@ Rules use the shared compiled database cache by default. `cacheDir` overrides
 `KF_RULE_CACHE_DIR` and the platform cache directory; `cache: false` bypasses it.
 `cacheStatus` is `loaded`, `stored` or `bypassed`. Only use trusted cache directories;
 native/CPU-incompatible entries are recompiled. Keep a reusable scanner in application state.
+
+### Importing rules and JavaScript RegExp compatibility
+
+Use the rules subpath to inspect the catalog without creating a scanner:
+
+```javascript
+import { Rules } from 'kingfisher-secret-scanner/rules';
+
+const rules = await Rules.load(); // Bundled catalog; offline.
+const catalog = rules.metadata();
+const definition = rules.detail(catalog[0].id);
+```
+
+The rules subpath still requires the native addon; it is not a standalone,
+native-free JavaScript/JSON catalog export.
+
+**Rule patterns are not guaranteed to work with JavaScript `RegExp`.** The
+`pattern` and `detection_regex` fields returned by `detail()` target Kingfisher's
+native matching pipeline, including Vectorscan/Hyperscan, not JavaScript's regex
+engine. Some patterns may compile with `new RegExp(...)`, but syntax, flags and
+matching semantics are not guaranteed to be compatible across the catalog.
+Successful compilation alone does not establish equivalent detection.
+
+Regex matching alone also omits rule behavior such as secret capture selection,
+entropy checks, filters, checksum requirements and nearby credential components.
+Use the SDK's `Scanner` or `DetectionScanner` for Kingfisher detection behavior.
+Reusing definitions in a JavaScript-only engine requires compatibility/conversion
+work and per-rule tests, not just exporting the patterns.
 
 ## Detection, controls and safe reporting
 
@@ -485,12 +513,12 @@ texts fail closed. See the
 
 ## Publish with npm trusted publishing
 
-The [npm publishing runbook](https://github.com/mongodb/kingfisher/blob/main/javascript/PUBLISHING.md) covers first-package
-bootstrap, the seven per-package trusted publishers, GitHub environment setup,
-SDK version updates and failed-job recovery. Reviewed `npm-vX.Y.Z` tags build
+The [publishing guide](https://github.com/mongodb/kingfisher/blob/main/docs/PUBLISHING.md#npm-publishing-with-github-actions) covers
+npm trusted publishing, GitHub environment setup, SDK version updates and
+failed-job recovery. Reviewed `npm-vX.Y.Z` tags build
 all six native artifacts, seal packages once, and verify the exact tarballs in a
 separate six-host/runtime-matrix job. The publisher uses pinned Node **24.22.2**
 and npm **11.21.1** to publish those same bytes through protected GitHub OIDC.
-PRs, branch pushes and ordinary manual checks never publish. The runbook is the
+PRs, branch pushes and ordinary manual checks never publish. The guide is the
 canonical source for account/trust setup, exact tool versions and partial-release
 recovery; no account changes or publication happen merely by building the SDK.

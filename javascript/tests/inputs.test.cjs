@@ -190,8 +190,8 @@ test('parent ignore parse failures warn without rejecting readable selected root
       const warnings = [];
       const values = await collect(filesystem(roots, { onWarning: warning => warnings.push(warning) }));
       assert.deepEqual(values.map(value => value.path).sort(), [nested, independent].sort());
-      // Ancestor-ignore discovery canonicalizes paths (e.g. /var -> /private/var on macOS).
-      assert.ok(warnings.some(warning => fs.realpathSync(warning.path) === fs.realpathSync(ignore)), JSON.stringify(warnings));
+      // Native realpaths canonicalize both /var aliases and Windows namespaced paths.
+      assert.ok(warnings.some(warning => fs.realpathSync.native(warning.path) === fs.realpathSync.native(ignore)), JSON.stringify(warnings));
       assert.ok(warnings.every(Object.isFrozen));
     }
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }

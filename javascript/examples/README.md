@@ -17,7 +17,7 @@ The distribution is `kingfisher-secret-scanner`; its initial version is **0.1.0*
 
 **API reference:** [public declarations](../index.d.ts). **Concepts and integration
 recipes:** [JavaScript/TypeScript guide](https://github.com/mongodb/kingfisher/blob/main/docs/JAVASCRIPT.md).
-**Publishing:** [complete npm trusted-publishing runbook](https://github.com/mongodb/kingfisher/blob/main/javascript/PUBLISHING.md).
+**Publishing:** [npm trusted-publishing guidance](https://github.com/mongodb/kingfisher/blob/main/docs/PUBLISHING.md#npm-publishing-with-github-actions).
 
 ## Setup A: run from the checkout now
 

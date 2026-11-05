@@ -56,7 +56,7 @@ Everything runs in-process, with no CLI subprocess required.
   [Node SDK guide](docs/JAVASCRIPT.md) and [source/examples](javascript). It targets
   Node.js, including VS Code workspace extensions, rather than browser/WASM runtimes.
   Start with the [runnable recipe walkthrough](javascript/examples/README.md);
-  maintainers can follow [all npm trusted-publishing steps](javascript/PUBLISHING.md).
+  maintainers can follow the [npm trusted-publishing setup](docs/PUBLISHING.md#npm-publishing-with-github-actions).
 
 ## Scan Targets
 

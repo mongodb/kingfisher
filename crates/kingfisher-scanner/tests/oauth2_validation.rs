@@ -323,8 +323,15 @@ async fn cancelling_a_waiter_does_not_cancel_the_exchange_or_poison_the_token() 
     assert_eq!(gate.exchanges.load(Ordering::SeqCst), 1);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn cancelling_the_exchange_owner_releases_waiters_and_preserves_cooldown() {
+    // Keep the one-second cooldown fixed during real HTTP I/O. A blocking
+    // guard prevents Tokio from auto-advancing while sockets are pending.
+    let (release_clock, hold_clock) = std::sync::mpsc::channel::<()>();
+    let clock_guard = tokio::task::spawn_blocking(move || {
+        let _ = hold_clock.recv_timeout(Duration::from_secs(5));
+    });
+    let started = tokio::time::Instant::now();
     let gate = gated_server(false).await;
     let client = client();
     let parser = parser();
@@ -345,6 +352,22 @@ async fn cancelling_the_exchange_owner_releases_waiters_and_preserves_cooldown()
     assert!(result.response_body.is_empty());
     assert_eq!(gate.exchanges.load(Ordering::SeqCst), 1);
     assert_eq!(gate.verifications.load(Ordering::SeqCst), 0);
+    assert_eq!(started.elapsed(), Duration::ZERO);
+
+    tokio::time::advance(Duration::from_secs(1)).await;
+    // Release both the cancelled request, if still served, and its retry.
+    gate.release.add_permits(2);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), engine.validate(&rule, &globals))
+            .await
+            .unwrap()
+            .outcome,
+        ValidationOutcome::VerifiedActive
+    );
+    assert_eq!(gate.exchanges.load(Ordering::SeqCst), 2);
+    assert_eq!(gate.verifications.load(Ordering::SeqCst), 1);
+    drop(release_clock);
+    clock_guard.await.unwrap();
 }
 
 #[tokio::test]

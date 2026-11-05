@@ -1,5 +1,6 @@
 'use strict';
 const assert = require('node:assert/strict');
+const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -143,6 +144,51 @@ test('non-Cargo notices are copied verbatim, hashed, and independent of Cargo pr
   } finally {
     assert.equal(path.dirname(directory), os.tmpdir());
     assert.ok(path.basename(directory).startsWith('kingfisher notices '));
+    fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+});
+
+test('override metadata is trackable and verbatim archives survive Git staging and LF/CRLF checkouts', () => {
+  const root = path.resolve(__dirname, '..', '..');
+  const archivePath = 'scripts/license-overrides';
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, archivePath, 'index.json'), 'utf8'));
+  const files = new Set(Object.values(manifest.packages).flatMap(override =>
+    [...override.licenses, ...(override.evidence || [])].map(record => record.file)));
+  const expectedBytes = new Map([...files].map(file =>
+    [file, fs.readFileSync(path.join(root, archivePath, file))]));
+  // Keep the conversion regression meaningful even if future dependencies all use LF.
+  expectedBytes.set('regression-crlf.txt', Buffer.from('Upstream attribution\r\nExact archived bytes.\r\n'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'kingfisher notice git '));
+  const git = args => execFileSync('git', args, { cwd: directory });
+  try {
+    for (const file of ['.gitignore', '.gitattributes']) {
+      fs.copyFileSync(path.join(root, file), path.join(directory, file));
+    }
+    const archiveDirectory = path.join(directory, archivePath);
+    fs.mkdirSync(archiveDirectory, { recursive: true });
+    fs.copyFileSync(path.join(root, archivePath, 'index.json'), path.join(archiveDirectory, 'index.json'));
+    for (const [file, bytes] of expectedBytes) fs.writeFileSync(path.join(archiveDirectory, file), bytes);
+    git(['init', '--quiet']);
+    git(['config', 'core.autocrlf', 'true']);
+    git(['add', '--', '.gitattributes', '.gitignore', archivePath]);
+    // No force-add: the production ignore rules must admit the provenance index.
+    git(['ls-files', '--error-unmatch', `${archivePath}/index.json`]);
+    for (const [file, bytes] of expectedBytes) {
+      assert.deepEqual(git(['show', `:${archivePath}/${file}`]), bytes, `staged ${file}`);
+    }
+    for (const autocrlf of ['false', 'true']) {
+      git(['config', 'core.autocrlf', autocrlf]);
+      const prefix = `checkout-${autocrlf}/`;
+      git(['checkout-index', '--all', `--prefix=${prefix}`]);
+      const checkout = path.join(directory, prefix, archivePath);
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(checkout, 'index.json'), 'utf8')), manifest);
+      for (const [file, bytes] of expectedBytes) {
+        assert.deepEqual(fs.readFileSync(path.join(checkout, file)), bytes, `autocrlf=${autocrlf}: ${file}`);
+      }
+    }
+  } finally {
+    assert.equal(path.dirname(directory), os.tmpdir());
+    assert.ok(path.basename(directory).startsWith('kingfisher notice git '));
     fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });

@@ -85,6 +85,6 @@ Guidance for extending and maintaining the JavaScript/TypeScript SDK.
   and [package README](README.md) for public changes. Keep sample output redacted.
 - **0.1.0 is a preview of npm support**, versioned independently of the CLI, Python
   SDK, and Rust crates. Keep this version for the initial npm release; do not bump it
-  just for a CLI release. Follow the [publishing runbook](PUBLISHING.md); account
+  just for a CLI release. Follow the [npm publishing guidance](../docs/PUBLISHING.md#npm-publishing-with-github-actions); account
   changes, tags, and uploads require separate authorization. Never publish the
   private development manifest.

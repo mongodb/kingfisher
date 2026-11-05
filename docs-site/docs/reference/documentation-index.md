@@ -31,7 +31,7 @@ authoritative Kingfisher documentation for each task.
 | Embed the Python SDK or maintain PyPI distributions | [Python/PyPI](../reference/python-bindings.md) |
 | Embed the JavaScript/TypeScript SDK preview in Node.js or VS Code | [Node SDK](../reference/javascript-bindings.md) |
 | Run Node SDK teaching examples or integrate from an LLM | [Executable recipe walkthrough](https://github.com/mongodb/kingfisher/blob/main/javascript/examples/README.md) |
-| Configure npm trusted publishing and release the Node SDK | [Complete npm setup runbook](https://github.com/mongodb/kingfisher/blob/main/javascript/PUBLISHING.md) |
+| Configure npm trusted publishing and release the Node SDK | [npm publishing setup](https://github.com/mongodb/kingfisher/blob/main/docs/PUBLISHING.md#npm-publishing-with-github-actions) |
 
 ## Response Workflow
 

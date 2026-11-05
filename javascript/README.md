@@ -96,7 +96,7 @@ or retry automatically. Close active objects before terminating workers.
 See the [input guide](https://github.com/mongodb/kingfisher/blob/main/docs/JAVASCRIPT.md#compose-local-inputs)
 for filename and provenance guarantees.
 
-Maintainers: follow the [npm publishing runbook](https://github.com/mongodb/kingfisher/blob/main/javascript/PUBLISHING.md).
+Maintainers: follow the [npm publishing guidance](https://github.com/mongodb/kingfisher/blob/main/docs/PUBLISHING.md#npm-publishing-with-github-actions).
 Development manifests are private; native builds produce six platform artifacts.
 A separate verification job tests all seven sealed tarballs across supported runtimes;
 the pinned Node 24.22.2/npm 11.21.1 publisher uploads those same bytes. Building

@@ -14,7 +14,7 @@ function fixture() {
   fs.mkdirSync(root);
   for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
     if (entry.isFile() && (/\.(?:cjs|mjs|d\.ts)$/.test(entry.name) || /^(?:LICENSE|NOTICE)/.test(entry.name)
-      || ['package.json', 'README.md', 'PUBLISHING.md', 'THIRD_PARTY_NOTICES'].includes(entry.name))) {
+      || ['package.json', 'README.md', 'THIRD_PARTY_NOTICES'].includes(entry.name))) {
       fs.copyFileSync(path.join(source, entry.name), path.join(root, entry.name));
     }
   }

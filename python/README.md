@@ -267,11 +267,11 @@ parents; filesystem enumeration honors local ignore files and skips symlinks.
 Archive expansion shares CLI extractors, with explicit depth and per-root budgets.
 Repeated TAR member names retain each occurrence's bytes. The byte budget also caps
 intermediate decompressed streams (including TAR headers/padding); exhaustion
-raises before any members from that root are yielded. Budgeted TAR/ZIP expansion
-also raises on malformed archive reads or staging failures instead of silently
-returning partial members. Shared extractors still skip unsafe entries and enforce
-format limits, so success does not guarantee complete coverage. `scan()` and
-`scan_file()` keep their existing behavior.
+raises before any members from that root are yielded. Budgeted TAR/ZIP/ASAR
+expansion also rejects malformed or unsafe members and staging I/O errors for the
+whole root, without yielding partial members. Other shared format extractors retain
+their per-format limits and may skip unreadable entries, so success does not
+guarantee complete coverage. `scan()` and `scan_file()` keep their existing behavior.
 Each `ScanResult` retains its source and complete findings for separate validation.
 
 See the [input API guide](https://github.com/mongodb/kingfisher/blob/main/docs/PYPI.md#compose-filesystem-git-history-and-archives)

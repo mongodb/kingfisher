@@ -114,6 +114,16 @@ class NodeSdkReleaseTests(unittest.TestCase):
         self.assertIn("npm test", minimum)
         self.assertIn("npm run test:types", minimum)
 
+    def test_fuzz_lockfile_tracks_workspace_crate_versions(self):
+        lock = tomllib.loads((ROOT / "fuzz/Cargo.lock").read_text())
+        for crate in ("core", "rules", "scanner"):
+            manifest = tomllib.loads((ROOT / f"crates/kingfisher-{crate}/Cargo.toml").read_text())
+            package = manifest["package"]
+            with self.subTest(crate=package["name"]):
+                versions = [entry["version"] for entry in lock["package"]
+                            if entry["name"] == package["name"] and "source" not in entry]
+                self.assertEqual(versions, [package["version"]])
+
     def test_native_dependency_and_cache_identity_pins_match_published_release(self):
         root = tomllib.loads((ROOT / "Cargo.toml").read_text())
         rules = tomllib.loads((ROOT / "crates/kingfisher-rules/Cargo.toml").read_text())
