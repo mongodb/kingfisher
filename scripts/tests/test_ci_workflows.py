@@ -49,7 +49,7 @@ class CiWorkflowTests(unittest.TestCase):
 
     def test_default_macos_ci_keeps_both_architectures_without_gui_builds(self):
         macos = job(self.ci, "macos")
-        for contract in ("arch: arm64", "runs_on: macos-14", "arch: x64",
+        for contract in ("arch: arm64", "runs_on: macos-15", "arch: x64",
                          "runs_on: macos-15-intel", "run: make tests"):
             with self.subTest(contract=contract):
                 self.assertIn(contract, macos)
@@ -80,7 +80,7 @@ class CiWorkflowTests(unittest.TestCase):
         jobs = section(self.wizard, "jobs")
         self.assertEqual(re.findall(r"(?m)^  ([\w-]+):$", jobs), ["wizard"])
         wizard = job(self.wizard, "wizard")
-        self.assertIn("runs-on: macos-14", wizard)
+        self.assertIn("runs-on: macos-15", wizard)
         self.assertNotIn("matrix:", wizard)
         self.assertIn(
             "cargo test --locked -p kingfisher-bin --features gui-tests --lib wizard::",

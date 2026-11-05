@@ -327,7 +327,8 @@ jobs:
   macos-arm64:
     name: macOS arm64
     needs: [validate-release]
-    runs-on: macos-14
+    # macOS 14 images were retired from GitHub Actions on 2026-11-02.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -386,6 +387,9 @@ jobs:
         uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
         with:
           msystem: ${{ matrix.msystem }}
+          # MINGW64 is deprecated in MSYS2 but remains the supported GNU x64
+          # toolchain here; migrating to UCRT64 changes released binary runtimes.
+          suppress-deprecation-warnings: ${{ matrix.msystem == 'MINGW64' && 'msystem-mingw64' || '' }}
           update: true
           install: >-
             make

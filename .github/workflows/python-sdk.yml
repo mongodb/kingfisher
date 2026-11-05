@@ -130,6 +130,9 @@ jobs:
         if: runner.os == 'Windows'
         with:
           msystem: ${{ matrix.msystem }}
+          # MINGW64 is deprecated in MSYS2 but remains the supported GNU x64
+          # toolchain here; migrating to UCRT64 changes released binary runtimes.
+          suppress-deprecation-warnings: ${{ matrix.msystem == 'MINGW64' && 'msystem-mingw64' || '' }}
           path-type: inherit
           update: true
           install: ${{ matrix.packages }} make git perl
