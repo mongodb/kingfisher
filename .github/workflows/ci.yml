@@ -258,8 +258,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # macOS 14 images were retired from GitHub Actions on 2026-11-02, so the
+          # arm64 legs use the same macOS 15 image as the SDK workflows.
           - arch: arm64
-            runs_on: macos-14
+            runs_on: macos-15
           - arch: x64
             runs_on: macos-15-intel
     steps:
@@ -326,6 +328,9 @@ jobs:
         uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
         with:
           msystem: ${{ matrix.msystem }}
+          # MINGW64 is deprecated in MSYS2 but remains the supported GNU x64
+          # toolchain here; migrating to UCRT64 changes released binary runtimes.
+          suppress-deprecation-warnings: ${{ matrix.msystem == 'MINGW64' && 'msystem-mingw64' || '' }}
           update: true
           install: >-
             make
