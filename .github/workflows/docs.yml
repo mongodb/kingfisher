@@ -57,8 +57,6 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
+        # actions/deploy-pages caps this input at 600000 ms (10 minutes); a slower
+        # Pages deployment has to be re-run rather than waited out.
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
-        with:
-          # Pages commonly needs more than the 10 minute default to finish an
-          # `updating_pages` deployment; aborting it only cancels the deployment.
-          timeout: 1200000
