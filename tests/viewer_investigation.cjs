@@ -283,6 +283,41 @@ assert.match(html, /id="open-report"/);
 assert.match(html, /id="investigation-queue"/);
 assert.ok(!html.includes('<h2>Load Report</h2>'));
 assert.equal((html.match(/fetch\(/g) || []).length, 1, 'Only the existing local report load may use the network');
+
+// Import support is always discoverable, but legal notices belong only to imported reports.
+const initialInstructions = html.match(/<span id="upload-instructions">([^<]+)<\/span>/)?.[1];
+assert.equal(typeof initialInstructions, 'string', 'Initial upload instructions must be present as plain text');
+assert.doesNotMatch(html.split(/<script\b/i)[0], /not affiliated/i, 'No global non-affiliation notice');
+for (const tool of ['Kingfisher', 'Gitleaks', 'TruffleHog']) {
+  assert.ok(initialInstructions.includes(tool), `${tool} import support is visible without JavaScript`);
+}
+const gitleaksImport = context.normalizeImportedPayload([{ RuleID: 'demo', File: 'example.txt', Secret: 'example' }], 'Gitleaks').rd;
+const trufflehogImport = context.normalizeImportedPayload([{ DetectorName: 'Demo', Raw: 'example', Verified: false }], 'TruffleHog').rd;
+context.repositoryAudit = null;
+for (const [snapshot, legalOwner] of [
+  [null, null], [{ findings: [] }, null], [{ findings: [finding] }, null],
+  [gitleaksImport, /Gitleaks project/], [trufflehogImport, /Truffle Security Co\./],
+  [{ findings: [finding] }, null], [null, null],
+]) {
+  context.rawData = snapshot;
+  context.findings = snapshot?.findings || [];
+  context.accessMap = [];
+  context.extractScanMetadata();
+  context.renderScanMetadata();
+  context.renderInvestigationWorkspace();
+  const instructions = context.document.getElementById('upload-instructions').textContent;
+  for (const tool of ['Kingfisher', 'Gitleaks', 'TruffleHog']) assert.ok(instructions.includes(tool));
+  assert.match(instructions, snapshot ? /merge/ : /JSON, JSONL, or SARIF/);
+  const importNotice = context.document.getElementById('import-note');
+  assert.equal(importNotice.classList.contains('hidden'), !legalOwner);
+  if (legalOwner) {
+    assert.match(importNotice.innerHTML, /Not affiliated with/);
+    assert.match(importNotice.innerHTML, legalOwner);
+  } else {
+    assert.equal(importNotice.innerHTML, '', 'Native reports and cleared workspaces have no import notice');
+  }
+}
+
 // Local autoload remains read-only and handles an absent endpoint without blocking the workspace.
 (async () => {
   const requests = [];

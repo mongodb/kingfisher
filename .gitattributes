@@ -13,3 +13,10 @@ testdata/* linguist-vendored
 /crates/kingfisher-*/Cargo.toml text eol=lf
 /crates/kingfisher-*/LICENSE text eol=lf
 /docs-site/docs/rules/builtin-rules.md text eol=lf
+# Release legal files are byte-checked against the sealed cross-platform staging tree.
+/THIRD_PARTY_NOTICES text eol=lf
+/javascript/THIRD_PARTY_NOTICES text eol=lf
+/javascript/LICENSE* text eol=lf
+/javascript/NOTICE* text eol=lf
+/javascript/npm/*/README.md text eol=lf
+/scripts/license-overrides/*.txt text eol=lf

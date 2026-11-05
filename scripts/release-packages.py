@@ -2,8 +2,9 @@
 """Infer committed package versions and launch guarded publication, never retag.
 
 Requires Python 3.11+, Git, authenticated GitHub CLI, and Cargo for crates. Registry
-checks and source planning run before dispatch/rerun. GitHub checks establish known
-repository/workflow conditions, not external registry or OIDC authorization.
+checks and source planning run before Python/crates dispatch/rerun. npm pushes a
+versioned SDK tag; registry/artifact checks and publication stay in CI. GitHub checks
+establish known repository/workflow conditions, not registry or OIDC authorization.
 """
 import argparse
 import base64
@@ -31,6 +32,11 @@ MANIFESTS = {
 SHA = re.compile(r"[0-9a-f]{40}")
 VERSION = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)")
 CRATES_JOB = "Publish crates.io packages"
+NPM_PLATFORMS = ("darwin-x64", "darwin-arm64", "linux-x64-gnu", "linux-arm64-gnu",
+                 "win32-x64-msvc", "win32-arm64-msvc")
+NPM_PRERELEASE = r"(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
+NPM_VERSION = re.compile(VERSION.pattern + rf"(?:-{NPM_PRERELEASE}(?:\.{NPM_PRERELEASE})*)?"
+                         + r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?")
 
 
 class CommandError(RuntimeError):
@@ -352,9 +358,80 @@ def unchanged_source(root, remote, sha, workflow, inputs):
         raise ValueError("Checkout changed during readiness checks; retry from the selected commit")
 
 
+def npm_version(root, sha):
+    """Validate only the independently versioned, committed Node SDK metadata."""
+    sdk = json.loads(committed(root, sha, "javascript/package.json"))
+    version = sdk["version"]
+    name = "kingfisher-secret-scanner"
+    if sdk["name"] != name or sdk.get("private") is not True or not NPM_VERSION.fullmatch(version):
+        raise ValueError("Invalid committed private npm SDK name/version")
+    native = tomllib.loads(committed(root, sha, "crates/kingfisher-node/Cargo.toml"))["package"]
+    if native["name"] != "kingfisher-node" or native["version"] != version:
+        raise ValueError("kingfisher-node version must match the committed npm SDK version")
+    cargo_lock = tomllib.loads(committed(root, sha, "Cargo.lock"))
+    entries = [item for item in cargo_lock["package"]
+               if item["name"] == "kingfisher-node" and "source" not in item]
+    if len(entries) != 1 or entries[0]["version"] != version:
+        raise ValueError("Cargo.lock must match the committed kingfisher-node version")
+    lock = json.loads(committed(root, sha, "javascript/package-lock.json"))
+    for package in (lock, lock["packages"][""]):
+        if package["name"] != name or package["version"] != version:
+            raise ValueError("npm lockfile must match the committed SDK name/version")
+    dependencies = {f"{name}-{platform}": f"file:./npm/{platform}" for platform in NPM_PLATFORMS}
+    if (sdk.get("optionalDependencies") != dependencies
+            or lock["packages"][""].get("optionalDependencies") != dependencies):
+        raise ValueError("npm SDK and lockfile must select all six local native packages")
+    for platform in NPM_PLATFORMS:
+        package = json.loads(committed(root, sha, f"javascript/npm/{platform}/package.json"))
+        if (package["name"] != f"{name}-{platform}" or package["version"] != version
+                or package.get("private") is not True):
+            raise ValueError(f"Native npm package {platform} must match the private SDK name/version")
+        locked = lock["packages"][f"npm/{platform}"]
+        if locked["name"] != package["name"] or locked["version"] != version:
+            raise ValueError(f"npm lockfile must match the native {platform} name/version")
+    return version
+
+
+def npm_release(root, remote, sha):
+    version = npm_version(root, sha)
+    tag = f"npm-v{version}"
+    ref = f"refs/tags/{tag}"
+    workflow = "node-sdk.yml"
+    selected_main(root, remote, sha)
+    readiness(root, sha, workflow, set())
+    git(root, "check-ref-format", ref)
+    local = git(root, "rev-parse", "--verify", "--quiet", ref, check=False)
+    if local.returncode not in (0, 1):
+        raise ValueError("Could not verify existing local npm tag")
+    if local.returncode == 0:
+        if git(root, "cat-file", "-t", ref).stdout.strip() != "tag":
+            raise ValueError(f"Local tag {tag} must be annotated before it can be reused")
+        if git(root, "rev-parse", f"{ref}^{{commit}}").stdout.strip() != sha:
+            raise ValueError(f"Local tag {tag} points to another commit; never move release tags")
+    if git(root, "ls-remote", "--tags", remote, ref).stdout.strip():
+        raise ValueError(f"Remote tag {tag} already exists; rerun its failed Actions job instead")
+    unchanged_source(root, remote, sha, workflow, set())
+    if local.returncode:
+        git(root, "tag", "-a", tag, sha, "-m", f"Kingfisher Node SDK {version}")
+    # Preserve a same-commit annotated local tag after a failed push for safe retry.
+    if clean_head(root) != sha:
+        raise ValueError("Checkout changed before the npm tag push; publication stopped")
+    if (git(root, "cat-file", "-t", ref).stdout.strip() != "tag"
+            or git(root, "rev-parse", f"{ref}^{{commit}}").stdout.strip() != sha
+            or (local.returncode == 0 and git(root, "rev-parse", ref).stdout.strip() != local.stdout.strip())):
+        raise ValueError("Local npm tag changed during preflight; publication stopped")
+    git(root, "push", remote, f"{ref}:{ref}")
+    print(f"Pushed {tag} ({sha}) to {remote}. Follow Node SDK in GitHub Actions; "
+          "approve the protected npm deployment after all builds and package checks pass.")
+    print("No local npm publish was run; npm Trusted Publishing must already be configured.")
+
+
 def release(package, remote="origin", *, root=ROOT):
     root = Path(root)
     sha = clean_head(root)
+    if package == "npm":
+        npm_release(root, remote, sha)
+        return
     inferred = versions(root, sha)
     selected_main(root, remote, sha)
     if package == "kingfisher-secret-scanner":
@@ -406,13 +483,13 @@ def release(package, remote="origin", *, root=ROOT):
                      "-f", "crates_only=true", "-f", f"release_run_id={run_id}", "-f", f"expected_sha={sha}"], root)
             print(f"Dispatched metadata-only crates recovery at {sha}; {tag} and its assets remain unchanged.")
     else:
-        raise ValueError("Select crates or kingfisher-secret-scanner")
+        raise ValueError("Select crates, kingfisher-secret-scanner, or npm")
     print("GitHub readiness checks passed; external registry/OIDC authorization is not proven until authenticated publication.")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("package", choices=("crates", "kingfisher-secret-scanner"))
+    parser.add_argument("package", choices=("crates", "kingfisher-secret-scanner", "npm"))
     parser.add_argument("--remote", default="origin", help="public GitHub Git remote (default: origin)")
     args = parser.parse_args()
     try:

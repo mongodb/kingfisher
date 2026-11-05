@@ -1,13 +1,14 @@
 # Kingfisher Library Crates
 
 For in-process Python detection, validation and revocation, see the [Python SDK](PYPI.md).
+For native JavaScript/TypeScript and VS Code embedding, see the [Node SDK preview](JAVASCRIPT.md).
 
 [← Back to README](../README.md)
 
 The prepared library releases are **kingfisher-core 1.0.6**,
-**kingfisher-rules 3.0.1**, and **kingfisher-scanner 3.0.1**.
+**kingfisher-rules 3.1.0**, and **kingfisher-scanner 3.0.2**.
 They require Rust **1.99** or newer and are versioned independently of the
-`kingfisher-bin` CLI, currently **2.16.0**. See [publishing](PUBLISHING.md).
+`kingfisher-bin` CLI, currently **2.17.0**. See [publishing](PUBLISHING.md).
 
 ## Crate Overview
 
@@ -48,7 +49,7 @@ Add the scanner crate to your application's `Cargo.toml`:
 
 ```toml
 [dependencies]
-kingfisher-scanner = "3.0.1"
+kingfisher-scanner = "3.0.2"
 anyhow = "1"
 ```
 
@@ -105,12 +106,12 @@ additional validator features your project needs.
 To install the CLI from crates.io:
 
 ```sh
-cargo install --locked kingfisher-bin --version 2.16.0
+cargo install --locked kingfisher-bin --version 2.17.0
 kingfisher scan path/to/project --no-validate --format json --no-update-check
 ```
 
 For the `kingfisher-bin` library example in your own application, use
-`kingfisher = { package = "kingfisher-bin", version = "2.16.0" }` and `anyhow = "1"`.
+`kingfisher = { package = "kingfisher-bin", version = "2.17.0" }` and `anyhow = "1"`.
 The focused library examples use the crate versions listed above;
 `kingfisher-rules` and `kingfisher-scanner` examples also use `anyhow = "1"`.
 
@@ -119,17 +120,17 @@ The focused library examples use the crate versions listed above;
 Start with a complete example above and copy it into `src/main.rs` in a small Rust
 application. These are public-API consumers; no CLI process or private Kingfisher
 module is required. Choose dependencies from this table in addition to
-`kingfisher-scanner = "3.0.1"` and `anyhow = "1"`:
+`kingfisher-scanner = "3.0.2"` and `anyhow = "1"`:
 
 | Recipe | Additional dependencies / features |
 | ------ | ---------------------------------- |
 | `scan_content` | None |
 | `detection_policy` | Scanner feature `context` |
-| `inspect_rules` | `serde_json = "1"`; `kingfisher-rules = "3.0.1"` for loading custom YAML/TOML |
+| `inspect_rules` | `serde_json = "1"`; `kingfisher-rules = "3.1.0"` for loading custom YAML/TOML |
 | `scan_files` | `serde_json = "1"` |
-| `scan_custom_rules` | `kingfisher-rules = "3.0.1"` |
+| `scan_custom_rules` | `kingfisher-rules = "3.1.0"` |
 | `scan_async` | `tokio = { version = "1.53", features = ["macros", "rt", "sync"] }` |
-| `local_validation` | Scanner feature `validation`; `kingfisher-rules = "3.0.1"` |
+| `local_validation` | Scanner feature `validation`; `kingfisher-rules = "3.1.0"` |
 | `http_validation` | Complete manifest below; also copy `fixtures/acme-http.yml` and `support/mod.rs` into `src/fixtures/` and `src/support/` |
 | `validate_file` | Scanner feature `validation`; `serde_json = "1"`; `tokio = { version = "1.53", features = ["macros", "rt"] }` |
 | `git_inputs` | Scanner feature `git` |
@@ -305,8 +306,8 @@ rust-version = "1.99"
 
 [dependencies]
 anyhow = "1"
-kingfisher-scanner = { version = "3.0.1", features = ["validation"] }
-kingfisher-rules = "3.0.1"
+kingfisher-scanner = { version = "3.0.2", features = ["validation"] }
+kingfisher-rules = "3.1.0"
 serde_json = "1"
 tokio = { version = "1.53", features = ["macros", "rt", "net", "io-util", "time"] }
 ```
@@ -463,6 +464,14 @@ explicitly. This lower-level API does not associate findings or bound concurrenc
 `response_body`; Debug omits that body and the type has no Serialize implementation.
 The high-level `ValidatedFinding` omits provider responses entirely.
 
+Successful low-level Betterleaks responses include
+[allowlisted identity metadata](RULES.md#validation-response-identity-metadata)
+for supported provider capabilities, such as AWS's caller ARN or a Hugging Face
+username. These summaries reuse validation evidence without additional requests
+or analysis; the full private analysis handoff is never reported. Treat response
+metadata as sensitive account information. High-level Rust and Python result
+representations and serialization remain unchanged.
+
 YAML HTTP checks require a nonempty status, word, or header matcher. Empty matchers
 and JSON-validity checks alone cannot prove authentication. Multipart `file` parts
 send rendered content as bytes; they do not read paths from the host filesystem.
@@ -517,7 +526,7 @@ Compile once and share the database. Preserve catalog metadata with
 `RulesDatabase::from_rule_collection`; converting the loaded collection into a
 `Vec<Rule>` loses its database-level source prefilter.
 
-For custom files, add `kingfisher-rules = "3.0.1"` and use:
+For custom files, add `kingfisher-rules = "3.1.0"` and use:
 
 ```rust
 use kingfisher_rules::{Confidence, Rules, RulesDatabase};
@@ -578,7 +587,7 @@ services or when every file occurrence must be reported.
 
 ## Scanning Methods
 
-For reuse across processes, add `kingfisher-rules = "3.0.1"` to your dependencies and load the collection with
+For reuse across processes, add `kingfisher-rules = "3.1.0"` to your dependencies and load the collection with
 `kingfisher_rules::RulesDatabase::from_rule_collection_with_cache` and
 `kingfisher_rules::RuleCacheConfig::from_dir_or_env(None)` (or `RuleCacheConfig::new(path)`).
 This is the CLI/Python compiled content-database cache and honors `KF_RULE_CACHE_DIR`.
@@ -665,7 +674,7 @@ No validator features are enabled by default:
 
 ```toml
 [dependencies]
-kingfisher-scanner = { version = "3.0.1", features = ["validation"] }
+kingfisher-scanner = { version = "3.0.2", features = ["validation"] }
 ```
 
 `validation` enables all supported validators and revocation: HTTP, gRPC,
@@ -682,7 +691,7 @@ logging or serializing it:
 ```toml
 [dependencies]
 anyhow = "1"
-kingfisher-scanner = { version = "3.0.1", features = ["validation"] }
+kingfisher-scanner = { version = "3.0.2", features = ["validation"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -744,8 +753,23 @@ Python adds text/file preparation and batch convenience methods over these share
 primitives; see [the SDK workflow](PYPI.md#revoke-a-batch-explicitly).
 
 `kingfisher-scanner::Revoker` dispatches built-in or custom rules to HTTP,
-multi-step HTTP, AWS, and GCP revocation. Enable `validation` for all of them.
-No dependency on the CLI crate is needed.
+multi-step HTTP, Betterleaks expressions, AWS, and GCP revocation. Enable `validation`
+for all of them. No dependency on the CLI crate is needed.
+
+[Provider contracts and inputs](../crates/kingfisher-rules/data/revocation-sources.md)
+document credential-family-specific limits, including owner/manual RubyGems revocation.
+Owner-ID actions require the full candidate in the corresponding `*_VALUE` input and an exact
+owner-supplied key ID; they do not identify keys from masked list entries. Supply management
+credentials and inputs explicitly through the variables map. New GitHub App reports and pending
+GCP operations return indeterminate errors rather than confirming completion. Existing
+GitHub/Hugging Face 202-only primary matchers retain their acceptance semantics.
+
+Rules 3.1 adds `BetterleaksExpr::env_input_vars()` for tooling: it returns sorted, deduplicated,
+case-preserved literal `env.get("NAME")` names from the AST, not the process environment.
+It ignores dynamic arguments and `env.getOrDefault`. Discovery does not determine which
+branch executes or make every discovered input mandatory; it does not inspect source/analyze
+programs when used on the revocation expression. Existing rule formats and SDK signatures
+are unchanged.
 
 For scanned credentials, pass a verified active `ValidatedFinding` directly to
 `Revoker::revoke_validated(&result).await?`. The result's `credential` retains a
@@ -766,7 +790,7 @@ retained credential inputs. Validation never calls revocation automatically.
 ```toml
 [dependencies]
 anyhow = "1"
-kingfisher-scanner = { version = "3.0.1", features = ["validation"] }
+kingfisher-scanner = { version = "3.0.2", features = ["validation"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -831,12 +855,28 @@ See the [runnable example](../crates/kingfisher-scanner/examples/revoke.rs).
 
 ## Build and Deployment
 
-The native Vectorscan backend supports the repository's macOS, Linux, and Windows
-builds. Windows uses GNU/LLVM MinGW targets; MSVC is not supported by the
-standard native backend. Cargo builds may download its platform archive. For offline builds, cache
+The native Vectorscan backend is pinned to published **0.1.4**, supporting x64 and
+ARM64 on macOS, Linux GNU/musl, and Windows GNU/LLVM or MSVC. Cargo downloads and
+verifies the matching native archive on supported targets. The existing CLI
+Makefile Windows release recipes remain GNU/LLVM-MinGW; Rust embedding and the
+Node SDK also use the MSVC targets. For offline builds, cache
 Cargo dependencies and native prerequisites, configure `VECTORSCAN_PREBUILT_DIR`
 or `HYPERSCAN_ROOT`, and set `VECTORSCAN_OFFLINE=1`. See [publishing](PUBLISHING.md)
 for extracted-package verification. `--offline` alone does not sandbox build scripts.
+
+MSVC consumers need the matching Microsoft target SDK/linker and C++ runtime.
+The published x64/ARM64 archives use the **MSVC 14.44 (Visual Studio 2022)** STL/CRT
+baseline and support newer compatible toolsets, including VS 2026. Deployed
+MSVC binaries using the dynamic CRT need the architecture-matched **VC++ v14
+Redistributable 14.44 or newer**, independent of build-tool installation. Select a
+developer environment with the matching target's C++ tools; updating only Windows
+SDK headers or adding MinGW libraries cannot supply the Microsoft C++ runtime.
+To explicitly compile the bundled source, set `VECTORSCAN_BUILD_FROM_SOURCE=1`.
+No local `HYPERSCAN_ROOT` override is required for normal archive builds. Source
+builds use clang-cl, Ninja and standalone Boost headers with Microsoft's SDK/STL;
+cl.exe cannot compile Vectorscan's GNU extensions. MSVC archives use the dynamic
+CRT (`/MD`); `crt-static` consumers select matching `/MT` source builds. Installed
+library overrides must match the target ABI, architecture and CRT.
 
 The rules and scanner crates configure docs.rs to compile vendored Vectorscan source
 for Linux x64, avoiding archive downloads in its network-blocked build environment.
@@ -848,7 +888,7 @@ input limits and bound worker counts for untrusted or large workloads.
 The full application's library is available separately:
 
 ```toml
-kingfisher = { package = "kingfisher-bin", version = "2.16.0" }
+kingfisher = { package = "kingfisher-bin", version = "2.17.0" }
 ```
 
 It carries CLI dependencies and all validator features. The stable embedding
@@ -968,9 +1008,10 @@ The optional `kingfisher-scanner` feature `archives` exposes the CLI/Python arch
 helpers in `archive::decompress` and their budgets in `archive::limits`.
 `Scanner` methods continue to scan their supplied content without enumeration or
 extraction. Extract explicitly and pass member bytes and logical paths to
-`scan_blob_at_path`. Shared extraction is best effort and can skip entries or
-truncate content at format limits. Python users can compose native filesystem and
-reachable Git history iterators with archive expansion through the
+`scan_blob_at_path`. Legacy best-effort extraction can skip entries or truncate
+content at format limits; use the budgeted helpers below for strict failures.
+Python users can compose native filesystem and reachable Git history iterators
+with archive expansion through the
 [Python input APIs](PYPI.md#compose-filesystem-git-history-and-archives).
 
 For strict byte budgets, use
@@ -978,17 +1019,22 @@ For strict byte budgets, use
 with `ResourceLimits::default()`. It fails on stream-cap exhaustion before parsing
 a partially decoded TAR. `decompress_file_with_budget` also accepts a strict
 entry budget and `ScanControl`, returning an `ArchiveExpansion` with inspected
-entry usage so nested callers can debit one aggregate root budget.
+entry usage so nested callers can debit one aggregate root budget. Budgeted
+TAR/ZIP/ASAR extraction rejects malformed or unsafe members and staging I/O errors
+for the whole root, without returning partial members. This is a visible behavior
+tightening in scanner 3.0.2 / Python SDK 1.6.2; public signatures and legacy
+best-effort CLI defaults remain unchanged.
 `extract_zip_archive_in_memory_with_budget` performs bounded ZIP extraction
-without temporary storage and reports inspected entry usage. Existing best-effort entry points keep their truncation
-behavior. TAR members use independent physical staging paths while
-preserving their logical names, including repeated names.
+without temporary storage and reports inspected entry usage. Existing best-effort
+entry points keep their truncation behavior. TAR members use independent physical
+staging paths while preserving their logical names, including repeated names.
 
 With no output directory, TAR/ZIP extraction returns `CompressedContent::Archive`
 with member bytes in memory. To retain disk-backed members, use
 `decompress_file_to_temp_with_limits` and keep its returned `TempDir` alive.
-`ArchiveExpansion::inspected_entries` counts TAR/ZIP directories and skipped
-members, ASAR indexed files, and HWP streams.
+`ArchiveExpansion::inspected_entries` counts all inspected TAR/ZIP members,
+including directories and non-payload entries, ASAR indexed files, and HWP streams.
+Unsafe TAR/ZIP/ASAR paths fail the entire root rather than being skipped.
 
 Owned directories from `decompress_file_to_temp` use Unix mode 0700; standalone
 decoded files created without an output directory use mode 0600 and require caller

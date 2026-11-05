@@ -1,0 +1,35 @@
+[package]
+name = "kingfisher-node"
+version = "0.1.0"
+description = "Native Node-API bindings for the Kingfisher JavaScript SDK"
+repository.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "kingfisher_sdk"
+crate-type = ["cdylib"]
+test = false
+doctest = false
+
+[dependencies]
+napi = { version = "3.16.1", default-features = false, features = ["napi8", "async", "serde-json", "dyn-symbols"] }
+napi-derive = "3.7.0"
+kingfisher-core = { path = "../kingfisher-core" }
+kingfisher-rules = { path = "../kingfisher-rules" }
+kingfisher-scanner = { path = "../kingfisher-scanner", features = ["validation", "archives", "context", "extraction", "git"] }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+parking_lot.workspace = true
+ignore.workspace = true
+tempfile = "3.27"
+tokio = { version = "1.54", features = ["rt-multi-thread", "time", "net", "sync"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[build-dependencies]
+napi-build = "2.6.0"

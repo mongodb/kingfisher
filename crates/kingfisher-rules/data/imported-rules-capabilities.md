@@ -4,6 +4,15 @@
 Detection patterns and upstream validation remain owned by their source projects; this file adds
 Kingfisher-specific behavior without creating another detector catalog.
 
+## Provider revocation
+
+[Provider contracts, required inputs, limits, and first-party provenance](revocation-sources.md)
+cover the explicitly invoked revocation bindings. Owner-ID actions require an exact full-token
+mapping and independently supplied management credentials; masked list entries are not enough.
+Expression bindings use the existing `Betterleaks` revocation engine and supplied `env.get`
+variables. Existing YAML/TOML and existing primary actions are unchanged. Unsupported credential
+families do not gain account-wide deletion or mutation failover.
+
 ## Format
 
 ```yaml
@@ -71,7 +80,16 @@ veles:
 Betterleaks keys are unqualified upstream IDs such as `mongodb-connection-string`, not generated
 `betterleaks.mongodb-connection-string` IDs. Veles keys, when present, are upstream plugin IDs rather than
 generated `veles.*` IDs. Every entry must match a pinned, selected source rule; the build rejects
-stale and unselected IDs.
+stale and unselected IDs. Each source rule ID may appear only once; combine its filter,
+revocation, and other capabilities in that entry. Duplicate IDs are rejected rather than
+silently replacing an earlier capability.
+
+Veles source-precedence filters suppress only matching credential formats. Git credential
+suppression also requires a Veles-covered path and complete HTTPS URL; unrelated host suffixes,
+HTTP URLs, explicit ports, and empty usernames keep their Betterleaks coverage. OpenRouter's
+uppercase prefix remains with Betterleaks because Veles covers only the lowercase prefix.
+Heroku tokens ending in `-` also remain with Betterleaks because Veles requires a trailing
+word boundary.
 
 ## Bare token detection (Betterleaks only)
 

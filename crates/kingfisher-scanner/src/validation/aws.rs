@@ -720,7 +720,10 @@ async fn lookup_aws_identity(
         }
 
         let max_delay = 100u64 * 2u64.pow((attempt - 1) as u32);
-        sleep(Duration::from_millis(rng().random_range(0..=max_delay))).await;
+        // Drop the thread-local RNG before awaiting: keeping its temporary in
+        // the sleep expression makes the entire revocation future non-Send.
+        let sleep_ms = rng().random_range(0..=max_delay);
+        sleep(Duration::from_millis(sleep_ms)).await;
     }
 
     unreachable!("identity lookup loop always returns")

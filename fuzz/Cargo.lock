@@ -2056,7 +2056,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-rules"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "anyhow",
  "aws-lc-rs",
@@ -2104,7 +2104,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-scanner"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2129,9 +2129,9 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-vectorscan"
-version = "0.1.2"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0fb0fa164da8e5b8778ef4fc1418cdd077d0917eda5d8f45b7afa4991b4ecb6"
+checksum = "96160833540420339205ef690b89f55a926803b88efea4cc44c55cb7fc80e212"
 dependencies = [
  "bitflags 2.13.2",
  "foreign-types",
@@ -2142,9 +2142,9 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-vectorscan-sys"
-version = "0.1.2"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2fed4ea90f092cb933a3423d93ec6a0c1569d2ba7c49d9dba5cb45ca327e610b"
+checksum = "576b49000906ab36e94d281fd7015bf7c76ac0166ac985b9378597aca260cbb8"
 dependencies = [
  "cc",
  "cmake",

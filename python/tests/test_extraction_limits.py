@@ -1,8 +1,10 @@
 """Resource/error boundaries for explicit content transforms (offline fixtures)."""
 import gzip
 import io
+import json
 import py_compile
 import sqlite3
+import struct
 import tarfile
 import zipfile
 
@@ -17,6 +19,62 @@ def zip_bytes(entries):
         for name, data in entries:
             archive.writestr(name, data)
     return output.getvalue()
+
+
+def tar_bytes(entries):
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w") as archive:
+        for name, data in entries:
+            member = tarfile.TarInfo(name)
+            member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
+    return output.getvalue()
+
+
+def asar_bytes(entries):
+    files = {}
+    payload = bytearray()
+    for name, data in entries:
+        directory = files
+        *parents, filename = name.split("/")
+        for parent in parents:
+            directory = directory.setdefault(parent, {"files": {}})["files"]
+        directory[filename] = {"size": len(data), "offset": str(len(payload))}
+        payload.extend(data)
+    header = json.dumps({"files": files}, separators=(",", ":")).encode("utf-8")
+    padded_size = len(header) + (-len(header) % 4)
+    # Electron ASAR framing: a size pickle, then a padded JSON-string pickle.
+    framing = struct.pack("<4I", 4, padded_size + 8, padded_size + 4, len(header))
+    return framing + header + bytes(padded_size - len(header)) + bytes(payload)
+
+
+@pytest.mark.parametrize("kind, make_archive", [
+    ("tar", tar_bytes), ("zip", zip_bytes), ("asar", asar_bytes),
+], ids=["tar", "zip", "asar"])
+@pytest.mark.parametrize("file_backed", [False, True], ids=["memory", "file"])
+def test_unsafe_archive_never_yields_partial_members_and_cleans_storage(
+    tmp_path, kind, make_archive, file_backed,
+):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    safe_entries = [("first.txt", b"complete")]
+    safe, = expand_archives([
+        ScanInput(f"safe.{kind}", make_archive(safe_entries)),
+    ], temp_dir=staging)
+    assert safe.data == b"complete"  # Validate the synthetic framing too.
+    # ASAR sorts paths; this unsafe member sorts after the complete first file.
+    data = make_archive(safe_entries + [("z/../../escape.txt", b"hidden")])
+    if file_backed:
+        path = tmp_path / f"unsafe.{kind}"
+        path.write_bytes(data)
+        source = ScanInput.from_file(path)
+    else:
+        source = ScanInput(f"unsafe.{kind}", data)
+    iterator = expand_archives([source], temp_dir=staging)
+    with pytest.raises(RuntimeError, match="unsafe"):
+        next(iterator)  # Root rejection must precede even the safe first member.
+    assert list(staging.iterdir()) == []
+    assert not (tmp_path / "escape.txt").exists()
 
 
 def test_nested_entry_budget_counts_skipped_directories():
@@ -52,6 +110,22 @@ def test_tar_budget_fails_during_extraction_and_cleans_private_storage(tmp_path)
     iterator = expand_archives([ScanInput("input.tar", output.getvalue())],
                                max_entries=1, temp_dir=tmp_path)
     with pytest.raises(RuntimeError, match="max_entries budget"):
+        next(iterator)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_corrupt_tar_never_yields_partial_members_and_cleans_storage(tmp_path):
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w") as archive:
+        for name in ("first.txt", "second.txt"):
+            member = tarfile.TarInfo(name)
+            member.size = 8
+            archive.addfile(member, io.BytesIO(b"complete"))
+    data = bytearray(output.getvalue())
+    data[1024] ^= 1  # Corrupt the second header after a complete first member.
+    iterator = expand_archives([ScanInput("corrupt.tar", bytes(data))],
+                               temp_dir=tmp_path)
+    with pytest.raises(RuntimeError):
         next(iterator)
     assert list(tmp_path.iterdir()) == []
 

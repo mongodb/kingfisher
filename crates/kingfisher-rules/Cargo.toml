@@ -1,6 +1,6 @@
 [package]
 name = "kingfisher-rules"
-version = "3.0.1"
+version = "3.1.0"
 description = "Rule definitions and database for Kingfisher secret scanner"
 edition.workspace = true
 rust-version.workspace = true
@@ -70,7 +70,7 @@ zeroize.workspace = true
 kingfisher-vectorscan.workspace = true
 # Keep this exact pin in sync with cache_vectorscan_version(). Dependency feature
 # unification may alter the native build; the full runtime build version is also keyed.
-kingfisher-vectorscan-sys = "=0.1.2"
+kingfisher-vectorscan-sys = "=0.1.4"
 thread_local.workspace = true
 
 # Logging

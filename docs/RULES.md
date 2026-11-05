@@ -8,10 +8,11 @@ and selected [Veles](https://github.com/google/osv-scalibr/tree/main/veles) dete
 detectors and validation improvements must go upstream to Betterleaks. Direct inclusion requires
 a specific documented reason to ship in Kingfisher itself, source/license provenance, tests,
 and a retirement condition; it is not a shortcut around upstream contribution.
-When the Betterleaks catalog covers a Veles detector, the Betterleaks detector is preferred and
-the overlapping Veles detector is not bundled.
+When Betterleaks provides equivalent detection and live validation, its detector is preferred
+and the redundant Veles detector can be retired after compatibility review. Detection-only
+overlap does not replace Veles validation or operational capabilities.
 
-The current built-in catalog contains **501 rules**, including five first-party connection-string
+The current built-in catalog contains **502 rules**, including five first-party connection-string
 rules, selected Veles rules, and hidden component/helper rules. See the
 [built-in rules listing](../docs-site/docs/rules/builtin-rules.md) for the per-rule catalog and
 capability counts.
@@ -20,10 +21,18 @@ Filename-only detectors are not imported into the built-in catalog: a filename a
 evidence of an exposed secret. Content detectors may still restrict matching by path. Custom
 Kingfisher YAML and Betterleaks TOML rules continue to support explicit filename-only/path-only rules.
 
-The Betterleaks source is pinned to [v2.0.0-rc.5](https://github.com/betterleaks/betterleaks/tree/b1aa878bc41b06583f6ce83bf0ffcc5e6ed8f4f3).
-Eight new content detectors cover Labelbox and Recursion API keys, NuGet API keys,
-and Tailscale enrollment, legacy, OAuth client, SCIM, and webhook keys.
-It includes Bitbucket Data Center HTTP access tokens (`betterleaks.bitbucket-data-center-token`),
+The Betterleaks source is pinned to [v2.0.0-rc.7](https://github.com/betterleaks/betterleaks/tree/8f376ff9c31ed5309ac448fe601c5dd21b376155).
+It adds `betterleaks.mapbox-secret-token` and updates `betterleaks.mapbox-api-token` to detect
+bare structured `sk.`/`pk.` tokens while preserving upstream payload-shape and entropy filters.
+Mapbox validation requires `TokenValid`; revoked, expired, malformed, and invalid responses
+remain inactive even with HTTP 200. Explicit analysis may look up at most 100 secret tokens
+for scopes; missing `tokens:read` permission does not invalidate a token. Harness PAT analysis
+adds user/account identity and confirmed read capability; SATs do not gain PAT user identity.
+All 22 selected Veles rules remain bundled because rc.7 does not replace their complete coverage.
+
+Existing detectors include Labelbox and Recursion API keys, NuGet API keys,
+Tailscale enrollment, legacy, OAuth client, SCIM, and webhook keys,
+Bitbucket Data Center HTTP access tokens (`betterleaks.bitbucket-data-center-token`),
 Cloudflare `cfut_` user tokens and `cfat_` account tokens (`betterleaks.cloudflare-api-key.2`),
 and Tableau personal access tokens beginning with `+` or `/`. Cloudflare account-token
 validation requires a nearby account ID; the hidden `betterleaks.cloudflare-account-id.1`
@@ -225,6 +234,60 @@ Keywords select rules case-insensitively using the complete raw or decoded sourc
 fragment, before content filters run. A keyword outside a Base64 payload cannot
 authorize a match inside that decoded payload. Empty keyword lists impose no gate.
 
+### Validation response identity metadata
+
+Successful validation can include a small identity summary in the response's
+`metadata` object, shown as `__Response` in pretty output and retained in structured
+reports. Kingfisher reuses evidence from the existing validation operation; it does
+not execute `analyze`, perform additional identity lookups, or infer permissions.
+The existing `--redact` behavior still hides validation responses, including these
+identity summaries.
+For example, AWS STS `GetCallerIdentity` produces:
+
+```json
+{"result":"valid","metadata":{"arn":"arn:aws:iam::123456789012:user/example","account":"123456789012","userid":"example-user-id"}}
+```
+
+The ARN identifies the caller principal, which may be an IAM user, root, or an
+assumed-role session rather than a user.
+
+| Provider | Identity metadata |
+| --- | --- |
+| AWS | `arn`, `account`, `userid` |
+| Hugging Face | `id`, `username`, and the reported token `role` when recognized |
+| GitHub | `id`, `username` |
+| GitLab, Fastly | `user_id`, `token_id` |
+| CircleCI personal tokens | `id`, `username` |
+| GCP service accounts (existing) | `credential_type`, `project_id`, `client_email` |
+| GCP application-default credentials (existing) | `credential_type`, `client_id` |
+| Azure service principals (existing) | `tenant_id`, `client_id` |
+| Azure Storage, App Configuration, Service Bus (existing) | Storage account, endpoint/key ID, or host/entity path, as applicable |
+
+GCP's authorized-user `client_id` identifies the OAuth client, not the end user.
+Google API-key validation does not identify an owner; it retains its existing
+activity/restriction metadata without adding owner lookups.
+
+The new summaries use explicit scalar-field allowlists for the corresponding
+Kingfisher provider capability (`validation.content.capabilities.access_map`).
+Private `analysis` maps, authentication objects, organization memberships, and
+profile details are not copied wholesale. Values must be nonblank strings of at
+most **2,048 UTF-8 bytes**, without Unicode control (`Cc`) or format (`Cf`)
+characters. Credential-bearing values are omitted, including substring echoes of
+primary and component secrets of any nonzero length. Other strings within the
+actual `finding` and `components` inputs, including captures, become substring
+filters only at **eight UTF-8 bytes**: a short region or numeric capture must not
+suppress an unrelated identity. Unrelated globals are not inspected. GitLab's `"0"`
+token-ID sentinel is omitted.
+
+Explicit public metadata from a rule takes precedence. Failed or inconclusive
+validation never receives these summaries, and the original private handoff
+remains available to explicit analysis. Auto-inclusion requires an explicit
+built-in provider capability; custom TOML imports do not infer one from a rule ID.
+Existing custom YAML/TOML rules retain their previous output without edits or new
+schema fields, including any explicit rule-authored public metadata.
+Treat identity-bearing reports as sensitive even though these fields are not
+credentials.
+
 ## Using rules from Rust and Python
 
 The CLI, `kingfisher-scanner`, and `kingfisher_sdk` share rule loading, capture
@@ -362,6 +425,17 @@ GCP service account key revocation can use:
 revocation:
   type: GCP
 ```
+
+Built-in revocation is credential-family-specific, not provider-wide. See the
+[provider contracts and required inputs](../crates/kingfisher-rules/data/revocation-sources.md)
+for Notion OAuth, Resend, Twilio key SIDs, Vercel AI Gateway, GCP API keys, Anthropic ordinary
+keys, OpenAI project/admin keys, and existing GitHub, Slack, and Hugging Face bindings.
+RubyGems requires an owner/manual or authorized-partner flow; no account-wide reset is used.
+Owner-ID flows require an explicit full-token-to-ID mapping and separate management credentials,
+not masked prefix/name matching. Missing inputs fail before mutation. GCP pending operations and
+new GitHub App 202 submissions remain unknown rather than confirmed revoked. Existing primary
+actions and custom YAML/TOML behavior are unchanged; existing 202-only GitHub/Hugging Face
+success flags still mean report acceptance, not verified completion.
 
 ### Multi-Step Revocation
 

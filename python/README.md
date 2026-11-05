@@ -12,7 +12,7 @@ uv add kingfisher-secret-scanner
 
 The **PyPI distribution** is `kingfisher-secret-scanner`; the **Python import** is
 `kingfisher_sdk`. It coexists with the separately distributed `kingfisher-bin` CLI.
-The prepared SDK version is **1.6.1**, a backward-compatible patch release.
+The prepared SDK version is **1.6.2**, a backward-compatible patch release.
 The SDK version is independent of the CLI and Rust library versions.
 
 SDK/runtime changes need a new PyPI version. The release workflow checks this
@@ -20,13 +20,19 @@ before native builds, while default manual runs remain test-only. Maintainers
 can check the prepared version without building or publishing:
 
 ```bash
-python3 scripts/check-sdk-release.py --require-new --expected-version 1.6.1
+python3 scripts/check-sdk-release.py --require-new --expected-version 1.6.2
 ```
 
 Explicit publication requires upstream `main`, `publish=true`, and matching
 `expected_sha` / `expected_version` safety inputs on the existing workflow. See
 the [publishing guide](../docs/PYPI.md#github-actions-and-pypi-publishing) for the
 exact dispatch command, six-wheel/sdist test gates and failed-upload recovery.
+
+CLI and low-level Rust validation responses can include
+[allowlisted identity metadata](../docs/RULES.md#validation-response-identity-metadata)
+without extra provider requests. Python `ValidationResult` representations and
+serialization still omit provider responses and private validation evidence;
+use the explicit analysis API when you need identity or permission details.
 
 ## Scan offline
 
@@ -261,9 +267,11 @@ parents; filesystem enumeration honors local ignore files and skips symlinks.
 Archive expansion shares CLI extractors, with explicit depth and per-root budgets.
 Repeated TAR member names retain each occurrence's bytes. The byte budget also caps
 intermediate decompressed streams (including TAR headers/padding); exhaustion
-raises before any members from that root are yielded.
-Shared extractors skip unsafe/unreadable entries and enforce format limits, so
-coverage is best effort. `scan()` and `scan_file()` keep their existing behavior.
+raises before any members from that root are yielded. Budgeted TAR/ZIP expansion
+also raises on malformed archive reads or staging failures instead of silently
+returning partial members. Shared extractors still skip unsafe entries and enforce
+format limits, so success does not guarantee complete coverage. `scan()` and
+`scan_file()` keep their existing behavior.
 Each `ScanResult` retains its source and complete findings for separate validation.
 
 See the [input API guide](https://github.com/mongodb/kingfisher/blob/main/docs/PYPI.md#compose-filesystem-git-history-and-archives)

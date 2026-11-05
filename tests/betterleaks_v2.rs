@@ -3,6 +3,127 @@ use std::{fs, process::Command};
 use assert_cmd::prelude::*;
 
 #[test]
+fn rc7_mapbox_builtins_scan_bare_tokens_and_apply_payload_filters() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("mapbox.txt");
+    let report = directory.path().join("report.json");
+    let signature = "Ab3DeF9gHk2mNp6Qr8St0A";
+    let mut lines = Vec::new();
+    let mut expected = Vec::new();
+    for (id, prefix) in [("mapbox-api-token", "pk"), ("mapbox-secret-token", "sk")] {
+        for (index, username) in ["fixture", "fixture地图"].into_iter().enumerate() {
+            let payload = format!(r#"{{"u":"{username}","a":"clAb3DeF9gHk2mNp6Qr8St0Vw1"}}"#);
+            let token = format!("{prefix}.{}.{signature}", URL_SAFE_NO_PAD.encode(payload));
+            lines.push(if index == 0 {
+                token.clone()
+            } else {
+                format!("MAPBOX_TOKEN=\"{token}\"")
+            });
+            lines.push(format!("x{token}"));
+            lines.push(format!("{token}_"));
+            expected.push((format!("betterleaks.{id}"), token));
+        }
+        for payload in [
+            r#"{"u":"fixture","b":"clAb3DeF9gHk2mNp6Qr8St0Vw1"}"#,
+            r#"{"u":"fixture","a":"clAb3DeF9gHk2mNp6Qr8St0Vw1","extra":true}"#,
+        ] {
+            lines.push(format!("{prefix}.{}.{signature}", URL_SAFE_NO_PAD.encode(payload)));
+        }
+        let payload = format!(r#"{{"u":"{}","a":"{}"}}"#, "a".repeat(120), "a".repeat(20));
+        lines.push(format!("{prefix}.{}.{}", URL_SAFE_NO_PAD.encode(payload), "A".repeat(22)));
+    }
+    fs::write(&input, lines.join("\n")).unwrap();
+    Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+        .arg("scan")
+        .arg(&input)
+        .args([
+            "--rule",
+            "betterleaks.mapbox-api-token",
+            "--rule",
+            "betterleaks.mapbox-secret-token",
+            "--git-history=none",
+            "--no-validate",
+            "--no-update-check",
+            "--no-rule-cache",
+            "--format=json",
+        ])
+        .arg("--output")
+        .arg(&report)
+        .assert()
+        .code(200);
+    let report: serde_json::Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+    let mut actual: Vec<_> = report["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|record| {
+            (
+                record["rule"]["id"].as_str().unwrap().to_string(),
+                record["finding"]["snippet"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    actual.sort();
+    expected.sort();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn veles_precedence_preserves_heroku_tokens_outside_veles_boundaries() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("heroku.txt");
+    let report = directory.path().join("report.json");
+    let body: String = "Ab3DeF9gHk2mNp6Qr8St0Vw1".chars().cycle().take(57).collect();
+    let mut tokens = Vec::new();
+    let mut expected = Vec::new();
+    for (last, id) in [
+        ("A", "veles.secrets/herokuplatformkey"),
+        ("_", "veles.secrets/herokuplatformkey"),
+        ("-", "betterleaks.heroku-api-key-v2"),
+    ] {
+        let token = format!("HRKU-AA{body}{last}");
+        tokens.push(token.clone());
+        expected.push((id.to_string(), token));
+    }
+    fs::write(&input, tokens.join("\n")).unwrap();
+    Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+        .arg("scan")
+        .arg(&input)
+        .args([
+            "--rule",
+            "betterleaks.heroku-api-key-v2",
+            "--rule",
+            "veles.secrets/herokuplatformkey",
+            "--git-history=none",
+            "--no-validate",
+            "--no-update-check",
+            "--no-rule-cache",
+            "--format=json",
+        ])
+        .arg("--output")
+        .arg(&report)
+        .assert()
+        .code(200);
+    let report: serde_json::Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+    let mut actual: Vec<_> = report["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|record| {
+            (
+                record["rule"]["id"].as_str().unwrap().to_string(),
+                record["finding"]["snippet"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    actual.sort();
+    expected.sort();
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn builtins_do_not_report_files_from_their_names_alone() {
     let directory = tempfile::tempdir().unwrap();
     let input = directory.path().join("private.p12");
@@ -330,6 +451,50 @@ let response = http.get(env.get("SERVICE_URL") + "/permissions", {"Authorization
     assert!(!output.contains("private-analysis-evidence"));
     assert!(!output.contains(token));
     server.verify().await;
+}
+
+#[test]
+fn cli_redacts_allowlisted_identity_metadata_and_private_evidence() {
+    let directory = tempfile::tempdir().unwrap();
+    let rules = directory.path().join("identity.yml");
+    let input = directory.path().join("input.txt");
+    let token = "svc_Q7m2V9r4xR4vN8kT";
+    fs::write(&input, token).unwrap();
+    fs::write(&rules, serde_json::json!({"rules":[{
+        "id":"custom.identity", "name":"Identity fixture", "pattern":"(svc_[A-Za-z0-9]{16})",
+        "validation":{"type":"Betterleaks", "content":{
+            "expression":r#"{result:"valid", analysis:{id:"12345678", username:"fixture-user", private:"private-evidence"}}"#,
+            "capabilities":{"access_map":{"handler":"github"}}
+        }}
+    }]}).to_string()).unwrap();
+    for redact in [false, true] {
+        let report = directory.path().join(format!("report-{redact}.json"));
+        let mut command = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"));
+        command
+            .arg("scan")
+            .arg(&input)
+            .args([
+                "--git-history=none",
+                "--load-builtins=false",
+                "--no-rule-cache",
+                "--no-update-check",
+                "--rules-path",
+            ])
+            .arg(&rules)
+            .args(["--format", "json", "--output"])
+            .arg(&report);
+        if redact {
+            command.arg("--redact");
+        }
+        command.assert().code(205);
+        let output = fs::read_to_string(&report).unwrap();
+        assert!(!output.contains("private-evidence"));
+        assert_eq!(output.contains("fixture-user"), !redact, "{output}");
+        if redact {
+            assert!(output.contains("[REDACTED:"));
+            assert!(!output.contains(token));
+        }
+    }
 }
 
 #[tokio::test]

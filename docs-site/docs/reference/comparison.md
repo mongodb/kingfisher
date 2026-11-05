@@ -83,7 +83,7 @@ credential revocation for supported providers.
 
 ✅ Built in · ❌ Not supported as a built-in capability.
 
-General capability references: [Betterleaks 2.0 RC5](https://github.com/betterleaks/betterleaks/blob/b1aa878bc41b06583f6ce83bf0ffcc5e6ed8f4f3/README.md),
+General capability references: [Betterleaks 2.0 RC7](https://github.com/betterleaks/betterleaks/blob/8f376ff9c31ed5309ac448fe601c5dd21b376155/README.md),
 [TruffleHog OSS](https://github.com/trufflesecurity/trufflehog/blob/662edea3ea7987aafe71580da817e2ee4e8a8783/README.md),
 and [Gitleaks](https://github.com/gitleaks/gitleaks/blob/v8.30.1/README.md).
 

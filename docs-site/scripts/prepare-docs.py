@@ -134,7 +134,7 @@ DOC_MAP = {
     "ARCHITECTURE.md": (
         "reference/architecture.md",
         "Architecture",
-        "Kingfisher architecture: CLI orchestration, shared detection, Rust/Python embedding, execution controls, validation, and reporting.",
+        "Kingfisher architecture: CLI orchestration, shared detection, Rust/Python/Node embedding, execution controls, validation, and reporting.",
     ),
     "LIBRARY.md": (
         "reference/library.md",
@@ -145,6 +145,11 @@ DOC_MAP = {
         "reference/python-bindings.md",
         "Python Bindings",
         "Use native Python modules for secret detection, validation and revocation. Includes uv examples, local tests and PyPI publishing.",
+    ),
+    "JAVASCRIPT.md": (
+        "reference/javascript-bindings.md",
+        "JavaScript and TypeScript SDK",
+        "Use Kingfisher's npm support preview (0.1.0): native Node-API detection, validation, revocation and VS Code workspace extensions.",
     ),
     "COMPARISON.md": (
         "reference/comparison.md",
@@ -185,6 +190,7 @@ LINK_REWRITES = {
     "ARCHITECTURE.md": "../reference/architecture.md",
     "LIBRARY.md": "../reference/library.md",
     "PYPI.md": "../reference/python-bindings.md",
+    "JAVASCRIPT.md": "../reference/javascript-bindings.md",
     "COMPARISON.md": "../reference/comparison.md",
     "PROJECT.md": "../reference/project.md",
 }
@@ -241,22 +247,12 @@ def rewrite_links(content: str, *, root_level: bool = False) -> str:
     # Rewrite links to files that live at non-standard site locations
     content = content.replace("](../README.md)", f"]({site_prefix}getting-started/quick-start.md)")
     content = content.replace("](../CHANGELOG.md)", f"]({site_prefix}changelog.md)")
-    content = content.replace(
-        "](../AGENTS.md)",
-        "](https://github.com/mongodb/kingfisher/blob/main/AGENTS.md)",
-    )
-    content = content.replace(
-        "](../CONTRIBUTING.md)",
-        "](https://github.com/mongodb/kingfisher/blob/main/CONTRIBUTING.md)",
-    )
-    content = content.replace(
-        "](../SECURITY.md)",
-        "](https://github.com/mongodb/kingfisher/blob/main/SECURITY.md)",
-    )
-    content = content.replace(
-        "](../LICENSE)",
-        "](https://github.com/mongodb/kingfisher/blob/main/LICENSE)",
-    )
+    for filename in ("AGENTS.md", "CONTRIBUTING.md", "SECURITY.md", "LICENSE"):
+        content = re.sub(
+            rf"\]\(\.\./{re.escape(filename)}(#[^\)]+)?\)",
+            lambda m: f"](https://github.com/mongodb/kingfisher/blob/main/{filename}{m.group(1) or ''})",
+            content,
+        )
     # Source-only guides and Rust examples are browsed in the repository.
     for guide in ("PUBLISHING.md", "WIZARD.md", "benchmark/README.md"):
         content = content.replace(
@@ -271,9 +267,16 @@ def rewrite_links(content: str, *, root_level: bool = False) -> str:
         return f"](https://github.com/mongodb/kingfisher/{view}/main/{path}{suffix})"
 
     content = re.sub(
-        r"\]\(\.\./((?:crates|examples|python|\.github)/[^)\s#?]*)([^)]*)\)",
+        r"\]\((?:\.\./)?((?:crates|examples|python|javascript|\.github)/[^)\s#?]*)([^)]*)\)",
         source_link,
         content,
+    )
+    content = content.replace(
+        "](revocation-sources.md",
+        "](https://github.com/mongodb/kingfisher/blob/main/crates/kingfisher-rules/data/revocation-sources.md",
+    )
+    content = content.replace(
+        "](../javascript)", "](https://github.com/mongodb/kingfisher/tree/main/javascript)"
     )
     content = content.replace(
         "](../../../docs/RULES.md", "](rules/overview.md" if root_level else "](overview.md"

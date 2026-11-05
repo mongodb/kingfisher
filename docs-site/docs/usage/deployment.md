@@ -72,14 +72,18 @@ See:
 
 ### Embedded Library Usage
 
-Best when you want Kingfisher scanning inside a Rust or Python application or service.
+Best when you want Kingfisher scanning inside a Rust, Python, or Node.js application or service.
 
 - Use `kingfisher-core` for shared content and location types.
 - Use `kingfisher-rules` to load or compile rules.
 - Use `kingfisher-scanner` for the embeddable scanning API.
 - Install `kingfisher-secret-scanner` and import `kingfisher_sdk` for Python.
-- Prewarm the compiled rule cache during image construction with the same SDK
-  wheel, rules and confidence used at startup. Give the runtime account ownership
+- For JavaScript/TypeScript, the `kingfisher-secret-scanner` npm SDK **0.1.0** is a
+  preview of npm support, versioned independently of the CLI, Python SDK, and Rust
+  crates. It calls the same Rust crates in process through Node-API, with no Python
+  interpreter or CLI subprocess.
+- For Python services, prewarm the compiled rule cache during image construction
+  with the same SDK wheel, rules and confidence used at startup. Give the runtime account ownership
   of both the directory and files; `COPY --chown` supports root builds with a
   non-root service. See the [container prewarming guide](../reference/python-bindings.md#prewarm-a-container-image-for-a-non-root-service).
 - Compose local input enumeration and extraction explicitly; detection stays offline,
@@ -96,6 +100,13 @@ See:
 
 - [LIBRARY.md](../reference/library.md)
 - [PYPI.md](../reference/python-bindings.md)
+- [JAVASCRIPT.md](../reference/javascript-bindings.md)
+
+For a source checkout, follow the canonical
+[Node SDK build/test steps](https://github.com/mongodb/kingfisher/blob/main/CONTRIBUTING.md#javascripttypescript-sdk-development).
+These build locally without publication. The JavaScript guide above covers supported
+platforms, Linux GNU runtime requirements (no musl) and Windows VC++ Redistributables;
+the [runnable recipes](https://github.com/mongodb/kingfisher/blob/main/javascript/examples) show composable inputs and redacted reports.
 
 ## Operational Guidance
 

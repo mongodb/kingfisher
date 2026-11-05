@@ -381,13 +381,6 @@ mod test {
     #[test]
     fn betterleaks_rc5_detectors_detect_and_compile() {
         let rules = get_builtin_rules(Some(Confidence::Low)).unwrap();
-        assert_eq!(rules.num_rules(), 501);
-        let provenance: serde_json::Value = serde_json::from_str(BUILTIN_RULE_PROVENANCE).unwrap();
-        assert_eq!(
-            provenance["betterleaks"]["revision"],
-            "b1aa878bc41b06583f6ce83bf0ffcc5e6ed8f4f3"
-        );
-
         let base32 = "abcdefghijklmnopqrstuvwxyz234567";
         let tailscale_secret = "Ab3DeF9gHk2mNp6Qr8St0Vw1Xy4Za7Bc";
         let cases = [
@@ -468,6 +461,186 @@ mod test {
                 })
                 .unwrap();
             assert!(found, "{id}: Vectorscan did not detect the token");
+        }
+    }
+
+    #[test]
+    fn betterleaks_rc7_mapbox_tokens_detect_filter_and_compile() {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+
+        let rules = get_builtin_rules(Some(Confidence::Low)).unwrap();
+        assert_eq!(rules.num_rules(), 502);
+        let provenance: serde_json::Value = serde_json::from_str(BUILTIN_RULE_PROVENANCE).unwrap();
+        assert_eq!(
+            provenance["betterleaks"]["revision"],
+            "8f376ff9c31ed5309ac448fe601c5dd21b376155"
+        );
+        assert_eq!(
+            rules.rules.values().filter(|rule| rule.id.starts_with("veles.")).count(),
+            26,
+            "retain all selected Veles detectors and their four hidden component rules"
+        );
+        assert_eq!(
+            rules
+                .rules
+                .values()
+                .filter(|rule| rule.id.starts_with("veles.") && rule.visible)
+                .count(),
+            22,
+            "the rc.7 upgrade must retain all selected Veles detectors"
+        );
+
+        let signature = "Ab3DeF9gHk2mNp6Qr8St0A";
+        let mut selected = Rules::new();
+        let mut fixtures = Vec::new();
+        for (id, prefix) in [("mapbox-api-token", "pk"), ("mapbox-secret-token", "sk")] {
+            let rule = &rules.rules[&format!("betterleaks.{id}")];
+            assert!(rule.visible);
+            assert_eq!(rule.confidence, Confidence::High);
+            let Some(Validation::Betterleaks(validation)) = &rule.validation else {
+                panic!("{id} should retain upstream validation")
+            };
+            assert!(validation.analyze.is_some(), "{id}");
+            let regex = rule.as_regex().unwrap();
+            // Three adjacent payload lengths exercise every base64 padding case.
+            for username in ["fixture", "fixturex", "fixturexy", "fixture地图"] {
+                let payload = format!(r#"{{"u":"{username}","a":"clAb3DeF9gHk2mNp6Qr8St0Vw1"}}"#);
+                let token = format!("{prefix}.{}.{signature}", URL_SAFE_NO_PAD.encode(&payload));
+                for input in [token.clone(), format!("MAPBOX_TOKEN=\"{token}\"")] {
+                    let captures =
+                        regex.captures(input.as_bytes()).unwrap_or_else(|| panic!("{id}"));
+                    assert_eq!(captures.get(1).unwrap().as_bytes(), token.as_bytes());
+                    assert!(!filter_discards(rule, "fixture.txt", &token, &input, &[]), "{id}");
+                }
+                assert!(!regex.is_match(format!("x{token}").as_bytes()), "{id}");
+                assert!(!regex.is_match(format!("{token}_").as_bytes()), "{id}");
+                fixtures.push((rule.id.clone(), token));
+            }
+            for payload in [
+                r#"{"u":"fixture","b":"clAb3DeF9gHk2mNp6Qr8St0Vw1"}"#,
+                r#"{"u":"fixture","a":"clAb3DeF9gHk2mNp6Qr8St0Vw1","extra":true}"#,
+                r#"{"u":"","a":"clAb3DeF9gHk2mNp6Qr8St0Vw1"}"#,
+                r#"{"u":"fixture","a":"clAb3DeF9gHk2mNp6Qr8St0Vw1!"}"#,
+                r#"{"u":"fixture\\name","a":"clAb3DeF9gHk2mNp6Qr8St0Vw1"}"#,
+            ] {
+                let token = format!("{prefix}.{}.{signature}", URL_SAFE_NO_PAD.encode(payload));
+                assert!(regex.is_match(token.as_bytes()), "{id}: expected a candidate");
+                assert!(
+                    filter_discards(rule, "fixture.txt", &token, &token, &[]),
+                    "{id}: {payload}"
+                );
+            }
+            // The upstream structural and entropy filters must not be bypassed.
+            let low_entropy_payload =
+                format!(r#"{{"u":"{}","a":"{}"}}"#, "a".repeat(120), "a".repeat(20));
+            let token = format!(
+                "{prefix}.{}.{}",
+                URL_SAFE_NO_PAD.encode(low_entropy_payload),
+                "A".repeat(22)
+            );
+            assert!(regex.is_match(token.as_bytes()), "{id}");
+            assert!(filter_discards(rule, "fixture.txt", &token, &token, &[]), "{id}");
+            selected.rules.insert(rule.id.clone(), rule.clone());
+        }
+
+        let db = crate::RulesDatabase::from_rule_collection(selected).unwrap();
+        let mut scanner = kingfisher_vectorscan::BlockScanner::new(db.vectorscan_db()).unwrap();
+        for (id, token) in fixtures {
+            let mut found = false;
+            scanner
+                .scan(token.as_bytes(), |index, _, _, _| {
+                    if db.get_rule(index as usize).unwrap().id() == id {
+                        found = true;
+                    }
+                    kingfisher_vectorscan::Scan::Continue
+                })
+                .unwrap();
+            assert!(found, "{id}: Vectorscan did not detect the token");
+        }
+    }
+
+    #[test]
+    fn veles_precedence_filters_only_suppress_covered_formats() {
+        let rules = get_builtin_rules(Some(Confidence::Low)).unwrap();
+        let uri = &rules.rules["betterleaks.generic-credential-uri"];
+        let password = "Ab3DeF9gHk2mNp6Qr8St0Vw1";
+        for (veles_id, destination) in [
+            ("bitbucketcredentials", "bitbucket.org/team/repo.git"),
+            ("codecatalystcredentials", "git.us-east-1.codecatalyst.aws/v1/space/project/repo"),
+            ("codecommitcredentials", "git-codecommit.us-east-1.amazonaws.com/v1/repos/repo"),
+        ] {
+            let url = format!("https://fixture:{password}@{destination}");
+            let veles = &rules.rules[&format!("veles.secrets/{veles_id}")];
+            let regex = veles.as_regex().unwrap();
+            let captures = regex.captures(url.as_bytes()).unwrap();
+            assert_eq!(captures.get(1).unwrap().as_bytes(), url.as_bytes());
+            for path in [
+                "project/.git/config",
+                r"C:\project\.git\config",
+                ".git-credentials",
+                "shell_history",
+            ] {
+                assert!(
+                    filter_discards(uri, path, password, &url, &[("uri", &url)]),
+                    "{veles_id}: {path}"
+                );
+            }
+            assert!(
+                !filter_discards(uri, "README.md", password, &url, &[("uri", &url)]),
+                "{veles_id}"
+            );
+        }
+        for (scheme, username, destination) in [
+            ("http", "fixture", "bitbucket.org/team/repo.git"),
+            ("HTTPS", "fixture", "bitbucket.org/team/repo.git"),
+            ("https", "", "bitbucket.org/team/repo.git"),
+            ("https", "fixture", "notbitbucket.org/team/repo.git"),
+            ("https", "fixture", "bitbucket.org.evil.invalid/team/repo.git"),
+            ("https", "fixture", "bitbucket.org:443/team/repo.git"),
+            ("https", "fixture", "bitbucket.org/team/repo.GIT"),
+            ("https", "fixture", "bitbucket.org/team/repo"),
+            ("https", "fixture", "codecatalyst.aws/v1/repo"),
+            ("https", "fixture", "git.codecatalyst.aws.evil.invalid/v1/repo"),
+            ("https", "fixture", "git-codecommit.us_east_1.amazonaws.com/v1/repos/repo"),
+            ("https", "fixture", "git-codecommit.us-east-1.amazonaws.com/"),
+        ] {
+            let url = format!("{scheme}://{username}:{password}@{destination}");
+            assert!(
+                uri.as_regex().unwrap().is_match(url.as_bytes()),
+                "expected URI candidate: {url}"
+            );
+            assert!(
+                !filter_discards(uri, "project/.git/config", password, &url, &[("uri", &url)]),
+                "{url}"
+            );
+        }
+
+        let openrouter = &rules.rules["betterleaks.openrouter-api-key"];
+        for (prefix, discarded) in [("sk-or-v1-", true), ("SK-OR-V1-", false)] {
+            let token = format!("{prefix}{}", "a1b2c3d4e5f60789".repeat(4));
+            assert!(openrouter.as_regex().unwrap().is_match(token.as_bytes()));
+            assert_eq!(filter_discards(openrouter, "fixture.txt", &token, &token, &[]), discarded);
+        }
+        let heroku = &rules.rules["betterleaks.heroku-api-key-v2"];
+        let veles_heroku = &rules.rules["veles.secrets/herokuplatformkey"];
+        let body: String = "Ab3DeF9gHk2mNp6Qr8St0Vw1".chars().cycle().take(57).collect();
+        for (last, covered) in [("A", true), ("_", true), ("-", false)] {
+            let token = format!("HRKU-AA{body}{last}");
+            for suffix in ["", "\n", " ", "\"", ";"] {
+                let input = format!("{token}{suffix}");
+                let captures = heroku.as_regex().unwrap().captures(input.as_bytes()).unwrap();
+                assert_eq!(captures.get(1).unwrap().as_bytes(), token.as_bytes());
+                assert_eq!(veles_heroku.as_regex().unwrap().is_match(input.as_bytes()), covered);
+                assert_eq!(
+                    filter_discards(heroku, "fixture.txt", &token, &input, &[]),
+                    covered,
+                    "Heroku suffix: {last:?}/{suffix:?}"
+                );
+            }
+        }
+        for id in ["betterleaks.heroku-api-key-v2", "betterleaks.slack-app-token"] {
+            assert!(rules.rules[id].betterleaks_filter.is_some(), "{id}");
+            assert!(rules.rules[id].revocation.is_some(), "{id}");
         }
     }
 
@@ -773,6 +946,14 @@ mod test {
         assert!(matches!(hcp.validation, Some(Validation::Http(_))));
 
         for id in [
+            "betterleaks.anthropic-api-key",
+            "betterleaks.gcp-api-key",
+            "betterleaks.github-app-token",
+            "betterleaks.notion-api-token",
+            "betterleaks.openai-api-key",
+            "betterleaks.resend-api-key.1",
+            "betterleaks.twilio-api-key",
+            "betterleaks.vercel-ai-gateway-key",
             "betterleaks.doppler-api-token",
             "betterleaks.heroku-api-key",
             "betterleaks.heroku-api-key-v2",
@@ -783,6 +964,12 @@ mod test {
             "betterleaks.vercel-app-refresh-token",
         ] {
             assert!(rules.rules[id].revocation.is_some(), "{id} should support revocation");
+        }
+
+        // No public credential-specific contract exists for these credential families.
+        // Do not substitute account-wide resets or apply ordinary-key APIs to admin keys.
+        for id in ["betterleaks.rubygems-api-token", "betterleaks.anthropic-admin-api-key"] {
+            assert!(rules.rules[id].revocation.is_none(), "{id} needs an owner/partner flow");
         }
 
         for id in [

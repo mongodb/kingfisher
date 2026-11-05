@@ -47,6 +47,18 @@ Icon
 
 node_modules/
 
+# JavaScript SDK manifests are source; native binaries and staging are not.
+!javascript/package.json
+!javascript/package-lock.json
+!javascript/tsconfig.json
+!javascript/npm/*/package.json
+javascript/*.node
+javascript/npm/*/*.node
+javascript/artifacts/
+javascript/release/
+javascript/.examples-build/
+javascript/*.tgz
+
 # Thumbnails
 ._*
 

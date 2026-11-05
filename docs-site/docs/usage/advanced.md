@@ -531,7 +531,7 @@ kingfisher scan ./src --rule kingfisher.connection-string.password \
   --format toon --no-validate --no-update-check
 ```
 
-Kingfisher embeds 501 built-in rules from one prepared compressed bundle. Normal compilation
+Kingfisher embeds 502 built-in rules from one prepared compressed bundle. Normal compilation
 does not download rule sources. Exact upstream inputs, licenses, hashes, source revisions, and
 first-party rule provenance are recorded under `crates/kingfisher-rules/generated/`. Maintainers
 regenerate the bundle with `cargo run --locked -p kingfisher-rule-bundle`; `--refresh` fetches
@@ -549,12 +549,18 @@ candidate matching work. Production
 validation runs in Rust; Go and Betterleaks itself are not runtime dependencies. Provider endpoint
 overrides are exposed to Betterleaks validation environment variables.
 
-The pinned Betterleaks v2.0.0-rc.5 catalog uses both older namespaced helpers and newer
+The pinned Betterleaks v2.0.0-rc.7 catalog uses both older namespaced helpers and newer
 expression helpers such as `type`, `string`, `int`, `toJSON`, `len`, `filter`, `all`, and
 `strings.splitTrim`. Kingfisher evaluates the imported validation expressions and preserves
-their provider-result checks. Upstream `analyze` expressions are not executed; blast-radius
-analysis continues to use Kingfisher's reviewed access-map handlers. Capture selection accepts
-both the v2 `valueGroup` field and the older `secretGroup` field in Betterleaks TOML.
+their provider-result checks. Upstream `analyze` expressions run only through explicit analysis,
+not ordinary validation; reviewed access-map handlers take precedence where configured.
+Capture selection accepts both the v2 `valueGroup` field and the older `secretGroup` field
+in Betterleaks TOML.
+
+Finding filters also support `fromBase64` for standard Base64 containing UTF-8 text, with a
+16 MiB input limit. Partial groups require padding; CR/LF are ignored, but malformed encoding
+and non-UTF-8 output raise evaluation errors rather than being decoded lossily. Mapbox's
+upstream filters normalize URL-safe payloads and add padding before decoding.
 
 The source prefilter applies only to Betterleaks rules. Custom, Veles, and first-party rules
 still run on paths that Betterleaks excludes.
@@ -564,8 +570,10 @@ an access-map handler for the credential shape. Kingfisher maintains a checked-i
 overlay for access-map bindings and
 selected safe revocation actions. It contains no candidate detector regexes, but may add narrow
 operational filters and capability metadata; it is validated against the downloaded imported-detector IDs
-and components during bundle generation. Betterleaks 2.x supports `revoke` expressions;
-Kingfisher's importer currently uses the reviewed overlay instead of executing those expressions.
+and components during bundle generation. Kingfisher also imports Betterleaks 2.x `revoke`
+expressions, with reviewed overlay actions taking precedence for mapped detector IDs. They run
+only during explicit revocation, never scanning or validation; see the
+[revocation guide](../features/revocation.md) for required inputs and credential-family limits.
 Checksum templates remain available to
 Kingfisher custom rules; Betterleaks detectors rely on their upstream regex/filter behavior until the
 upstream schema exposes checksum metadata.

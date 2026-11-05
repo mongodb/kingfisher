@@ -285,6 +285,7 @@ fn extract_revocation_vars(revocation: &Revocation) -> BTreeSet<String> {
         Revocation::Betterleaks(config) => {
             vars.insert("TOKEN".into());
             vars.extend(config.components.values().cloned());
+            vars.extend(config.expression.env_input_vars());
         }
         Revocation::Http(http) => {
             for url in http.request.urls() {
@@ -1255,6 +1256,56 @@ mod tests {
     fn extract_revocation_vars_gcp() {
         let vars = extract_revocation_vars(&Revocation::GCP);
         assert!(vars.contains("TOKEN"));
+    }
+
+    #[test]
+    fn extract_revocation_vars_betterleaks_includes_literal_env_inputs() {
+        let revocation = serde_json::from_value(serde_json::json!({
+            "type": "Betterleaks",
+            "content": {
+                "source": "env.get('SOURCE_ONLY')",
+                "expression": "let admin = env.get('RESEND_ADMIN_API_KEY'); [admin, env.get('RESEND_API_KEY_ID'), env.getOrDefault('OPTIONAL', '')]",
+                "analyze": "env.get('ANALYZE_ONLY')",
+                "components": {"helper": "COMPONENT"}
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            extract_revocation_vars(&revocation),
+            BTreeSet::from([
+                "COMPONENT".into(),
+                "RESEND_ADMIN_API_KEY".into(),
+                "RESEND_API_KEY_ID".into(),
+                "TOKEN".into(),
+            ])
+        );
+    }
+
+    #[test]
+    fn build_globals_auto_assigns_betterleaks_env_inputs() {
+        let revocation = serde_json::from_value(serde_json::json!({
+            "type": "Betterleaks",
+            "content": {
+                "expression": "[env.get('OPENAI_ADMIN_KEY'), env.get('OPENAI_PROJECT_ID'), env.get('OPENAI_API_KEY_ID')]"
+            }
+        }))
+        .unwrap();
+        let globals = build_globals(
+            "custom.env-revoker",
+            "secret",
+            &["admin-key".into(), "key-7".into(), "project-4".into()],
+            &["OPENAI_PROJECT_ID=explicit-project".into()],
+            &extract_revocation_vars(&revocation),
+            &ProviderEndpointOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(get_global_var(&globals, "TOKEN").as_deref(), Some("secret"));
+        assert_eq!(get_global_var(&globals, "OPENAI_ADMIN_KEY").as_deref(), Some("admin-key"));
+        assert_eq!(get_global_var(&globals, "OPENAI_API_KEY_ID").as_deref(), Some("key-7"));
+        assert_eq!(
+            get_global_var(&globals, "OPENAI_PROJECT_ID").as_deref(),
+            Some("explicit-project")
+        );
     }
 
     #[test]

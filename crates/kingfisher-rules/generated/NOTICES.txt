@@ -8,7 +8,7 @@ Compression does not change the applicable licenses.
 
 ===== Betterleaks (MIT) =====
 
-https://raw.githubusercontent.com/betterleaks/betterleaks/b1aa878bc41b06583f6ce83bf0ffcc5e6ed8f4f3/LICENSE
+https://raw.githubusercontent.com/betterleaks/betterleaks/8f376ff9c31ed5309ac448fe601c5dd21b376155/LICENSE
 
 MIT License
 

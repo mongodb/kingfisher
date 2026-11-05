@@ -8,7 +8,7 @@ secrets are detected without changing the Rust API.
 
 ```toml
 [dependencies]
-kingfisher-rules = "3.0.1"
+kingfisher-rules = "3.1.0"
 anyhow = "1"
 ```
 
@@ -184,10 +184,11 @@ cargo run --locked -p kingfisher-rule-bundle
 cargo run --locked -p kingfisher-rule-bundle -- --check
 ```
 
-A Betterleaks release is preferred. The current bundle pins v2.0.0-rc.5 at
-`b1aa878bc41b06583f6ce83bf0ffcc5e6ed8f4f3`, including the Labelbox, NuGet, and Tailscale
-content detectors. The exact `config/betterleaks.toml` SHA-256 is
-`107da222fc897daa2647027248d86ece9dde29e993d5fc9e138826c71f951127`.
+A Betterleaks release is preferred. The current bundle pins v2.0.0-rc.7 at
+`8f376ff9c31ed5309ac448fe601c5dd21b376155`, adding Mapbox secret tokens and updating
+Mapbox/Harness validation and analysis. All 22 selected Veles rules are retained.
+The exact `config/betterleaks.toml` SHA-256 is
+`7c305ade42d5dbad4650b97cca0299f9c16d152ec555ae47bd6f321f049f82e5`.
 Its revision and expected digest live in `tools/rule-bundle/src/main.rs`;
 Veles selections and revision live in `data/veles-rules.yml`. Update the pins, run `--refresh`,
 review the provenance and license changes, and commit the generated artifacts together.
@@ -210,6 +211,12 @@ Kingfisher YAML also accepts Expr source in `Betterleaks` validation/revocation
 definitions, while retaining the existing AST form. `jwt_sign` creates a complete
 RS256 JWT from JSON claims and a PEM signing key. See the
 [rule format guide](../../docs/RULES.md).
+
+`BetterleaksExpr::env_input_vars()` returns sorted, deduplicated literal `env.get("NAME")`
+inputs for tooling, without reading the environment or inferring mandatory branches.
+Dynamic names and `env.getOrDefault` are excluded. See
+[provider revocation contracts](data/revocation-sources.md) for explicit management inputs,
+owner-ID mapping guards, confirmation semantics, and unsupported credential families.
 
 The token-efficiency helper embeds an unchanged Betterleaks subset of wordfreq
 data under CC-BY-SA-4.0; the Rust source keeps its existing license. The separate

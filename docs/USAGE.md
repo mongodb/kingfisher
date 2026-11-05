@@ -526,9 +526,10 @@ Adapt their quoting before pasting into PowerShell or cmd.exe.
 
 Use `kingfisher revoke` to invoke either a mapped Betterleaks revocation capability or a Kingfisher
 custom rule's `revocation` configuration without scanning files. Kingfisher's importer
-uses reviewed capability-overlay actions joined to upstream detector IDs; it does
-not execute Betterleaks 2.x `revoke` expressions. HTTP actions use the same Liquid templating
-and response matchers as Kingfisher YAML `validation`.
+supports Betterleaks 2.x `revoke` expressions, with reviewed capability-overlay actions
+taking precedence for mapped detector IDs. HTTP actions use the same Liquid templating
+and response matchers as Kingfisher YAML `validation`. Provider inputs and credential-family
+limits are listed in the [revocation guide](REVOCATION_PROVIDERS.md).
 
 For supported provider flows, this lets an authorized defender contain the credential without first
 finding the employee who created or leaked it. That matters when ownership is unclear or the person

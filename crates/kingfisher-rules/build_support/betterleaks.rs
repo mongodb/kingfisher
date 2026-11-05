@@ -1121,6 +1121,7 @@ fn validate_filter_expression(expression: &BetterleaksExpr) -> Result<()> {
                         | "float"
                         | "toJSON"
                         | "fromJSON"
+                        | "fromBase64"
                 )
             };
             if !supported {
@@ -2088,6 +2089,59 @@ revoke = 'http.delete("https://example.invalid/revoke")'
         assert!(!rule["validation"]["content"]["analyze"].is_null());
         assert!(rule["revocation"]["content"]["source"].as_str().unwrap().contains("http.delete"));
         assert!(!rule["validation"]["content"]["source"].as_str().unwrap().contains("http.delete"));
+    }
+
+    #[test]
+    fn imports_from_base64_mapbox_filters_for_builtins_and_custom_toml() {
+        // Exact shared Mapbox filter from Betterleaks v2.0.0-rc.7 (8f376ff9).
+        let filter = r#"
+let parts = split(finding["secret"], ".");
+let payload = len(parts) == 3 ? parts[1] : "";
+let padding = (4 - len(payload) % 4) % 4;
+entropy(finding["secret"]) < 4 || len(payload) % 4 == 1 ||
+ !(fromBase64(replace(replace(payload, "-", "+"), "_", "/") + repeat("=", padding)) matches
+   '^\\{"u":"[^"\\\\\\x00-\\x1f]+"\\s*,\\s*"a"\\s*:\\s*"[A-Za-z0-9]+"\\s*\\}$')
+"#;
+        let expected_filter = serde_yaml::to_value(parse_expression(filter).unwrap()).unwrap();
+        for (id, prefix) in [("mapbox-api-token", "pk"), ("mapbox-secret-token", "sk")] {
+            let source = format!(
+                r#"
+minVersion = "v2.0.0-rc.1"
+[[rules]]
+id = "{id}"
+regex = '''\b({prefix}\.eyJ1Ijoi[A-Za-z0-9_-]{{15,300}}\.[A-Za-z0-9_-]{{21}}[AQgw])(?:$|[^A-Za-z0-9_-])'''
+filter = '''{filter}'''
+"#
+            );
+            for (namespace, yaml) in [
+                (
+                    "betterleaks.",
+                    import_config(&source, "rc.7-mapbox", EMPTY_CAPABILITIES).unwrap(),
+                ),
+                ("custom.", import_custom_config(&source, "custom-mapbox.toml").unwrap()),
+            ] {
+                let snapshot: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+                let rules = snapshot["rules"].as_sequence().unwrap();
+                assert_eq!(rules.len(), 1);
+                assert_eq!(rules[0]["id"].as_str().unwrap(), format!("{namespace}{id}"));
+                assert_eq!(rules[0]["betterleaks_filter"], expected_filter);
+            }
+        }
+    }
+
+    #[test]
+    fn from_base64_is_not_accepted_by_unsupported_provider_runtimes() {
+        for field in ["validate", "analyze", "revoke"] {
+            let validation = if field == "analyze" { "validate='true'\n" } else { "" };
+            let source = format!(
+                "[[rules]]\nid='base64-scope'\nregex='token'\n{validation}{field}='fromBase64(\"dGVzdA==\")'"
+            );
+            let error = format!("{:#}", import_custom_config(&source, "test").unwrap_err());
+            assert!(
+                error.contains("unsupported Betterleaks validation call \"fromBase64\""),
+                "{error}"
+            );
+        }
     }
 
     #[test]

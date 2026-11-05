@@ -23,6 +23,8 @@ Kingfisher is a Rust secret scanner, live credential validator, revocation helpe
 - `crates/kingfisher-rules/`: rule schema, rule loading, and bundled rule data.
 - `crates/kingfisher-rules/build_support/`: Betterleaks TOML import and expression parsing.
 - `crates/kingfisher-scanner/`: embeddable scanning API and shared validators.
+- `crates/kingfisher-node/`: native Node-API bridge to the shared core, rules, and scanner crates.
+- `javascript/`: JavaScript/TypeScript SDK facade, declarations, tests, examples, and npm packaging.
 - `tests/` and `testdata/`: integration tests and fixtures.
 - `docs/`, `docs/viewer/`, `docs-site/`: docs, report viewer assets, and generated MkDocs site.
 - `third-party/kingfisher-vectorscan/`: Vectorscan attribution and license files.
@@ -62,7 +64,7 @@ Kingfisher is a Rust secret scanner, live credential validator, revocation helpe
 - Before finishing changes to a publishable crate, check whether its packaged contents
   differ from the same version on crates.io. Packaged tests, examples, README files,
   dependency requirements, licenses, and generated data count, even without runtime/API changes.
-- Crate versions are independent of the CLI tag and Python SDK version. Bump an
+- Crate versions are independent of the CLI tag and Python/npm SDK versions. Bump an
   already-published crate when its package changes; do not bump every crate for a CLI
   release or bump an unpublished prepared version unnecessarily. Choose patch/minor/major
   versions according to the public API compatibility contract.
@@ -229,7 +231,9 @@ does not regenerate the catalog. See [publishing guidance](docs/PUBLISHING.md) f
 - Usage: `docs/USAGE.md`, `docs/ADVANCED.md`, `docs/INTEGRATIONS.md`
 - Rules: `docs/RULES.md`
 - Architecture: `docs/ARCHITECTURE.md`, `docs/BLAST_RADIUS.md`
-- Deployment/install: `docs/INSTALLATION.md`, `docs/DEPLOYMENT.md`, `docs/PYPI.md`
+- Deployment/install: `docs/INSTALLATION.md`, `docs/DEPLOYMENT.md`, `docs/PYPI.md`, [Node SDK guide](docs/JAVASCRIPT.md)
 - Rust embedding: [library guide](docs/LIBRARY.md), [runnable examples](crates/kingfisher-scanner/examples) (`kingfisher-scanner`; validation and revocation via `validation`)
 - Python embedding: [SDK guide](docs/PYPI.md), [runnable examples](python/examples) (install `kingfisher-secret-scanner`, import `kingfisher_sdk`)
+- JavaScript/TypeScript embedding: [Node SDK guide](docs/JAVASCRIPT.md), [runnable examples](javascript/examples) (`kingfisher-secret-scanner` on npm; independent **0.1.0** preview of npm support)
 - Python SDK development: read [SDK contributor guidance](python/AGENTS.md) when changing Python-facing behavior, including changes implemented in shared Rust crates; [native binding guidance](crates/kingfisher-python/AGENTS.md) applies to the PyO3 bridge.
+- Node SDK development: read [SDK contributor guidance](javascript/AGENTS.md) when changing Node-facing behavior, including changes implemented in shared Rust crates or the [Node-API bridge](crates/kingfisher-node).

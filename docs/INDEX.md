@@ -26,6 +26,9 @@ authoritative Kingfisher documentation for each task.
 | Write, import, or verify detection rules | [Rule authoring](RULES.md) |
 | Embed scanning and validation in Rust | [Library API and integration recipes](LIBRARY.md#integration-recipes-for-rust-projects-and-llm-agents) |
 | Embed the Python SDK or maintain PyPI distributions | [Python/PyPI](PYPI.md) |
+| Embed the JavaScript/TypeScript SDK preview in Node.js or VS Code | [Node SDK](JAVASCRIPT.md) |
+| Run Node SDK teaching examples or integrate from an LLM | [Executable recipe walkthrough](../javascript/examples/README.md) |
+| Configure npm trusted publishing and release the Node SDK | [Complete npm setup runbook](../javascript/PUBLISHING.md) |
 
 ## Response Workflow
 
@@ -66,6 +69,8 @@ authoritative Kingfisher documentation for each task.
 - [Architecture](ARCHITECTURE.md) — crates, CLI paths, scanner pipeline, validation, and reporters.
 - [Rust library API](LIBRARY.md) — embedding the scanner and selecting validation features.
 - [Python/PyPI](PYPI.md) — Native Python detection, validation, revocation, runnable uv examples, wheels, and publishing.
+- [JavaScript/TypeScript](JAVASCRIPT.md) — native Node SDK preview, typed subpaths,
+  runnable examples, VS Code workspace integration, and npm trusted publishing.
 - [Benchmarks](COMPARISON.md) — methodology, performance, and network requests.
 - [Project background](PROJECT.md) — production use, lineage, evolution, and roadmap.
 - [Changelog](../CHANGELOG.md) — release history.

@@ -44,12 +44,18 @@ Use the repository issue templates when they fit your case.
 Kingfisher is a Rust workspace. The workspace minimum Rust version is `1.99`.
 
 The workspace uses the published [`kingfisher-vectorscan`](https://crates.io/crates/kingfisher-vectorscan)
-crate. On supported Linux GNU, macOS, and Windows GNU/LLVM targets, Cargo downloads
+crate, pinned to **0.1.4**. On supported Linux GNU/musl, macOS, and Windows
+GNU/LLVM or MSVC targets, Cargo downloads
 the checksum-verified Vectorscan archive, so Vectorscan itself does not need a local
 CMake/Boost build. Cargo still builds Rust code and other native dependencies, and
-needs the target linker/runtime libraries and network access for the archive. The
-Windows MSVC Rust targets are unsupported by this Vectorscan crate; use the MSYS2
-MINGW64 x64 or CLANGARM64 ARM64 setup used by the Makefile. See the crate's
+needs the target linker/runtime libraries and network access for the archive.
+Windows MSVC x64/ARM64 consumers need the matching Microsoft target SDK/linker and
+C++ runtime, not MinGW libraries. The published MSVC archives use the **MSVC 14.44
+(Visual Studio 2022)** STL/CRT baseline and support newer compatible toolsets,
+including VS 2026, without disabling engine or STL SIMD optimizations. The existing
+Makefile CLI packaging targets keep using MSYS2 MINGW64 x64 and CLANGARM64 ARM64.
+MSVC Vectorscan source builds use
+clang-cl, Ninja and standalone Boost headers rather than cl.exe. See the crate's
 [build guide](https://github.com/micksmix/kingfisher-vectorscan#build-requirements-and-portability)
 for offline and source-build options.
 
@@ -69,6 +75,61 @@ For repository layout and project-specific guidance, see:
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - [docs/USAGE.md](docs/USAGE.md)
 - [docs/RULES.md](docs/RULES.md)
+
+### JavaScript/TypeScript SDK Development
+
+The `kingfisher-secret-scanner` npm SDK **0.1.0** is a preview of npm support.
+Its version is independent of the CLI, Python SDK, and Rust crates. Use the
+checkout instructions below for SDK development.
+
+Use **Node 22, 24 or 26 only**, tested minimum **22.13.0**, and Rust **1.99** with the
+[native build prerequisites](docs/LIBRARY.md#build-and-deployment). From the repository root:
+
+```sh
+cd javascript
+npm ci --ignore-scripts
+npm run build:debug
+npm test
+npm run test:types
+```
+
+The facade calls the same core, rules, and scanner crates in process through
+[the Node-API bridge](crates/kingfisher-node), not through Python or the CLI.
+Read [Node contributor guidance](javascript/AGENTS.md) for Node-facing changes,
+including behavior implemented in shared Rust crates. See the
+[SDK guide](docs/JAVASCRIPT.md) and [runnable examples](javascript/examples) for APIs
+and the canonical runtime support contract; Vectorscan's broader Rust target support
+above does not imply Node SDK musl or additional Node-major support.
+
+Rebuild the addon after native changes. For loader/packaging changes, also run
+`npm run test:package` against a correctly staged release tree to verify a clean,
+offline consumer install from packed tarballs without source-tree addon fallback or
+a consumer Rust build. Follow the [publishing runbook](javascript/PUBLISHING.md) for
+staging and release checks; these development commands do not publish anything.
+Documentation-only changes do not require a native rebuild.
+
+### Third-party license notices
+
+After locked native dependency changes, run from the repository root:
+
+```sh
+cargo fetch --locked
+cargo install --locked cargo-bundle-licenses --version 4.2.0
+make notices
+make check-notices
+```
+
+The generator derives the **exact locked third-party crate/version union** across
+**all workspace members, features and targets**, including normal/build dependencies
+and proc macros (also optional allocators, GUI and tools). Dev-only dependencies and
+first-party crates are excluded; stale Cargo entries are removed. Independent
+non-Cargo notices for the project, rule sources and Vectorscan are preserved, and
+the SDK's packaged notices are synchronized.
+
+From `javascript/`, `npm run check:notices` provides the same read-only check. Missing,
+stale or incomplete license texts (including `NOT FOUND` placeholders) fail closed;
+unavailable upstream texts require reviewed, pinned license-source overrides rather
+than a waiver. Preserve packaged license/notice files when staging releases.
 
 ## Contribution Guidelines
 
@@ -126,6 +187,8 @@ Examples:
 
 - Rule-only changes: `cargo test -p kingfisher-rules`
 - General Rust changes: `make tests`
+- Node SDK changes: rebuild with `npm run build:debug`, then `npm test` and
+  `npm run test:types` from `javascript/`; include packed-tarball checks for packaging changes.
 - Formatting: `cargo fmt --all`
 - Linting: `cargo clippy --workspace --all-targets -- -D warnings`
 

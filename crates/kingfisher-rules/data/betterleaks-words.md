@@ -1,7 +1,7 @@
 # Betterleaks token-efficiency wordlist
 
 `betterleaks-words.txt.gz` is copied without modification from
-[Betterleaks v2.0.0-rc.5](https://github.com/betterleaks/betterleaks/blob/b1aa878bc41b06583f6ce83bf0ffcc5e6ed8f4f3/internal/words/words.txt.gz).
+[Betterleaks v2.0.0-rc.7](https://github.com/betterleaks/betterleaks/blob/8f376ff9c31ed5309ac448fe601c5dd21b376155/internal/words/words.txt.gz).
 It is used by the imported `failsTokenEfficiency` helper, including the upstream
 case-insensitive substring checks and length-sensitive thresholds.
 

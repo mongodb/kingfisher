@@ -146,7 +146,31 @@ fn format_validation_response(validation_body: &str, redact: bool, full_response
     }
 
     const MAX_RESPONSE_LENGTH: usize = 512;
-    let mut chars = validation_body.chars();
+    if validation_body.chars().take(MAX_RESPONSE_LENGTH + 1).count() <= MAX_RESPONSE_LENGTH {
+        return validation_body.to_string();
+    }
+
+    // Betterleaks bodies sort JSON keys, placing potentially large metadata before
+    // the result. Keep that result visible in a bounded human-readable preview.
+    let summary_first =
+        serde_json::from_str::<serde_json::Value>(validation_body).ok().and_then(|mut body| {
+            let fields = body.as_object_mut()?;
+            let result = fields.remove("result")?;
+            if !matches!(
+                result.as_str(),
+                Some("valid" | "invalid" | "unknown" | "skipped" | "revoked")
+            ) {
+                return None;
+            }
+            let result = serde_json::to_string(&result).ok()?;
+            if fields.is_empty() {
+                Some(format!("{{\"result\":{result}}}"))
+            } else {
+                let rest = serde_json::to_string(fields).ok()?;
+                Some(format!("{{\"result\":{result},{}", &rest[1..]))
+            }
+        });
+    let mut chars = summary_first.as_deref().unwrap_or(validation_body).chars();
     let truncated_body: String = chars.by_ref().take(MAX_RESPONSE_LENGTH).collect();
     let ellipsis = if chars.next().is_some() { "..." } else { "" };
     format!("{truncated_body}{ellipsis}")
@@ -2314,6 +2338,32 @@ mod tests {
         let body = "a".repeat(513);
         let response = build_validation_response(&body, false, false);
         assert_eq!(response, format!("{}...", "a".repeat(512)));
+    }
+
+    #[test]
+    fn validation_preview_preserves_short_json_verbatim() {
+        for body in [
+            "{\n  \"metadata\": {\"username\": \"public\"},\n  \"result\": \"valid\"\n}\n"
+                .to_owned(),
+            format!("{{\"metadata\":\"{}\",\"result\":\"valid\"}}", "é".repeat(480)),
+            format!("{{\"result\":\"valid\"}}{}", " ".repeat(494)),
+        ] {
+            assert!(body.chars().count() <= 512);
+            assert_eq!(format_validation_response(&body, false, false), body);
+        }
+    }
+
+    #[test]
+    fn validation_preview_keeps_result_before_large_identity_metadata() {
+        let body = serde_json::json!({
+            "metadata": {"username": "a".repeat(2048)}, "result": "valid"
+        })
+        .to_string();
+        let preview = format_validation_response(&body, false, false);
+        assert!(preview.starts_with(r#"{"result":"valid","metadata":"#));
+        assert!(preview.ends_with("..."));
+        assert_eq!(format_validation_response(&body, false, true), body);
+        assert!(!format_validation_response(&body, true, false).contains("valid"));
     }
 
     #[test]

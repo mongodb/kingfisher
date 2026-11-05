@@ -1,0 +1,6 @@
+# GitHub-hosted GA image; actionlint's built-in runner list lags this label.
+# This allowlist affects linting only, not the workflow's runner hosting mode.
+# https://github.blog/changelog/2026-08-20-windows-11-arm64-vs2026-image-generally-available/
+self-hosted-runner:
+  labels:
+    - windows-11-vs2026-arm
