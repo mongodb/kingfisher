@@ -1,6 +1,12 @@
 """Check native SDK release guards without GitHub or npm registry writes."""
 from pathlib import Path
+import json
+import os
 import re
+import shutil
+import subprocess
+import tempfile
+import textwrap
 import tomllib
 import unittest
 
@@ -113,6 +119,74 @@ class NodeSdkReleaseTests(unittest.TestCase):
         minimum = build[build.index("node-version: '22.13.0'"):].split("      - uses:", 1)[0]
         self.assertIn("npm test", minimum)
         self.assertIn("npm run test:types", minimum)
+
+    def test_all_native_and_sealed_runtime_installs_use_the_safe_wrapper(self):
+        workflow = (ROOT / ".github/workflows/node-sdk.yml").read_text()
+        for name in ("build", "verify"):
+            with self.subTest(job=name):
+                body = job(workflow, name)
+                self.assertEqual(body.count("uses: ./.github/actions/setup-node"), 6)
+                self.assertNotIn("uses: actions/setup-node@", body)
+                self.assertEqual(re.findall(r"node-version: '([^']+)'", body), [
+                    "22.23.4", "24.22.2", "22.13.0", "24.0.0", "26.0.0", "26.13.0",
+                ])
+        for name in ("source", "package", "publish"):
+            self.assertIn("actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38",
+                          job(workflow, name))
+        self.assertIn("cache: npm", job(workflow, "build"))
+        self.assertIn("cache-dependency-path: javascript/package-lock.json", job(workflow, "build"))
+        self.assertIn("if: runner.os == 'Windows'\n        working-directory: .\n"
+                      "        run: python -X utf8 -m unittest discover -s scripts/tests "
+                      "-p test_node_sdk_release.py -v", job(workflow, "build"))
+        triggers = workflow.split("permissions:", 1)[0]
+        self.assertEqual(triggers.count("'.github/actions/setup-node/**'"), 2)
+
+    def test_archive_workaround_is_scoped_to_each_arm64_windows_installer(self):
+        action = (ROOT / ".github/actions/setup-node/action.yml").read_text()
+        selector, installer = action.split("    - name: Set up the pinned Node runtime\n", 1)
+        self.assertIn("if: runner.os == 'Windows' && runner.arch == 'ARM64'", selector)
+        self.assertIn("shell: powershell", selector)
+        self.assertIn("Get-Command powershell.exe -CommandType Application -ErrorAction Stop", selector)
+        self.assertIn("$_.Trim().Trim", selector)
+        self.assertIn("Test-Path -LiteralPath (Join-Path $directory 'pwsh.exe')", selector)
+        self.assertNotIn("GITHUB_ENV", action)
+        self.assertNotIn("GITHUB_PATH", action)
+        self.assertNotIn("continue-on-error", action)
+        self.assertIn("uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38", installer)
+        self.assertIn("env: ${{ fromJSON(steps.extractor.outputs.env || '{}') }}", installer)
+        for name in ("node-version", "cache", "cache-dependency-path", "package-manager-cache"):
+            self.assertIn(f"{name}: ${{{{ inputs.{name} }}}}", installer)
+        self.assertIn("default: 'true'", selector)
+
+    @unittest.skipUnless(os.name == "nt", "The archive selector uses Windows PowerShell")
+    def test_windows_selector_preserves_compiler_and_node_paths_and_hides_all_pwsh(self):
+        powershell = shutil.which("powershell")
+        self.assertIsNotNone(powershell, "Windows PowerShell is required by tool-cache's fallback")
+        action = (ROOT / ".github/actions/setup-node/action.yml").read_text()
+        script = textwrap.dedent(action.split("      run: |\n", 1)[1].split("    - name:", 1)[0])
+        with tempfile.TemporaryDirectory(prefix="kingfisher Node extractor ") as temporary:
+            root = Path(temporary)
+            compiler, node = root / "VS 14.44", root / "Node 22"
+            pwsh_directories = [root / "PowerShell 7", root / "Other PowerShell"]
+            for directory in (compiler, node, *pwsh_directories):
+                directory.mkdir()
+            for directory in pwsh_directories:
+                (directory / "pwsh.exe").write_bytes(b"fixture, never executed")
+            retained = [str(Path(powershell).parent), str(compiler), str(node)]
+            hidden = [str(pwsh_directories[0]) + "\\", str(pwsh_directories[0]).upper(),
+                      '"' + str(pwsh_directories[1]) + '\\"']
+            for index, entries in enumerate((retained, retained + hidden)):
+                with self.subTest(pwsh_present=bool(index)):
+                    output = root / f"output-{index}.txt"
+                    result = subprocess.run([
+                        powershell, "-NoLogo", "-NoProfile", "-NonInteractive",
+                        "-ExecutionPolicy", "Bypass", "-Command", script,
+                    ], env={**os.environ, "PATH": ";".join(entries), "GITHUB_OUTPUT": str(output)},
+                        capture_output=True, timeout=30, check=False)
+                    self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+                    line = output.read_text(encoding="utf-8-sig").strip()
+                    self.assertTrue(line.startswith("env="))
+                    self.assertEqual(json.loads(line.removeprefix("env=")), {"PATH": ";".join(retained)})
 
     def test_fuzz_lockfile_tracks_workspace_crate_versions(self):
         lock = tomllib.loads((ROOT / "fuzz/Cargo.lock").read_text())
