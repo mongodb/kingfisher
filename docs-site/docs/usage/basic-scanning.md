@@ -41,6 +41,24 @@ encodings such as Latin-1, GBK, and Shift-JIS do not require transcoding for ASC
 
 > **Note:** `kingfisher scan` detects whether the input is a Git repository or a plain directory, no extra flags required.
 
+### Live progress and final counts
+
+Interactive scans display a live progress line on **stderr**:
+
+```text
+⠸ scanning   663,204 inputs · 19.04 GB · 613.2 MB/s · 103,411 findings · 00:31
+⠸ validating 1,188/1,235 findings checked · 137,799 findings · 01:54
+```
+
+The `findings` total counts reportable **occurrences** as they are discovered,
+after detection filters but before final deduplication. It can therefore exceed
+the final report's deduplicated count. Hidden component helpers are excluded unless
+`--include-hidden-findings` is enabled. Validation progress counts reportable
+findings checked, not provider requests or credentials confirmed active.
+Concurrent scanning and validation share the live total; report deduplication and
+machine-readable stdout remain unchanged. Quiet and non-interactive runs do not
+emit the live progress line.
+
 ### Scan with secret validation
 
 ```bash

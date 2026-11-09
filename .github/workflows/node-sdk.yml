@@ -4,9 +4,9 @@ on:
   push:
     branches: [main, development]
     tags: ['npm-v*']
-    paths: ['javascript/**', 'crates/**', 'Cargo.toml', 'Cargo.lock', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES', 'third-party/kingfisher-vectorscan/**', 'scripts/third-party-notices.cjs', 'scripts/tests/third-party-notices.test.cjs', 'scripts/license-overrides/**', 'Makefile', '.gitattributes', 'docs/JAVASCRIPT.md', 'scripts/tests/test_node_sdk*.py', '.github/workflows/node-sdk.yml']
+    paths: ['javascript/**', 'crates/**', 'Cargo.toml', 'Cargo.lock', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES', 'third-party/kingfisher-vectorscan/**', 'scripts/third-party-notices.cjs', 'scripts/tests/third-party-notices.test.cjs', 'scripts/license-overrides/**', 'Makefile', '.gitattributes', 'docs/JAVASCRIPT.md', 'scripts/tests/test_node_sdk*.py', '.github/actions/vectorscan-prebuilt/**', 'scripts/fetch-vectorscan.py', 'scripts/tests/test_fetch_vectorscan.py', '.github/workflows/node-sdk.yml']
   pull_request:
-    paths: ['javascript/**', 'crates/**', 'Cargo.toml', 'Cargo.lock', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES', 'third-party/kingfisher-vectorscan/**', 'scripts/third-party-notices.cjs', 'scripts/tests/third-party-notices.test.cjs', 'scripts/license-overrides/**', 'Makefile', '.gitattributes', 'docs/JAVASCRIPT.md', 'scripts/tests/test_node_sdk*.py', '.github/workflows/node-sdk.yml']
+    paths: ['javascript/**', 'crates/**', 'Cargo.toml', 'Cargo.lock', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES', 'third-party/kingfisher-vectorscan/**', 'scripts/third-party-notices.cjs', 'scripts/tests/third-party-notices.test.cjs', 'scripts/license-overrides/**', 'Makefile', '.gitattributes', 'docs/JAVASCRIPT.md', 'scripts/tests/test_node_sdk*.py', '.github/actions/vectorscan-prebuilt/**', 'scripts/fetch-vectorscan.py', 'scripts/tests/test_fetch_vectorscan.py', '.github/workflows/node-sdk.yml']
   workflow_dispatch:
 
 permissions:
@@ -119,6 +119,9 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install cmake boost
       - run: npm ci --ignore-scripts
+      - uses: ./.github/actions/vectorscan-prebuilt
+        with:
+          target: ${{ matrix.target }}
       - name: Rust formatting and binding lint
         run: |
           cargo fmt --all --check

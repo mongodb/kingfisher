@@ -155,7 +155,9 @@ pub(crate) fn run_rules_check(args: &RulesCheckArgs) -> Result<()> {
     let mut num_warnings = 0;
     // Load and check rules
     let loader = RuleLoader::from_rule_specifiers(&args.rules);
-    let loaded = loader.load(&create_default_scan_args()?)?;
+    let mut scan_args = create_default_scan_args()?;
+    scan_args.confidence = args.confidence;
+    let loaded = loader.load(&scan_args)?;
     let resolved = loaded.resolve_enabled_rules_owned()?;
     let betterleaks_prefilter = loaded.betterleaks_prefilter_for(&resolved);
     let rules_db =
@@ -254,7 +256,9 @@ pub(crate) fn run_rules_check(args: &RulesCheckArgs) -> Result<()> {
 pub(crate) fn run_rules_list(args: &RulesListArgs) -> Result<()> {
     // Load rules
     let loader = RuleLoader::from_rule_specifiers(&args.rules);
-    let loaded = loader.load(&create_default_scan_args()?)?;
+    let mut scan_args = create_default_scan_args()?;
+    scan_args.confidence = args.confidence;
+    let loaded = loader.load(&scan_args)?;
     let resolved = loaded.resolve_enabled_rules()?;
     let mut writer = args.output_args.get_writer()?;
     #[cfg(debug_assertions)]

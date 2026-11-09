@@ -12,7 +12,7 @@ uv add kingfisher-secret-scanner
 
 The **PyPI distribution** is `kingfisher-secret-scanner`; the **Python import** is
 `kingfisher_sdk`. It coexists with the separately distributed `kingfisher-bin` CLI.
-The prepared SDK version is **1.6.2**, a backward-compatible patch release.
+The prepared SDK version is **1.6.3**, a backward-compatible patch release.
 The SDK version is independent of the CLI and Rust library versions.
 
 SDK/runtime changes need a new PyPI version. The release workflow checks this
@@ -20,7 +20,7 @@ before native builds, while default manual runs remain test-only. Maintainers
 can check the prepared version without building or publishing:
 
 ```bash
-python3 scripts/check-sdk-release.py --require-new --expected-version 1.6.2
+python3 scripts/check-sdk-release.py --require-new --expected-version 1.6.3
 ```
 
 Explicit publication requires upstream `main`, `publish=true`, and matching
@@ -101,6 +101,18 @@ uv run --no-sync python python/examples/rules.py betterleaks.aws-access-token --
 ```
 
 ## Filter findings and choose inputs
+
+The shared built-in catalog includes `betterleaks.generic-api-key` at static low confidence.
+Default `Rules()` and `Scanner()` use minimum medium confidence, excluding it before native
+compilation, as does the default CLI.
+Opt in with `Rules(confidence="low")` and pass those rules to `Scanner(rules)`.
+`betterleaks.generic-credential-uri` stays medium; `generic-password` and `generic-username`
+remain excluded from the catalog. Generic rules are not all low confidence.
+
+All rules use configured confidence only; filters cannot upgrade or downgrade findings,
+and there are no runtime confidence variants. Custom YAML/TOML files still load without
+edits: legacy one-string `setConfidence(...)` and `filter.setConfidence(...)` calls are
+inert value passthroughs. Rejection filters and credential-association helpers remain active.
 
 `Rules()` and the default `Scanner()` reuse the CLI's compiled Vectorscan rule
 cache. Use `Rules(cache_dir="rule-cache")` to choose a directory, or set

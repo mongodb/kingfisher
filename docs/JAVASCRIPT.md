@@ -2,7 +2,7 @@
 
 [← Back to README](../README.md)
 
-The `kingfisher-secret-scanner` npm SDK **0.1.0** is a **preview of npm support**.
+The `kingfisher-secret-scanner` npm SDK **1.0.0** is a stable release.
 It exposes Kingfisher's Rust components in-process through napi-rs and Node-API.
 Install with npm and import/require `kingfisher-secret-scanner` in JavaScript. No
 Python interpreter, CLI process, or separate Kingfisher installation is involved.
@@ -12,6 +12,21 @@ versions. The same distribution name on **PyPI** is the separate Python SDK:
 install with pip and `import kingfisher_sdk`, not the npm package. Neither SDK
 distributes the CLI. See [source and examples](../javascript) and the
 [Rust](LIBRARY.md) and [Python](PYPI.md) embedding guides.
+
+## Showcase: Kingfisher Workbench
+
+[Kingfisher Workbench](../javascript/examples/kingfisher-workbench/README.md) is a complete,
+commented SDK application: working-tree and Git-history scans, live progress,
+redacted HTML reports, and separately enabled validation and revocation.
+
+![Kingfisher Workbench with synthetic findings](../javascript/examples/kingfisher-workbench/screenshots/report-overview.png)
+
+From a [built checkout](#build-and-test-from-a-checkout), run
+`node examples/kingfisher-workbench/scripts/checkout.mjs demo` in `javascript/` and open the printed
+loopback URL. The demo creates a temporary repository and validates only synthetic
+credentials against a local mock provider. Revocation requires browser confirmation
+and changes mock state only. Real-repository runs default to offline detection and
+redacted reports; see the app's walkthrough before enabling external operations.
 
 ## Start here: a reproducible workflow
 
@@ -67,7 +82,7 @@ After publication, create an application directory and run:
 
 ```sh
 npm init -y
-npm install kingfisher-secret-scanner@0.1.0 --ignore-scripts
+npm install kingfisher-secret-scanner@1.0.0 --ignore-scripts
 ```
 
 Use `import { Scanner } from 'kingfisher-secret-scanner'` in a `.mjs` file,
@@ -237,6 +252,23 @@ contain both formats. Custom TOML IDs gain the `custom.` prefix. `metadata()`,
 `detail(exactId)` and `resolve(selector)` are offline. Selection supports exact
 IDs, unambiguous display names and ID families, never fuzzy execution.
 
+The shared catalog includes `betterleaks.generic-api-key` at static low confidence, retaining all
+rejection filters but no confidence-upgrade branch. The default `Rules.load()` uses medium
+confidence and excludes it before native regex compilation; use
+`Rules.load({ confidence: "low" })` to include it.
+For dependency-aware selection, opt into
+`Rules.load({ confidence: "high", includeDependencies: true })`: compile high-confidence
+roots plus their transitive declared `depends_on_rule` helpers, including lower-confidence
+visible or invisible helpers. Unrelated lower-confidence rules remain excluded before
+compilation. `includeDependencies` defaults to `false`; existing loading behavior is unchanged.
+`betterleaks.generic-credential-uri` stays medium; `generic-password` and `generic-username`
+remain excluded from the catalog.
+
+All rules use their configured confidence; there are no dynamic upgrades, demotions, or runtime
+confidence variants. Existing custom YAML/TOML rules still load without edits. Legacy
+one-string-argument `setConfidence(...)` and `filter.setConfidence(...)` calls are inert string
+passthroughs; rejection filters and association helpers remain active.
+
 Rules use the shared compiled database cache by default. `cacheDir` overrides
 `KF_RULE_CACHE_DIR` and the platform cache directory; `cache: false` bypasses it.
 `cacheStatus` is `loaded`, `stored` or `bypassed`. Only use trusted cache directories;
@@ -384,6 +416,28 @@ try {
   await revoker.close();
 }
 ```
+
+To authorize only a subset, retain the full original batch and pass exact original
+objects as `candidates` (for example, after loading high-confidence roots with
+`includeDependencies: true`):
+
+```typescript
+const candidates = findings.filter(f => f.visible && f.confidence === "high");
+const results = await validator.validate(findings, { candidates, timeoutMs: 30_000 });
+```
+
+Candidates must be unique members of that same-input batch, not redacted reports or
+reconstructed objects. Only candidates receive validation results/provider checks;
+all original helpers remain available for dependency resolution. `candidates: []`
+performs no checks while still honoring cancellation/deadlines. Omitting the option
+preserves existing whole-batch validation behavior. Results retain their original
+private snapshots for later authorized analysis/revocation.
+
+Selected candidates are preflighted like `plan.validate()`: a candidate with a
+missing, ambiguous or unrenderable input (for example, an unset template variable)
+is `skipped` with a diagnostic reason before any provider request. Whole-batch
+validation without `candidates` may still send that request. `candidates` takes
+original `Finding` objects, not the records in `RevocationPlan.candidates`.
 
 That fragment assumes existing `scanner` and complete same-input `findings`.
 For a fully runnable version, start with the [local mock](../javascript/examples/local-workflow.mjs).

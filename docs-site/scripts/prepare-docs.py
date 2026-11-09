@@ -149,7 +149,7 @@ DOC_MAP = {
     "JAVASCRIPT.md": (
         "reference/javascript-bindings.md",
         "JavaScript and TypeScript SDK",
-        "Use Kingfisher's npm support preview (0.1.0): native Node-API detection, validation, revocation and VS Code workspace extensions.",
+        "Use Kingfisher's stable Node SDK (1.0.0): native Node-API detection, validation, revocation and VS Code workspace extensions.",
     ),
     "COMPARISON.md": (
         "reference/comparison.md",
@@ -261,13 +261,20 @@ def rewrite_links(content: str, *, root_level: bool = False) -> str:
         )
 
     def source_link(match: re.Match) -> str:
-        path = match.group(1)
-        suffix = match.group(2)
-        view = "tree" if path.endswith("/") else "blob"
-        return f"](https://github.com/mongodb/kingfisher/{view}/main/{path}{suffix})"
+        label = match.group(1)
+        path = match.group(2)
+        suffix = match.group(3)
+        if label.startswith("!"):
+            # Image sources need bytes, not GitHub's HTML blob viewer. Ordinary
+            # links to those same files should still open the repository viewer.
+            url = f"https://raw.githubusercontent.com/mongodb/kingfisher/main/{path}"
+        else:
+            view = "tree" if path.endswith("/") else "blob"
+            url = f"https://github.com/mongodb/kingfisher/{view}/main/{path}"
+        return f"{label}({url}{suffix})"
 
     content = re.sub(
-        r"\]\((?:\.\./)?((?:crates|examples|python|javascript|\.github)/[^)\s#?]*)([^)]*)\)",
+        r"(!?\[[^\]\n]*\])\((?:\.\./)?((?:crates|examples|python|javascript|\.github)/[^)\s#?]*)([^)]*)\)",
         source_link,
         content,
     )

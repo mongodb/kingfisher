@@ -1,6 +1,6 @@
 {
   "name": "kingfisher-secret-scanner-linux-x64-gnu",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "cpu": [
     "x64"
   ],
@@ -10,7 +10,20 @@
     "README.md"
   ],
   "description": "Native Kingfisher secret detection, credential validation and explicit revocation for Node.js",
-  "license": "Apache-2.0 AND MIT AND BSD-3-Clause AND CC-BY-SA-4.0",
+  "keywords": [
+    "secrets",
+    "secret-scanner",
+    "security",
+    "credentials",
+    "validation",
+    "revocation",
+    "git",
+    "typescript",
+    "napi",
+    "rust"
+  ],
+  "homepage": "https://mongodb.github.io/kingfisher/reference/javascript-bindings/",
+  "license": "Apache-2.0",
   "engines": {
     "node": "^22.13.0 || ^24.0.0 || ^26.0.0"
   },
@@ -19,6 +32,7 @@
     "url": "https://github.com/mongodb/kingfisher.git",
     "directory": "javascript"
   },
+  "bugs": "https://github.com/mongodb/kingfisher/issues",
   "os": [
     "linux"
   ],

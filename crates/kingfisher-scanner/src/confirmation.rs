@@ -12,6 +12,18 @@ impl<'r, 'h> IndexedCaptures<'r, 'h> {
         Self { state: State::Search(regex.captures_iter(haystack)) }
     }
 
+    /// Replay the complete input, retaining the original regex's capture semantics.
+    pub fn replay(
+        regex: &'r regex::bytes::Regex,
+        haystack: &'h [u8],
+        replay: Option<&'r kingfisher_rules::replay_regex::ReplayRegex>,
+    ) -> Self {
+        match replay {
+            Some(replay) => Self { state: State::Replay(replay.captures_iter(haystack)) },
+            None => Self::search(regex, haystack),
+        }
+    }
+
     pub(crate) fn one(captures: Option<regex::bytes::Captures<'h>>) -> Self {
         Self { state: State::One(captures) }
     }
@@ -29,6 +41,7 @@ impl<'r, 'h> IndexedCaptures<'r, 'h> {
         match self.state {
             State::One(captures) => ConfirmationCaptures::One(captures),
             State::Search(captures) => ConfirmationCaptures::Search(captures),
+            State::Replay(captures) => ConfirmationCaptures::Search(captures.into_legacy()),
             state @ State::SearchFrom { .. } => ConfirmationCaptures::One(Self { state }.next()),
         }
     }
@@ -45,6 +58,7 @@ impl<'r, 'h> IndexedCaptures<'r, 'h> {
 enum State<'r, 'h> {
     One(Option<regex::bytes::Captures<'h>>),
     Search(regex::bytes::CaptureMatches<'r, 'h>),
+    Replay(kingfisher_rules::replay_regex::ReplayCaptures<'r, 'h>),
     SearchFrom { regex: &'r regex::bytes::Regex, haystack: &'h [u8], position: usize },
 }
 
@@ -57,6 +71,7 @@ impl<'h> IndexedCaptures<'_, 'h> {
         Ok(match &mut self.state {
             State::One(captures) => captures.take(),
             State::Search(captures) => captures.next(),
+            State::Replay(captures) => captures.next(),
             State::SearchFrom { regex, haystack, position } => {
                 while *position <= haystack.len() {
                     control.check()?;
@@ -97,6 +112,35 @@ mod tests {
         let found = captures.next().unwrap();
         assert_eq!(found.get(0).unwrap().range(), 3..3);
         assert!(captures.next().is_none());
+    }
+
+    #[test]
+    fn replay_keeps_cancellation_and_resumed_legacy_captures() {
+        let regex = regex::bytes::RegexBuilder::new("(?P<token>[ab])")
+            .unicode(false)
+            .size_limit(16 * 1024 * 1024)
+            .build()
+            .unwrap();
+        let replay = kingfisher_rules::replay_regex::ReplayRegex::new(&regex).unwrap();
+        for finder in [None, Some(&replay)] {
+            let token = crate::CancellationToken::default();
+            let control = crate::ScanControl::default().with_cancellation(token.clone());
+            let mut captures = IndexedCaptures::replay(&regex, b"a b a", finder);
+            assert_eq!(
+                captures.next_with_control(&control).unwrap().unwrap().get(0).unwrap().range(),
+                0..1
+            );
+            token.cancel();
+            assert!(matches!(
+                captures.next_with_control(&control),
+                Err(crate::ScanAborted::Cancelled)
+            ));
+            let remaining: Vec<_> = captures
+                .into_legacy()
+                .map(|capture| capture.name("token").unwrap().range())
+                .collect();
+            assert_eq!(remaining, [2..3, 4..5]);
+        }
     }
 
     #[test]

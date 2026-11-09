@@ -8,12 +8,12 @@
         <div>
           <p class="kf-eyebrow"><span class="kf-dot"></span> OPEN SOURCE SECURITY · BUILT BY MONGODB</p>
           <h1 id="kf-title" tabindex="-1">Find the secret.<br>Understand <em>the risk.</em></h1>
-          <p class="kf-lead">Find exposed credentials. Validate what’s live. Revoke supported secrets — from the CLI, Rust, Python, or the prepared Node.js SDK. All open source.</p>
+          <p class="kf-lead">Find exposed credentials. Validate what’s live. Revoke supported secrets — from the CLI, Rust, Python, or the Node.js SDK. All open source.</p>
           <div class="kf-actions">
             <a class="kf-button kf-button--primary" href="{{ 'viewer/' | url }}">Open report viewer <span aria-hidden="true">↗</span></a>
             <a class="kf-button kf-button--outline" href="{{ 'rules/builtin-rules/' | url }}">Explore detection rules <span aria-hidden="true">→</span></a>
           </div>
-          <p><a class="kf-text-link" href="{{ 'reference/library/' | url }}">Rust library →</a> &nbsp; · &nbsp; <a class="kf-text-link" href="{{ 'reference/python-bindings/' | url }}">Python SDK →</a> &nbsp; · &nbsp; <a class="kf-text-link" href="{{ 'reference/javascript-bindings/' | url }}">Node SDK (prepared) →</a></p>
+          <p><a class="kf-text-link" href="{{ 'reference/library/' | url }}">Rust library →</a> &nbsp; · &nbsp; <a class="kf-text-link" href="{{ 'reference/python-bindings/' | url }}">Python SDK →</a> &nbsp; · &nbsp; <a class="kf-text-link" href="{{ 'reference/javascript-bindings/' | url }}">Node SDK →</a></p>
           <p class="kf-hero__note">Credential revocation, free and open source. Among the open-source tools in our comparison, Kingfisher and Betterleaks 2.0 include built-in revocation for supported credentials, with no enterprise subscription required.</p>
           <a class="kf-text-link" href="{{ 'reference/comparison/' | url }}">See the comparison <span aria-hidden="true">→</span></a>
         </div>
@@ -115,13 +115,13 @@ print(f"{len(findings)} findings")</code></pre>
       <div>
         <p class="kf-eyebrow">JAVASCRIPT · TYPESCRIPT · NODE-API</p>
         <h2 id="node-title">Use Kingfisher<br>from Node.js.</h2>
-        <p>The <code>kingfisher-secret-scanner</code> npm SDK <strong>0.1.0</strong> is a <strong>preview of npm support</strong>, independently versioned from the CLI, Python SDK, and Rust crates. It calls the same core, rules, and scanner crates in process — no Python interpreter or CLI subprocess.</p>
+        <p>The stable <code>kingfisher-secret-scanner</code> npm SDK <strong>1.0.0</strong> is independently versioned from the CLI, Python SDK, and Rust crates. It calls the same core, rules, and scanner crates in process — no Python interpreter or CLI subprocess.</p>
         <p>Compose local and Git inputs, explicit content transforms, offline detection, and redacted reports. Validation and revocation stay separate, explicit operations. Supports Node 22, 24 and 26, minimum 22.13.0.</p>
         <a class="kf-text-link" href="{{ 'reference/javascript-bindings/' | url }}">Node SDK guide and platform requirements →</a>
-        <p><a href="https://github.com/mongodb/kingfisher/tree/main/javascript/examples">Runnable JavaScript/TypeScript examples</a></p>
+        <p><a href="https://github.com/mongodb/kingfisher/tree/main/javascript/examples/kingfisher-workbench">Kingfisher Workbench: a complete SDK showcase</a> · <a href="https://github.com/mongodb/kingfisher/tree/main/javascript/examples">Runnable examples</a></p>
       </div>
       <div class="kf-terminal">
-        <div class="kf-console__bar"><span>SCAN CONTENT</span><span>NPM PREVIEW · 0.1.0</span></div>
+        <div class="kf-console__bar"><span>SCAN CONTENT</span><span>NPM SDK · 1.0.0</span></div>
         <pre><code><span>// Load and compile rules once, then reuse the scanner</span>
 import { Scanner } from "kingfisher-secret-scanner";
 

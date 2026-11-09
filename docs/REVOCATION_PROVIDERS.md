@@ -17,7 +17,7 @@ still depend on the credential.
 
 Kingfisher supports direct revocation for selected built-in imported detectors and custom rules in
 the Kingfisher YAML or Betterleaks TOML formats. The generated catalog now has **42 revocation
-bindings** across **502 built-in rules**. A binding does not imply support for every
+bindings** across **503 built-in rules**. A binding does not imply support for every
 credential format matched by that detector.
 
 Reviewed operational actions live in the

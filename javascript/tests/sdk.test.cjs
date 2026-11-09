@@ -50,6 +50,36 @@ test('rule inspection and selection are offline, exact and deterministic', () =>
   assert.throws(() => rules.detail('unknown'), TypeError);
 });
 
+test('built-in generic API keys require low confidence and retain rejection filters', async () => {
+  const ruleId = 'betterleaks.generic-api-key';
+  const defaults = await sdk.Rules.load({ cache: false });
+  assert.ok(!defaults.metadata().some(rule => rule.id === ruleId));
+  const builtins = await sdk.Rules.load({ confidence: 'low', cache: false });
+  const ids = new Set(builtins.metadata().map(rule => rule.id));
+  assert.ok(ids.has(ruleId));
+  assert.ok(!ids.has('betterleaks.generic-password'));
+  assert.ok(!ids.has('betterleaks.generic-username'));
+  const detail = builtins.detail(ruleId);
+  assert.equal(detail.confidence, 'low');
+  assert.doesNotMatch(JSON.stringify(detail.betterleaks_filter), /setConfidence/);
+  assert.doesNotMatch(JSON.stringify(builtins.detail('betterleaks.generic-credential-uri').betterleaks_filter), /setConfidence/);
+  const secret = 'qZ7mR9vN2xP5kL8sT4wY';
+  const source = `é😊\napi_key = "${secret}"`;
+  for (const scannerType of [sdk.Scanner, sdk.DetectionScanner]) {
+    const value = await scannerType.create({ rules: builtins });
+    resources.add(value);
+    const findings = (await value.scan(source)).filter(finding => finding.ruleId === ruleId);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].secret, secret);
+    assert.equal(findings[0].confidence, 'low');
+    const start = Buffer.byteLength(source.slice(0, source.indexOf(secret)));
+    assert.equal(findings[0].location.startOffset, start);
+    assert.equal(findings[0].location.endOffset, start + secret.length);
+    assert.ok(!(await value.scan('api_key = "this-is-an-example-api-key"'))
+      .some(finding => finding.ruleId === ruleId));
+  }
+});
+
 test('custom Betterleaks TOML uses the custom namespace', async () => {
   const file = path.join(directory, 'company.toml');
   fs.writeFileSync(file, `[[rules]]\nid = "acme-toml"\ndescription = "Acme TOML token"\nregex = '''\\b(toml_[a-z0-9]{16})\\b'''\n`);
@@ -58,6 +88,61 @@ test('custom Betterleaks TOML uses the custom namespace', async () => {
   resources.add(value);
   assert.deepEqual(custom.resolve('acme'), ['custom.acme-toml']);
   assert.equal((await value.scan('toml_abcd1234efgh5678'))[0].ruleId, 'custom.acme-toml');
+});
+
+test('legacy YAML/TOML confidence helpers cannot change static selection or findings', async () => {
+  for (const format of ['yml', 'toml']) {
+    for (const helper of ['setConfidence', 'filter.setConfidence']) {
+      const definitions = [];
+      const toml = [];
+      const tokens = {};
+      const rejected = [];
+      for (const [configured, requested] of [['low', 'high'], ['high', 'low']]) {
+        const id = `acme.static-${configured}`;
+        tokens[configured] = `kf_${configured}_a9B2c7D4e1F8g3H6`;
+        const reject = `kf_${configured}_REJECTa9B2c7D4e1`;
+        rejected.push(reject);
+        const callee = helper.startsWith('filter.')
+          ? { kind: 'member', node: { kind: 'identifier', value: 'filter' }, property: { kind: 'string', value: 'setConfidence' }, method: true }
+          : { kind: 'identifier', value: 'setConfidence' };
+        const expression = {
+          kind: 'binary', operator: '||',
+          left: { kind: 'binary', operator: '!=',
+            left: { kind: 'call', callee, arguments: [{ kind: 'string', value: requested }] },
+            right: { kind: 'string', value: requested } },
+          right: { kind: 'binary', operator: '==',
+            left: { kind: 'member', node: { kind: 'identifier', value: 'finding' }, property: { kind: 'string', value: 'secret' } },
+            right: { kind: 'string', value: reject } },
+        };
+        const pattern = `(kf_${configured}_[A-Za-z0-9]{16})`;
+        definitions.push({ id, name: id, pattern, confidence: configured, min_entropy: 0, betterleaks_filter: expression });
+        const filter = `${helper}("${requested}") != "${requested}" || finding["secret"] == "${reject}"`;
+        toml.push(`[[rules]]\nid = "${id}"\ndescription = "${id}"\nregex = '${pattern}'\nconfidence = "${configured}"\nfilter = '${filter}'\n`);
+      }
+      const file = path.join(directory, `static-${format}-${helper}.` + format);
+      fs.writeFileSync(file, format === 'yml' ? JSON.stringify({ rules: definitions }) : toml.join('\n'));
+      const prefix = format === 'toml' ? 'custom.' : '';
+      for (const minimum of ['low', 'medium', 'high']) {
+        const custom = await sdk.Rules.load({ paths: [file], builtins: false, confidence: minimum, cache: false });
+        const expected = { [`${prefix}acme.static-high`]: 'high' };
+        if (minimum === 'low') expected[`${prefix}acme.static-low`] = 'low';
+        assert.deepEqual(new Set(custom.metadata().map(rule => rule.id)), new Set(Object.keys(expected)));
+        for (const scannerType of [sdk.Scanner, sdk.DetectionScanner]) {
+          const value = await scannerType.create({ rules: custom });
+          resources.add(value);
+          try {
+            const findings = await value.scan(Object.values(tokens).join('\n'));
+            assert.deepEqual(Object.fromEntries(findings.map(finding => [finding.ruleId, finding.confidence])), expected);
+            assert.deepEqual(new Set(findings.map(finding => finding.secret)), new Set(Object.values(expected).map(level => tokens[level])));
+            assert.deepEqual(await value.scan(rejected.join('\n')), []);
+          } finally {
+            await value.close();
+            resources.delete(value);
+          }
+        }
+      }
+    }
+  }
 });
 
 test('text, bytes, typed-array slices and files use the same native detector', async () => {
@@ -190,6 +275,8 @@ test('input objects retain private snapshots and default representations omit pa
   const value = await scanner();
   const data = Buffer.from(TOKEN);
   const input = new sdk.ScanInput({ path: 'upload.env', data });
+  assert.equal(input.byteLength, TOKEN.length);
+  assert.equal(sdk.ScanInput.fromFile(__filename).byteLength, undefined);
   data.fill(0);
   input.data.fill(0);
   assert.equal((await value.scanInput(input)).findings[0].secret, TOKEN);

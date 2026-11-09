@@ -308,13 +308,11 @@ fn jdbc_userinfo_credentials_remain_available_through_uri_detection() {
 }
 
 #[test]
-fn builtin_catalog_keeps_generic_betterleaks_rules_excluded() {
+fn builtin_catalog_imports_api_keys_but_keeps_generic_passwords_and_usernames_excluded() {
     let rules = get_builtin_rules(Some(Confidence::Low)).unwrap();
-    for id in [
-        "betterleaks.generic-api-key",
-        "betterleaks.generic-password",
-        "betterleaks.generic-username",
-    ] {
+    let generic = rules.rules.get("betterleaks.generic-api-key").expect("generic API keys enabled");
+    assert_eq!(generic.confidence, Confidence::Low);
+    for id in ["betterleaks.generic-password", "betterleaks.generic-username"] {
         assert!(!rules.rules.contains_key(id), "unexpected built-in: {id}");
     }
 }

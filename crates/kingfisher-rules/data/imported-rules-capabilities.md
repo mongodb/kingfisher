@@ -4,6 +4,22 @@
 Detection patterns and upstream validation remain owned by their source projects; this file adds
 Kingfisher-specific behavior without creating another detector catalog.
 
+## Generic API-key confidence
+
+The built-in `generic-api-key` overlay sets static `low` confidence; `generic-credential-uri`
+stays `medium`. Generic rules are not all low confidence. `generic-password` and `generic-username`
+remain excluded from the catalog. The importer removes pinned upstream confidence-only
+computations from built-in filters, preserving every rejection predicate. Unknown setter layouts
+fail import for review. Default CLI/Python/Node minimum medium confidence excludes `generic-api-key`
+before native compilation; opt in with CLI `--confidence low`, Python `Rules(confidence="low")`,
+or Node `Rules.load({ confidence: 'low' })`.
+
+All rules use their configured confidence; filters cannot upgrade or downgrade findings, and there
+are no runtime confidence variants. Custom Betterleaks TOML and Kingfisher YAML files remain
+loadable without edits. Legacy one-string `setConfidence(...)` and `filter.setConfidence(...)`
+calls are inert value passthroughs. Rejection expressions and credential-association helpers
+remain active.
+
 ## Provider revocation
 
 [Provider contracts, required inputs, limits, and first-party provenance](revocation-sources.md)

@@ -2,7 +2,22 @@
 
 These examples teach **in-process Node.js scanning**, not the Kingfisher CLI.
 They use the public SDK API and work from the checkout before npm publication.
-The distribution is `kingfisher-secret-scanner`; its initial version is **0.1.0**.
+The distribution is `kingfisher-secret-scanner`; its stable version is **1.0.0**.
+
+## Showcase: Kingfisher Workbench
+
+[Kingfisher Workbench](kingfisher-workbench/README.md) is a complete, commented application:
+scan a working tree and Git history, follow live progress, triage a redacted HTML
+report, and explicitly validate or revoke supported credentials. It uses the SDK
+in process, with no Kingfisher CLI dependency.
+
+![Kingfisher Workbench: synthetic findings and validation results](kingfisher-workbench/screenshots/report-overview.png)
+
+After building the checkout, run `node examples/kingfisher-workbench/scripts/checkout.mjs demo`
+from `javascript/`. The demo creates a temporary Git repository, validates only
+against a loopback mock, and leaves revocation to an explicit browser confirmation.
+See its [walkthrough and safety notes](kingfisher-workbench/README.md) before adapting
+it to real repositories.
 
 ## Instructions for humans and LLM agents
 
@@ -50,7 +65,7 @@ Consumers receive native binaries and do **not** need Rust or a local Kingfisher
 
 ```sh
 npm init -y
-npm install kingfisher-secret-scanner@0.1.0 --ignore-scripts
+npm install kingfisher-secret-scanner@1.0.0 --ignore-scripts
 ```
 
 Copy the chosen example **and its `fixtures/` dependencies**, preserving their
@@ -72,7 +87,7 @@ All commands below run from **`javascript/`** in checkout mode.
 | Scan a project as JSONL | [scan-project.mjs](scan-project.mjs): `node examples/scan-project.mjs` | Reads local fixture; transforms may use temporary storage | One redacted input/result record |
 | Explicitly expand archives | [archive-content.mjs](archive-content.mjs): `node examples/archive-content.mjs` | Synthetic gzip; temporary extraction may occur | One member, preserved repository metadata, one finding |
 | Select a local Git scope | [git-scopes.mjs](git-scopes.mjs): see commands below | Reads the repository; no fetch/checkout/writes | JSONL with selected commit/blob provenance |
-| Prepare and validate safely | [local-workflow.mjs](local-workflow.mjs): `node examples/local-workflow.mjs` | Loopback HTTP, owned temporary rule file | One validation request; zero revocations |
+| Prepare and validate selected original findings | [local-workflow.mjs](local-workflow.mjs): `node examples/local-workflow.mjs` | Loopback HTTP, owned temporary rule file; full batch retained for helpers | One validation request; zero revocations |
 | Demonstrate explicit revocation | [local-workflow.mjs](local-workflow.mjs): `node examples/local-workflow.mjs --confirm-demo-revoke` | Changes only synthetic in-memory server state | One validation and one revocation; `active: false` |
 | Use TypeScript types | [typed-scan.mts](typed-scan.mts): `node --experimental-strip-types examples/typed-scan.mts` after `npm run test:types` | Reads a teaching rule only | One typed, redacted input/result record |
 | Scan a file with built-ins (CJS) | [content.cjs](content.cjs): `node examples/content.cjs examples/fixtures/project/config.env` | Reads one local file | Zero or more redacted built-in findings; no findings is success, not a coverage guarantee |

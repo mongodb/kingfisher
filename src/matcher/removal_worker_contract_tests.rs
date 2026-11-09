@@ -1,4 +1,3 @@
-
 use std::path::PathBuf;
 use std::sync::Barrier;
 
@@ -63,7 +62,7 @@ fn statistics_publish_on_worker_drop_and_include_repeated_scans() {
     );
     assert!(matches!(
         matcher.scan_blob(&blob, &source, None, false, false, true).unwrap(),
-        ScanResult::SeenWithMatches
+        ScanResult::SeenWithMatches(_)
     ));
     assert_eq!(stats(&global.lock().unwrap()), (0, 0, 0, 0));
     drop(matcher);
@@ -126,7 +125,7 @@ fn identical_bytes_are_rescanned_for_each_source_path_before_deduplication() {
     );
     assert!(matches!(
         matcher.scan_blob(&blob, &selected, None, false, false, true).unwrap(),
-        ScanResult::SeenWithMatches
+        ScanResult::SeenWithMatches(_)
     ));
 }
 
@@ -231,7 +230,10 @@ fn parallel_workers_share_deduplication_and_publish_complete_totals() {
                         assert_eq!(found.len(), 1);
                         true
                     }
-                    ScanResult::SeenWithMatches => false,
+                    ScanResult::SeenWithMatches(found) => {
+                        assert_eq!(found.len(), 1);
+                        false
+                    }
                     ScanResult::SeenSansMatches => panic!("no worker records a false entry"),
                 }
             }));
@@ -270,7 +272,7 @@ fn pristine_worker_clones_publish_their_own_scans_and_share_the_cache() {
     );
     assert!(matches!(
         second.scan_blob(&blob, &source, None, false, false, true).unwrap(),
-        ScanResult::SeenWithMatches
+        ScanResult::SeenWithMatches(_)
     ));
     drop(first);
     assert_eq!(stats(&global.lock().unwrap()), (1, 1, TOKEN.len() as u64, TOKEN.len() as u64));
@@ -331,7 +333,7 @@ fn cloning_a_used_worker_preserves_and_publishes_its_existing_counters() {
     let mut copied = original.clone();
     assert!(matches!(
         copied.scan_blob(&blob, &source, None, false, false, true).unwrap(),
-        ScanResult::SeenWithMatches
+        ScanResult::SeenWithMatches(_)
     ));
     assert_eq!(stats(&global.lock().unwrap()), (0, 0, 0, 0));
     drop(copied);

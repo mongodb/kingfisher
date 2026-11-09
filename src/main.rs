@@ -387,7 +387,7 @@ fn logging_filter(global_args: &GlobalArgs) -> tracing_subscriber::filter::Targe
 
 fn setup_logging(global_args: &GlobalArgs) {
     let fmt_layer = fmt::layer()
-        .with_writer(std::io::stderr)
+        .with_writer(kingfisher::util::progress_log_writer)
         .with_target(true) // Include the tracing target in each log line
         .with_ansi(std::io::stderr().is_terminal()) // Emit ANSI colours when stderr is a TTY
         .without_time();

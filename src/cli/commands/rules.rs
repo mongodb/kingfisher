@@ -172,6 +172,10 @@ pub enum RulesCommand {
 
 #[derive(Args, Debug)]
 pub struct RulesCheckArgs {
+    /// Minimum rule confidence to inspect (includes low-confidence rules by default)
+    #[arg(global = true, long, short = 'c', default_value = "low")]
+    pub confidence: ConfidenceLevel,
+
     /// Treat warnings as errors
     #[arg(long, short = 'W')]
     pub warnings_as_errors: bool,
@@ -182,6 +186,10 @@ pub struct RulesCheckArgs {
 
 #[derive(Args, Debug)]
 pub struct RulesListArgs {
+    /// Minimum rule confidence to inspect (includes low-confidence rules by default)
+    #[arg(global = true, long, short = 'c', default_value = "low")]
+    pub confidence: ConfidenceLevel,
+
     #[command(flatten)]
     pub rules: RuleSpecifierArgs,
 

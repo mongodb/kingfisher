@@ -6,6 +6,10 @@
 # derivation from upstream captures.
 version: 1
 betterleaks:
+  # Report generic API keys at a fixed confidence; the importer removes the
+  # upstream confidence-only branch while preserving every rejection filter.
+  generic-api-key:
+    confidence: low
   # Derive bare token patterns from upstream captures; keep formats and validators upstream.
   deepseek-api-key:
     bare: true

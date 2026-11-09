@@ -4,6 +4,7 @@ const { test } = require('node:test');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { pathToFileURL } = require('node:url');
 const { temporary } = require('./helpers.cjs');
 const root = path.resolve(__dirname, '..');
 const token = 'acme_demo_a9B2c7D4e1F8g3H6';
@@ -30,6 +31,71 @@ test('quickstart, custom rules, archive and filesystem recipes execute with reda
   const project = example('scan-project.mjs');
   assert.equal(project.length, 1);
   assert.equal(project[0].findings.length, 1);
+});
+
+test('npm README quickstart and project pipeline run offline with redacted output', async () => {
+  const directory = temporary();
+  const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8').replace(/\r\n/g, '\n');
+  const sdk = pathToFileURL(path.join(root, 'index.mjs')).href;
+  const secret = 'ghp_aB3dE6gH9jK2mN5pQ8sT1vW4yZ7cF0iL3oR6';
+  const run = heading => {
+    const start = readme.indexOf(`## ${heading}\n`);
+    assert.ok(start >= 0, `Missing documented recipe: ${heading}`);
+    const section = readme.slice(start).split('\n## ')[0];
+    const code = /```js\n([\s\S]*?)```/.exec(section)?.[1];
+    assert.ok(code, `Missing JavaScript example: ${heading}`);
+    // The public npm import is the only adaptation for an unpublished checkout.
+    // Never execute the separately documented provider-validation snippet here.
+    return spawnSync(process.execPath, ['--input-type=module', '-e',
+      code.replaceAll("'kingfisher-secret-scanner'", JSON.stringify(sdk))], {
+      cwd: directory, encoding: 'utf8', env: process.env, timeout: 120_000,
+    });
+  };
+  try {
+    const quick = run('Quick start: detect offline');
+    assert.equal(quick.status, 0, quick.stderr || quick.error?.message);
+    assert.match(quick.stdout, /betterleaks\.github-pat/);
+    assert.match(quick.stdout, /\[REDACTED\]/);
+    assert.ok(!quick.stdout.includes(secret));
+
+    fs.mkdirSync(path.join(directory, 'src'));
+    // Both hidden and ignored configuration are common secret locations. The
+    // literal README recipe must scan them, not only an ordinary visible file.
+    for (const name of ['config.env', '.env', 'ignored.env']) {
+      fs.writeFileSync(path.join(directory, 'src', name), `GITHUB_TOKEN=${secret}\n`);
+    }
+    fs.writeFileSync(path.join(directory, 'src', '.ignore'), 'ignored.env\n');
+    const project = run('Scan a project with a composable pipeline');
+    assert.equal(project.status, 0, project.stderr || project.error?.message);
+    const rows = project.stdout.trim().split(/\r?\n/).map(line => JSON.parse(line));
+    const detected = rows.filter(row => row.findings.some(f => f.ruleId === 'betterleaks.github-pat'));
+    assert.deepEqual(detected.map(row => path.basename(row.input.path)).sort(), ['.env', 'config.env', 'ignored.env']);
+    assert.ok(rows.every(row => row.findings.every(f => f.secret === '[REDACTED]')));
+    assert.ok(!project.stdout.includes(secret));
+
+    for (const name of ['config.env', '.env', 'ignored.env', '.ignore']) fs.unlinkSync(path.join(directory, 'src', name));
+    fs.rmdirSync(path.join(directory, 'src'));
+    const missing = run('Scan a project with a composable pipeline');
+    assert.equal(missing.status, 1, 'An unreadable input must not become a clean report');
+    assert.equal(missing.stdout, '');
+    assert.match(missing.stderr, /ERR_KINGFISHER_INPUT/);
+  } finally {
+    // Async removal honors Windows retries on supported Node 24.0 as well.
+    await fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+});
+
+test('Kingfisher Workbench safety regressions run against the checkout SDK', () => {
+  const env = { ...process.env };
+  // A separate runner must not inherit Node's internal nested-test suppression.
+  delete env.NODE_TEST_CONTEXT;
+  const result = spawnSync(process.execPath,
+    [path.join(root, 'examples', 'kingfisher-workbench', 'scripts', 'checkout.mjs'),
+      'test', '--test-reporter=tap'], {
+      cwd: root, encoding: 'utf8', env, timeout: 120_000,
+    });
+  assert.equal(result.status, 0, result.stderr || result.stdout || result.error?.message);
+  assert.match(result.stdout, /^# tests [1-9]\d*$/m, 'Showcase tests must actually execute');
 });
 
 test('project paths use built-in detectors and preserve input failures', () => {

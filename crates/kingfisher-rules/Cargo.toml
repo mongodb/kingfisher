@@ -1,6 +1,6 @@
 [package]
 name = "kingfisher-rules"
-version = "3.1.0"
+version = "3.2.0"
 description = "Rule definitions and database for Kingfisher secret scanner"
 edition.workspace = true
 rust-version.workspace = true
@@ -17,8 +17,8 @@ features = ["kingfisher-vectorscan/build-from-source"]
 targets = ["x86_64-unknown-linux-gnu"]
 
 [features]
-# Unstable regex-bound integration used by kingfisher-scanner; no semver guarantee.
-__scanner-internals = []
+# Unstable confirmation integration used by kingfisher-scanner; no semver guarantee.
+__scanner-internals = ["dep:memchr", "dep:regex-automata"]
 
 [dependencies]
 # Internal dependencies
@@ -35,8 +35,11 @@ schemars.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 
-# Regex
+# Regex and literal-set matching
+aho-corasick = "1.1"
+memchr = { version = "2.8", optional = true }
 regex.workspace = true
+regex-automata = { workspace = true, optional = true }
 regex-syntax.workspace = true
 
 # Hashing

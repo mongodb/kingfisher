@@ -734,7 +734,7 @@ impl Desktop {
                 self.status = format!(
                     "{}{} · {} GB scanned · {} blobs{} · {}s",
                     progress["phase"].as_str().unwrap_or("Scanning"),
-                    if total > 0 {
+                    if progress["kind"] == "validation" && total > 0 {
                         format!(" {}/{}", number(completed), number(total))
                     } else {
                         String::new()
@@ -2523,7 +2523,7 @@ impl Desktop {
                         }))
                         .when(validating, |view| {
                             view.child(div().text_lg().child(format!(
-                                "{} / {} credentials checked",
+                                "{} / {} findings checked",
                                 number(completed),
                                 number(total)
                             )))

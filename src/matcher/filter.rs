@@ -25,7 +25,10 @@ use super::{
 // Re-use the canonical secret capture selection from kingfisher-scanner.
 use kingfisher_rules::{
     RulesDatabase,
-    betterleaks_filter::{BetterleaksFilterContext, BetterleaksFilterLineCache},
+    betterleaks_filter::{
+        BetterleaksFilterContext, BetterleaksFilterFragment, BetterleaksFilterLineCache,
+        BetterleaksFilterPrefix,
+    },
 };
 use kingfisher_scanner::primitives::{
     MatchSpans, check_pattern_requirements, check_uri_validation, find_secret_capture_with_group,
@@ -274,7 +277,11 @@ pub(crate) fn filter_match<'b>(
     candidate_index: Option<&kingfisher_scanner::primitives::CandidateMatchIndex>,
     filter_line_cache: &mut BetterleaksFilterLineCache,
 ) -> bool {
-    if rule.syntax().betterleaks_path_only || !rule.matches_path(filename) {
+    if rule.syntax().betterleaks_path_only
+        || !rule.matches_path(filename)
+        || (!rule.is_runtime_dependency_helper()
+            && !rule.confidence().is_at_least(&rule.runtime_minimum_confidence()))
+    {
         return false;
     }
 
@@ -289,6 +296,7 @@ pub(crate) fn filter_match<'b>(
     let haystack = ts_match.unwrap_or(default_slice);
     let line_index = std::cell::OnceCell::new();
     let fragment_raw = std::cell::OnceCell::new();
+    let filter_fragment = std::cell::OnceCell::new();
     let mut line_text = FxHashMap::default();
     let mut confirmed = false;
 
@@ -305,7 +313,11 @@ pub(crate) fn filter_match<'b>(
             start,
         )
     } else {
-        kingfisher_scanner::__cli_internals::IndexedCaptures::search(re, haystack)
+        kingfisher_scanner::__cli_internals::IndexedCaptures::replay(
+            re,
+            haystack,
+            rules_db.replay_regex(rule_id),
+        )
     };
     for captures in captures {
         let full_capture = captures.get(0).unwrap();
@@ -355,6 +367,17 @@ pub(crate) fn filter_match<'b>(
         }
 
         let filter_outcome = rule.betterleaks_filter().and_then(|expression| {
+            let secret = String::from_utf8_lossy(entropy_bytes);
+            let expression = match rules_db.evaluate_betterleaks_filter_prefix(expression, &secret)
+            {
+                Ok(Some(BetterleaksFilterPrefix::Complete(outcome))) => return Some(outcome),
+                Ok(Some(BetterleaksFilterPrefix::Remainder(expression))) => expression,
+                Ok(None) => expression,
+                Err(error) => {
+                    debug!(rule_id = rule.id(), %error, "Betterleaks filter evaluation failed");
+                    return None;
+                }
+            };
             let match_start_idx = full_capture.start();
             let match_end_idx = full_capture.end();
             let line_index = line_index
@@ -389,7 +412,6 @@ pub(crate) fn filter_match<'b>(
                     })
                 })
                 .collect::<BTreeMap<_, _>>();
-            let secret = String::from_utf8_lossy(entropy_bytes);
             let full_match = String::from_utf8_lossy(full_bytes);
             let context = BetterleaksFilterContext {
                 path: filename,
@@ -406,11 +428,12 @@ pub(crate) fn filter_match<'b>(
                 description: rule.name(),
                 captures,
             };
-            match rules_db.evaluate_betterleaks_filter_with_line_cache(
+            match rules_db.evaluate_betterleaks_filter_with_caches(
                 expression,
                 &context,
                 start + match_line_start_idx..start + match_line_end_idx,
                 filter_line_cache,
+                filter_fragment.get_or_init(|| BetterleaksFilterFragment::new(fragment_raw)),
             ) {
                 Ok(outcome) => Some(outcome),
                 Err(error) => {
@@ -420,12 +443,6 @@ pub(crate) fn filter_match<'b>(
             }
         });
         if filter_outcome.is_some_and(|outcome| outcome.discard) {
-            continue;
-        }
-        let effective_confidence = filter_outcome
-            .and_then(|outcome| outcome.confidence)
-            .unwrap_or_else(|| rule.confidence());
-        if !rule.accepts_effective_confidence(effective_confidence) {
             continue;
         }
 
@@ -475,20 +492,8 @@ pub(crate) fn filter_match<'b>(
             rule.betterleaks_secret_group(),
         );
 
-        let suppress_helper_reporting = rule.is_runtime_dependency_helper()
-            && !rule.reports_effective_confidence(effective_confidence);
-        let match_rule = if effective_confidence != rule.confidence() || suppress_helper_reporting {
-            let mut effective_rule = rule.as_ref().clone();
-            effective_rule.syntax.confidence = effective_confidence;
-            if suppress_helper_reporting {
-                effective_rule.suppress_runtime_reporting();
-            }
-            Arc::new(effective_rule)
-        } else {
-            Arc::clone(&rule)
-        };
         matches.push(BlobMatch {
-            rule: match_rule,
+            rule: Arc::clone(&rule),
             blob_id: blob.id_ref(),
             matching_input: only_matching_input,
             matching_input_offset_span,

@@ -74,7 +74,7 @@ impl InlineIgnoreConfig {
             return Some(false);
         }
 
-        let (start_line_start, start_line_end) = line_bounds(blob_bytes, span.start);
+        let (start_line_start, start_line_end) = line_bounds(blob_bytes, span.start, budget)?;
         if start_line_end > start_line_start {
             let start_line = &blob_bytes[start_line_start..start_line_end];
             budget = budget.checked_sub(start_line.len().max(128))?;
@@ -89,7 +89,7 @@ impl InlineIgnoreConfig {
         let mut cursor = start_line_start;
         while cursor > 0 {
             let previous_index = cursor.saturating_sub(1);
-            let (prev_start, prev_end) = line_bounds(blob_bytes, previous_index);
+            let (prev_start, prev_end) = line_bounds(blob_bytes, previous_index, budget)?;
             if prev_end <= prev_start {
                 break;
             }
@@ -111,9 +111,14 @@ impl InlineIgnoreConfig {
             cursor = prev_start;
         }
 
-        let end_index = if span.end == 0 { 0 } else { span.end - 1 };
+        let end_index = span.end.saturating_sub(1).min(blob_bytes.len());
         let (closing_line_start, closing_line_end) =
-            line_bounds(blob_bytes, end_index.min(blob_bytes.len()));
+            if (start_line_start..=start_line_end).contains(&end_index) {
+                // This line was already inspected and charged against the budget.
+                (start_line_start, start_line_end)
+            } else {
+                line_bounds(blob_bytes, end_index, budget)?
+            };
         if closing_line_end > closing_line_start
             && (closing_line_start != start_line_start || closing_line_end != start_line_end)
         {
@@ -130,11 +135,12 @@ impl InlineIgnoreConfig {
         let mut cursor = closing_line_end;
         while cursor < blob_bytes.len() {
             if blob_bytes[cursor] == b'\n' {
+                budget = budget.checked_sub(1)?;
                 cursor += 1;
                 continue;
             }
 
-            let (_, next_end) = line_bounds(blob_bytes, cursor);
+            let (_, next_end) = line_bounds(blob_bytes, cursor, budget)?;
             if next_end <= cursor {
                 break;
             }
@@ -333,19 +339,24 @@ fn trim_ascii_whitespace(line: &[u8]) -> &[u8] {
     &line[start..end]
 }
 
-fn line_bounds(bytes: &[u8], index: usize) -> (usize, usize) {
-    if bytes.is_empty() {
-        return (0, 0);
-    }
-    let mut start = index.min(bytes.len());
-    while start > 0 && bytes[start - 1] != b'\n' {
-        start -= 1;
-    }
-    let mut end = index.min(bytes.len());
-    while end < bytes.len() && bytes[end] != b'\n' {
-        end += 1;
-    }
-    (start, end)
+fn line_bounds(bytes: &[u8], index: usize, budget: usize) -> Option<(usize, usize)> {
+    let index = index.min(bytes.len());
+    // Include one delimiter beyond the byte budget so a line exactly at the limit
+    // is still recognized. Never walk a whole minified line before checking its cost.
+    let left = index.saturating_sub(budget.saturating_add(1));
+    let start = match memchr::memrchr(b'\n', &bytes[left..index]) {
+        Some(newline) => left + newline + 1,
+        None if left == 0 => 0,
+        None => return None,
+    };
+    let remaining = budget.checked_sub(index - start)?;
+    let right = index.saturating_add(remaining).saturating_add(1).min(bytes.len());
+    let end = match memchr::memchr(b'\n', &bytes[index..right]) {
+        Some(newline) => index + newline,
+        None if right == bytes.len() => bytes.len(),
+        None => return None,
+    };
+    (end - start <= budget).then_some((start, end))
 }
 
 fn line_has_directive(line: &[u8], tokens: &[Vec<u8>]) -> bool {
@@ -353,10 +364,33 @@ fn line_has_directive(line: &[u8], tokens: &[Vec<u8>]) -> bool {
         return false;
     }
 
-    let mut lowercase = line.to_vec();
-    lowercase.iter_mut().for_each(|b| *b = b.to_ascii_lowercase());
-
-    tokens.iter().any(|token| memchr::memmem::find(&lowercase, token.as_slice()).is_some())
+    // Tokens are ASCII-lowercased by InlineIgnoreConfig::new. Search only their
+    // possible first bytes, without allocating and lowercasing every source line.
+    let lowercase = std::cell::OnceCell::new();
+    tokens.iter().any(|token| {
+        if token.len() > line.len() {
+            return false;
+        }
+        // Keep linear substring search for arbitrarily long custom directives,
+        // rather than repeatedly comparing a long common prefix at every byte.
+        if token.len() > 64 {
+            return memchr::memmem::find(
+                lowercase.get_or_init(|| line.to_ascii_lowercase()),
+                token,
+            )
+            .is_some();
+        }
+        let Some(&first) = token.first() else { return true };
+        let matches_at = |at| {
+            line[at..].get(..token.len()).is_some_and(|value| value.eq_ignore_ascii_case(token))
+        };
+        let uppercase = first.to_ascii_uppercase();
+        if first == uppercase {
+            memchr::memchr_iter(first, line).any(matches_at)
+        } else {
+            memchr::memchr2_iter(first, uppercase, line).any(matches_at)
+        }
+    })
 }
 
 #[cfg(test)]
@@ -432,9 +466,132 @@ mod tests {
     #[test]
     fn bounds_cover_expected_ranges() {
         let data = b"one\ntwo\nthree";
-        assert_eq!(line_bounds(data, 0), (0, 3));
-        assert_eq!(line_bounds(data, 4), (4, 7));
-        assert_eq!(line_bounds(data, data.len()), (8, 13));
+        assert_eq!(line_bounds(data, 0, usize::MAX), Some((0, 3)));
+        assert_eq!(line_bounds(data, 4, usize::MAX), Some((4, 7)));
+        assert_eq!(line_bounds(data, data.len(), usize::MAX), Some((8, 13)));
+    }
+
+    #[test]
+    fn bounded_line_probes_match_unlimited_bounds_at_every_limit() {
+        fn original_bounds(bytes: &[u8], index: usize) -> (usize, usize) {
+            let mut start = index.min(bytes.len());
+            while start > 0 && bytes[start - 1] != b'\n' {
+                start -= 1;
+            }
+            let mut end = index.min(bytes.len());
+            while end < bytes.len() && bytes[end] != b'\n' {
+                end += 1;
+            }
+            (start, end)
+        }
+        for bytes in
+            [b"".as_slice(), b"\n\n", b"one\ntwo\nthree", b"one\r\ntwo\r\n", b"\xff\0abc\n\x80def"]
+        {
+            for index in 0..=bytes.len() + 2 {
+                let (start, end) = original_bounds(bytes, index);
+                for budget in 0..=bytes.len() + 2 {
+                    assert_eq!(
+                        line_bounds(bytes, index, budget),
+                        (end - start <= budget).then_some((start, end)),
+                        "index={index}, budget={budget}, bytes={bytes:?}"
+                    );
+                }
+                assert_eq!(line_bounds(bytes, index, usize::MAX), Some((start, end)));
+            }
+        }
+    }
+
+    #[test]
+    fn already_inspected_long_line_does_not_force_an_index() {
+        let config = InlineIgnoreConfig::new(&[]);
+        let mut bytes = vec![b'x'; 3000];
+        bytes.extend_from_slice(b"\nordinary source line\n");
+        let cache = std::sync::OnceLock::new();
+        assert!(!config.should_ignore_cached(&bytes, &OffsetSpan { start: 10, end: 12 }, &cache));
+        assert!(cache.get().is_none());
+    }
+
+    #[test]
+    fn long_empty_line_runs_use_the_bounded_search_fallback() {
+        let config = InlineIgnoreConfig::new(&[]);
+        for directive in [false, true] {
+            let mut bytes = b"secret-value".to_vec();
+            bytes.extend(std::iter::repeat_n(b'\n', 8192));
+            if directive {
+                bytes.extend_from_slice(b"# kingfisher:ignore");
+            }
+            let cache = std::sync::OnceLock::new();
+            let span = OffsetSpan { start: 0, end: 12 };
+            assert_eq!(config.should_ignore_cached(&bytes, &span, &cache), directive);
+            assert_eq!(config.should_ignore(&bytes, &span), directive);
+            assert!(cache.get().is_some());
+        }
+    }
+
+    #[test]
+    fn minified_line_fallback_keeps_directive_results() {
+        let config = InlineIgnoreConfig::new(&[]);
+        for directive in [false, true] {
+            let mut bytes = vec![b'x'; 16 * 1024];
+            if directive {
+                bytes.extend_from_slice(b" // KINGFISHER:IGNORE");
+            }
+            bytes.extend_from_slice(b"\nordinary line\n");
+            assert!(line_bounds(&bytes, 8192, 4096).is_none());
+            for start in [0, 4095, 8192, 16383, bytes.len()] {
+                let cache = std::sync::OnceLock::new();
+                let span = OffsetSpan { start, end: (start + 4).min(bytes.len()) };
+                assert_eq!(
+                    config.should_ignore_cached(&bytes, &span, &cache),
+                    config.should_ignore(&bytes, &span),
+                    "start={start}, directive={directive}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn allocation_free_directive_search_matches_ascii_lowercase_reference() {
+        let mut tokens =
+            InlineIgnoreConfig::new(&["CUSTOM:IGNORE".into(), "ÉIgnore".into()]).tokens;
+        tokens.extend([b"abc".to_vec(), b"\0\xffa".to_vec()]);
+        tokens.push([vec![b'a'; 256], b"b".to_vec()].concat());
+        let mut lines = [
+            b"".as_slice(),
+            b"aBc",
+            b"# KINGFISHER:ignore",
+            b"# custom:IGNORE",
+            b"\0\xffA",
+            "éIGNORE".as_bytes(),
+            "ÉIGNORE".as_bytes(),
+        ]
+        .into_iter()
+        .map(Vec::from)
+        .collect::<Vec<_>>();
+        lines.push(vec![b'A'; 8192]);
+        lines.push([vec![b'A'; 8192], b"B".to_vec()].concat());
+        let mut state = 0x1234_5678_9abc_def0u64;
+        for length in 0..256 {
+            let mut line = Vec::new();
+            for _ in 0..length {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                line.push((state >> 32) as u8);
+            }
+            if length % 3 == 0 {
+                line.extend_from_slice(b"CuStOm:IgNoRe");
+            }
+            lines.push(line);
+        }
+        for line in &lines {
+            let lowercase = line.to_ascii_lowercase();
+            for tokens in [tokens.as_slice(), &[Vec::new()][..], &[][..]] {
+                let expected = !line.is_empty()
+                    && tokens
+                        .iter()
+                        .any(|token| memchr::memmem::find(&lowercase, token.as_slice()).is_some());
+                assert_eq!(line_has_directive(line, tokens), expected, "line={line:?}");
+            }
+        }
     }
 
     #[test]

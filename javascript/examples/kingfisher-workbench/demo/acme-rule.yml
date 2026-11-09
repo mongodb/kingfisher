@@ -1,0 +1,48 @@
+# Synthetic organization-specific example, NOT a built-in detector. run.mjs
+# replaces port 0 with the mock's assigned loopback port before loading it.
+rules:
+  - id: acme.example-token
+    name: Acme demo token (local mock)
+    pattern: '\b(acme_demo_[A-Za-z0-9]{16})\b'
+    min_entropy: 0
+    examples:
+      - acme_demo_a9B2c7D4e1F8g3H6
+    depends_on_rule:
+      - rule_id: acme.username
+        variable: USERNAME
+        within: '2L'
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: 'http://127.0.0.1:0/identity'
+          headers:
+            Authorization: 'Bearer {{ TOKEN }}'
+            X-User: '{{ USERNAME }}'
+          response_matcher:
+            - type: StatusMatch
+              status: [200]
+            - type: WordMatch
+              words: ['"authenticated":true']
+    revocation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: 'http://127.0.0.1:0/revoke'
+          headers:
+            Authorization: 'Bearer {{ TOKEN }}'
+            X-User: '{{ USERNAME }}'
+          response_matcher:
+            - type: StatusMatch
+              status: [204]
+  # This must reach Validator with the original token Finding. Hiding it in the
+  # report is fine; dropping it before validation would break credential assembly.
+  - id: acme.username
+    name: Supporting demo username
+    visible: false
+    pattern: 'ACME_USER=(user_[A-Za-z0-9]{8})'
+    min_entropy: 0
+    examples:
+      - ACME_USER=user_a9B2c7D4

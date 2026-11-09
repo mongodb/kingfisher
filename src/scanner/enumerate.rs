@@ -15,7 +15,6 @@ use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use bstr::{BString, ByteSlice};
 use gix::{Repository as GixRepo, diff::tree::recorder::Change, object::tree::EntryKind};
-use indicatif::{ProgressBar, ProgressStyle};
 use kingfisher_scanner::extraction::pdf::{
     extract_pdf_text_from_bytes_with_budget, extract_pdf_text_from_bytes_with_control,
     extract_pdf_text_with_limits, has_pdf_magic,
@@ -51,7 +50,7 @@ use crate::{
     rule_profiling::ConcurrentRuleProfiler,
     rules_database::RulesDatabase,
     scanner::{
-        processing::BlobProcessor,
+        processing::{BlobProcessor, ProcessedBlob},
         storage::{create_datastore_channel, spawn_datastore_writer_thread},
         util::{is_compressed_content, is_compressed_file, is_pyc_file, is_sqlite_file},
     },
@@ -106,23 +105,24 @@ fn pdf_page_origin(origin: &OriginSet, name: &str) -> OriginSet {
 }
 
 fn pdf_match_key(finding: &Match) -> [u8; 32] {
-    // Ignore representation-local offsets, but preserve every credential input
-    // and dependency context. Hidden helpers remain available in each blob.
-    let captures: Vec<_> = finding
-        .groups
-        .captures
-        .iter()
-        .map(|capture| (capture.name, capture.match_number, capture.raw_value()))
-        .collect();
-    let key = serde_json::to_vec(&(
+    super::processing::pdf_match_key(
         finding.rule.id(),
-        captures,
+        &finding.groups,
         &finding.dependent_captures,
         &finding.ambiguous_dependencies,
         &finding.dependency_candidates,
-    ))
-    .expect("PDF finding inputs serialize");
-    *blake3::hash(&key).as_bytes()
+    )
+}
+
+fn keep_pdf_match(raw_matches: &mut HashMap<[u8; 32], usize>, key: [u8; 32]) -> bool {
+    if let Some(count) = raw_matches.get_mut(&key)
+        && *count > 0
+    {
+        *count -= 1;
+        false
+    } else {
+        true
+    }
 }
 
 // Canonical Windows inputs use verbatim prefixes, while current_dir and walker
@@ -209,7 +209,7 @@ pub fn enumerate_filesystem_inputs(
     datastore: Arc<Mutex<findings_store::FindingsStore>>,
     input_roots: &[PathBuf],
     discovered_repos: &[PathBuf],
-    progress_enabled: bool,
+    _progress_enabled: bool,
     rules_db: &RulesDatabase,
     enable_profiling: bool,
     shared_profiler: Arc<ConcurrentRuleProfiler>,
@@ -255,23 +255,7 @@ pub fn enumerate_filesystem_inputs(
         None
     };
 
-    crate::scan_progress::phase(
-        "Scanning files and Git history",
-        0,
-        crate::scan_progress::PhaseKind::Scan,
-    );
-    let progress = if progress_enabled {
-        let style =
-            ProgressStyle::with_template("{spinner} {msg} {total_bytes} [{elapsed_precise}]")
-                .expect("progress bar style template should compile");
-        let pb = ProgressBar::new_spinner()
-            .with_style(style)
-            .with_message("Scanning files and git repository content...");
-        pb.enable_steady_tick(Duration::from_millis(500));
-        pb
-    } else {
-        ProgressBar::hidden()
-    };
+    let _scanning_progress = crate::scan_progress::scanning();
     let _input_enumerator = || -> Result<FilesystemEnumerator> {
         let mut ie = FilesystemEnumerator::new(input_roots, args)?;
         ie.threads(args.num_jobs);
@@ -350,6 +334,10 @@ pub fn enumerate_filesystem_inputs(
                 && args.content_filtering_args.archive_depth() != Some(0),
             args.content_filtering_args.resource_limits(),
         )
+        .with_chunked_prefilters(
+            rules_db.chunked_prefilter_scanners(),
+            (0..rules_db.num_rules()).any(|index| rules_db.uses_vectorscan_prefilter(index)),
+        )
         .with_max_blob_size(max_blob_size),
     };
     let (send_ds, recv_ds) = create_datastore_channel(args.num_jobs);
@@ -400,8 +388,8 @@ pub fn enumerate_filesystem_inputs(
         })
         .flatten()
         .try_for_each_init(
-            || (make_blob_processor.clone()(), progress.clone()),
-            move |(processor, progress), entry| {
+            || make_blob_processor.clone()(),
+            move |processor, entry| {
                 let (origin, blob, archive_member, pdf_pages) = match entry {
                     Err(e) => {
                         had_errors_for_processing.store(true, Ordering::Relaxed);
@@ -436,6 +424,9 @@ pub fn enumerate_filesystem_inputs(
                     )
                 });
                 let mut raw_matches = HashMap::<[u8; 32], usize>::new();
+                // Progress counts occurrences, including duplicate pages, independently
+                // of storage suppression. Duplicate blobs must never consume the latter.
+                let mut raw_observations = HashMap::<[u8; 32], usize>::new();
                 for (is_raw, mut origin, blob, archive_member) in
                     std::iter::once((true, origin, blob, archive_member)).chain(pages)
                 {
@@ -501,21 +492,18 @@ pub fn enumerate_filesystem_inputs(
                         is_binary && args.content_filtering_args.no_binary
                     };
                     if should_skip {
-                        progress.suspend(|| {
-                            let path = origin
-                                .first()
-                                .blob_path()
-                                .map(|p| p.display().to_string())
-                                .unwrap_or_else(|| blob.temp_id().to_string());
-                            if is_archive {
-                                debug!("Skipping archive: {path}");
-                            } else {
-                                debug!("Skipping binary blob: {path}");
-                            }
-                        });
+                        let path = origin
+                            .first()
+                            .blob_path()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_else(|| blob.temp_id().to_string());
+                        if is_archive {
+                            debug!("Skipping archive: {path}");
+                        } else {
+                            debug!("Skipping binary blob: {path}");
+                        }
                         continue;
                     }
-                    progress.inc(blob.len().try_into().unwrap());
                     match processor.run(
                         origin,
                         blob,
@@ -529,7 +517,42 @@ pub fn enumerate_filesystem_inputs(
                         Ok(None) => {
                             // nothing to record
                         }
-                        Ok(Some((origin_set, blob_metadata, mut vec_of_matches))) => {
+                        Ok(Some(ProcessedBlob {
+                            message: (origin_set, blob_metadata, mut vec_of_matches),
+                            duplicate,
+                            duplicate_observations,
+                        })) => {
+                            if duplicate {
+                                crate::scan_progress::found(
+                                    duplicate_observations.into_iter().filter_map(
+                                        |(visible, key)| {
+                                            (!is_pdf
+                                                || !visible
+                                                || keep_pdf_match(&mut raw_observations, key))
+                                            .then_some(visible)
+                                        },
+                                    ),
+                                    origin_set.len() as u64,
+                                );
+                                continue;
+                            }
+                            // Count progress before storage suppression, with its own PDF
+                            // counts so duplicate pages cannot affect report contents.
+                            if crate::scan_progress::enabled() {
+                                crate::scan_progress::found(
+                                    vec_of_matches.iter().filter_map(|(_, finding)| {
+                                        (!is_pdf
+                                            || is_raw
+                                            || !finding.visible
+                                            || keep_pdf_match(
+                                                &mut raw_observations,
+                                                pdf_match_key(finding),
+                                            ))
+                                        .then_some(finding.visible)
+                                    }),
+                                    origin_set.len() as u64,
+                                );
+                            }
                             if is_pdf {
                                 if is_raw {
                                     for (_, finding) in &vec_of_matches {
@@ -539,21 +562,16 @@ pub fn enumerate_filesystem_inputs(
                                                 .or_default() += 1;
                                         }
                                     }
+                                    if crate::scan_progress::enabled() {
+                                        raw_observations.clone_from(&raw_matches);
+                                    }
                                 } else {
                                     vec_of_matches.retain(|(_, finding)| {
-                                        if !finding.visible {
-                                            return true;
-                                        }
-                                        let Some(count) =
-                                            raw_matches.get_mut(&pdf_match_key(finding))
-                                        else {
-                                            return true;
-                                        };
-                                        if *count == 0 {
-                                            return true;
-                                        }
-                                        *count -= 1;
-                                        false
+                                        !finding.visible
+                                            || keep_pdf_match(
+                                                &mut raw_matches,
+                                                pdf_match_key(finding),
+                                            )
                                     });
                                 }
                             }
@@ -588,7 +606,6 @@ pub fn enumerate_filesystem_inputs(
     // Clear negatives were scanned by the content prepass instead of the matcher.
     // Include them in coverage statistics without counting retained candidates twice.
     matcher_stats.lock().unwrap().update(&enum_cfg.git_content_filter.clean_stats());
-    progress.finish();
     Ok(had_errors.load(Ordering::Relaxed))
 }
 

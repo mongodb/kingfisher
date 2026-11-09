@@ -1610,6 +1610,9 @@ pub struct Rule {
     runtime_minimum_confidence: Confidence,
     #[serde(skip)]
     runtime_dependency_helper: bool,
+    /// Original runtime and syntax visibility while a static helper threshold hides this rule.
+    #[serde(skip)]
+    runtime_helper_visibility: Option<(bool, bool)>,
     #[serde(skip)]
     path_regex: OnceLock<(String, Option<Regex>)>,
     #[serde(skip)]
@@ -1624,6 +1627,7 @@ impl PartialEq for Rule {
             && self.visible == other.visible
             && self.runtime_minimum_confidence == other.runtime_minimum_confidence
             && self.runtime_dependency_helper == other.runtime_dependency_helper
+            && self.runtime_helper_visibility == other.runtime_helper_visibility
     }
 }
 
@@ -1640,6 +1644,7 @@ impl Rule {
             visible: syntax.visible,
             runtime_minimum_confidence: Confidence::Low,
             runtime_dependency_helper: false,
+            runtime_helper_visibility: None,
             path_regex: OnceLock::new(),
             keyword_regex: OnceLock::new(),
             syntax,
@@ -1755,24 +1760,46 @@ impl Rule {
         self.syntax.confidence
     }
 
-    /// Configure scan-time confidence filtering after rule selection has resolved helpers.
+    /// Configure a static confidence threshold after rule selection has resolved helpers.
+    ///
+    /// Helper-only hiding is reversed when reconfigured; explicit reporting suppression is not.
     pub fn set_runtime_confidence_filter(
         &mut self,
         minimum_confidence: Confidence,
         dependency_helper: bool,
     ) {
+        if let Some((visible, syntax_visible)) = self.runtime_helper_visibility.take() {
+            self.visible = visible;
+            self.syntax.visible = syntax_visible;
+        }
         self.runtime_minimum_confidence = minimum_confidence;
         self.runtime_dependency_helper = dependency_helper;
+        if dependency_helper && !self.confidence().is_at_least(&minimum_confidence) {
+            self.runtime_helper_visibility = Some((self.visible, self.syntax.visible));
+            self.visible = false;
+            self.syntax.visible = false;
+        }
     }
 
-    /// Return whether this effective confidence should be retained for matching.
-    pub fn accepts_effective_confidence(&self, confidence: Confidence) -> bool {
-        self.runtime_dependency_helper || self.reports_effective_confidence(confidence)
+    /// Compatibility wrapper using only the rule's configured confidence.
+    ///
+    /// The supplied legacy effective confidence is ignored.
+    #[deprecated(
+        note = "Confidence is static; use confidence(), runtime_minimum_confidence(), and is_runtime_dependency_helper()"
+    )]
+    pub fn accepts_effective_confidence(&self, _confidence: Confidence) -> bool {
+        self.runtime_dependency_helper
+            || self.confidence().is_at_least(&self.runtime_minimum_confidence)
     }
 
-    /// Return whether this effective confidence meets the user's reporting threshold.
-    pub fn reports_effective_confidence(&self, confidence: Confidence) -> bool {
-        confidence.is_at_least(&self.runtime_minimum_confidence)
+    /// Compatibility wrapper using only the rule's configured reporting threshold.
+    ///
+    /// The supplied legacy effective confidence is ignored.
+    #[deprecated(
+        note = "Confidence is static; compare confidence() with runtime_minimum_confidence()"
+    )]
+    pub fn reports_effective_confidence(&self, _confidence: Confidence) -> bool {
+        self.confidence().is_at_least(&self.runtime_minimum_confidence)
     }
 
     /// Return whether this rule was included to support another selected rule.
@@ -1785,8 +1812,9 @@ impl Rule {
         self.runtime_minimum_confidence
     }
 
-    /// Keep a dependency match available for association without reporting it as a finding.
+    /// Permanently keep a match available for association without reporting it as a finding.
     pub fn suppress_runtime_reporting(&mut self) {
+        self.runtime_helper_visibility = None;
         self.visible = false;
         self.syntax.visible = false;
     }
@@ -1835,6 +1863,169 @@ impl Rule {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(deprecated, reason = "the compatibility wrappers must remain callable")]
+    fn legacy_confidence_wrappers_use_only_configured_confidence() {
+        for configured in [Confidence::Low, Confidence::Medium, Confidence::High] {
+            let mut syntax = RuleSyntax::new("acme.static", "Static confidence fixture", "token");
+            syntax.confidence = configured;
+            let mut rule = Rule::new(syntax);
+            rule.set_runtime_confidence_filter(Confidence::Medium, false);
+            for legacy in [Confidence::Low, Confidence::Medium, Confidence::High] {
+                let selected = configured.is_at_least(&Confidence::Medium);
+                assert_eq!(rule.accepts_effective_confidence(legacy), selected);
+                assert_eq!(rule.reports_effective_confidence(legacy), selected);
+                assert_eq!(rule.confidence(), configured);
+            }
+        }
+    }
+
+    #[test]
+    fn below_threshold_helpers_are_hidden_without_changing_configured_confidence() {
+        let mut syntax = RuleSyntax::new("acme.helper", "Helper fixture", "token");
+        syntax.confidence = Confidence::Low;
+        let mut rule = Rule::new(syntax);
+        rule.set_runtime_confidence_filter(Confidence::Medium, true);
+        assert_eq!(rule.confidence(), Confidence::Low);
+        assert_eq!(rule.runtime_minimum_confidence(), Confidence::Medium);
+        assert!(rule.is_runtime_dependency_helper());
+        assert!(!rule.visible());
+        assert!(!rule.syntax().visible);
+        assert!(!rule.confidence().is_at_least(&rule.runtime_minimum_confidence()));
+        assert_eq!(rule.clone(), rule);
+    }
+
+    #[test]
+    fn reportable_helpers_keep_their_configured_visibility() {
+        for visible in [false, true] {
+            let mut syntax = RuleSyntax::new("acme.helper", "Helper fixture", "token");
+            syntax.confidence = Confidence::High;
+            syntax.visible = visible;
+            let mut rule = Rule::new(syntax);
+            rule.set_runtime_confidence_filter(Confidence::High, true);
+            assert_eq!(rule.visible(), visible);
+            assert_eq!(rule.syntax().visible, visible);
+            assert_eq!(rule.confidence(), Confidence::High);
+            assert!(rule.confidence().is_at_least(&rule.runtime_minimum_confidence()));
+        }
+    }
+
+    #[test]
+    fn helper_reconfiguration_restores_both_original_visibility_flags() {
+        for visible in [false, true] {
+            for syntax_visible in [false, true] {
+                let mut syntax = RuleSyntax::new("acme.helper", "Helper fixture", "token");
+                syntax.confidence = Confidence::Low;
+                syntax.visible = visible;
+                let mut original = Rule::new(syntax);
+                original.syntax.visible = syntax_visible;
+                for (minimum, helper) in
+                    [(Confidence::Low, false), (Confidence::Low, true), (Confidence::High, false)]
+                {
+                    let mut rule = original.clone();
+                    rule.set_runtime_confidence_filter(Confidence::High, true);
+                    assert!(!rule.visible());
+                    assert!(!rule.syntax().visible);
+                    rule.set_runtime_confidence_filter(minimum, helper);
+                    assert_eq!(rule.visible(), visible);
+                    assert_eq!(rule.syntax().visible, syntax_visible);
+                    assert_eq!(rule.confidence(), Confidence::Low);
+                    assert_eq!(rule.runtime_minimum_confidence(), minimum);
+                    assert_eq!(rule.is_runtime_dependency_helper(), helper);
+                    assert!(rule.runtime_helper_visibility.is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_helper_configuration_preserves_original_visibility() {
+        let mut syntax = RuleSyntax::new("acme.helper", "Helper fixture", "token");
+        syntax.confidence = Confidence::Low;
+        let mut rule = Rule::new(syntax);
+        let original = rule.clone();
+        for minimum in [Confidence::High, Confidence::Medium, Confidence::Medium, Confidence::High]
+        {
+            rule.set_runtime_confidence_filter(minimum, true);
+            assert!(!rule.visible());
+            assert!(!rule.syntax().visible);
+        }
+        rule.set_runtime_confidence_filter(Confidence::Low, false);
+        assert_eq!(rule, original);
+        assert!(rule.visible());
+        assert!(rule.syntax().visible);
+    }
+
+    #[test]
+    fn permanent_suppression_survives_helper_reconfiguration() {
+        for helper_first in [false, true] {
+            let mut syntax = RuleSyntax::new("acme.helper", "Helper fixture", "token");
+            syntax.confidence = Confidence::Low;
+            let mut rule = Rule::new(syntax);
+            if helper_first {
+                rule.set_runtime_confidence_filter(Confidence::High, true);
+            }
+            rule.suppress_runtime_reporting();
+            assert!(rule.runtime_helper_visibility.is_none());
+            for (minimum, helper) in
+                [(Confidence::Low, false), (Confidence::High, true), (Confidence::Low, false)]
+            {
+                rule.set_runtime_confidence_filter(minimum, helper);
+                assert!(!rule.visible());
+                assert!(!rule.syntax().visible);
+            }
+        }
+    }
+
+    #[test]
+    fn cloned_hidden_helpers_restore_visibility_independently() {
+        let mut syntax = RuleSyntax::new("acme.helper", "Helper fixture", "token");
+        syntax.confidence = Confidence::Low;
+        let mut rule = Rule::new(syntax);
+        rule.set_runtime_confidence_filter(Confidence::High, true);
+        let mut cloned = rule.clone();
+        assert_eq!(rule, cloned);
+        cloned.set_runtime_confidence_filter(Confidence::Low, false);
+        assert!(cloned.visible());
+        assert!(cloned.syntax().visible);
+        assert!(!rule.visible());
+        assert!(!rule.syntax().visible);
+        assert!(rule.is_runtime_dependency_helper());
+        cloned.suppress_runtime_reporting();
+        rule.set_runtime_confidence_filter(Confidence::Low, false);
+        assert!(rule.visible());
+        assert!(rule.syntax().visible);
+        assert!(!cloned.visible());
+        assert!(!cloned.syntax().visible);
+    }
+
+    #[test]
+    fn helper_visibility_snapshot_affects_equality_but_not_serialization() {
+        let mut syntax = RuleSyntax::new("acme.helper", "Helper fixture", "token");
+        syntax.confidence = Confidence::Low;
+        let original = Rule::new(syntax);
+        assert!(original.runtime_helper_visibility.is_none());
+        let mut temporary = original.clone();
+        temporary.set_runtime_confidence_filter(Confidence::High, true);
+        let mut permanent = original.clone();
+        permanent.suppress_runtime_reporting();
+        permanent.set_runtime_confidence_filter(Confidence::High, true);
+        assert_eq!(temporary.syntax(), permanent.syntax());
+        assert_eq!(temporary.visible(), permanent.visible());
+        assert_ne!(temporary, permanent);
+        let serialized = serde_json::to_value(&temporary).unwrap();
+        assert_eq!(serialized, serde_json::to_value(&permanent).unwrap());
+        assert!(serialized.get("runtime_helper_visibility").is_none());
+        let mut restored: Rule = serde_json::from_value(serialized).unwrap();
+        assert!(restored.runtime_helper_visibility.is_none());
+        let mut expected = original;
+        expected.suppress_runtime_reporting();
+        assert_eq!(restored, expected);
+        restored.set_runtime_confidence_filter(Confidence::Low, false);
+        assert!(!restored.visible());
+        assert!(!restored.syntax().visible);
+    }
 
     #[test]
     fn runtime_path_regex_is_cached_without_changing_serialization_or_equality() {

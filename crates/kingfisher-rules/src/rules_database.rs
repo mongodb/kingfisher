@@ -17,10 +17,12 @@ use xxhash_rust::xxh3::xxh3_128;
 
 use crate::{
     betterleaks_filter::{
-        BetterleaksFilterContext, BetterleaksFilterEngine, BetterleaksFilterLineCache,
-        BetterleaksFilterOutcome, evaluate_filter_with_engine,
+        BetterleaksFilterContext, BetterleaksFilterEngine, BetterleaksFilterFragment,
+        BetterleaksFilterLineCache, BetterleaksFilterOutcome, BetterleaksFilterPrefix,
+        evaluate_filter_with_engine, evaluate_filter_with_engine_and_fragment,
         evaluate_filter_with_engine_and_line_cache,
     },
+    native_pattern_variants::{split_pattern, widen_nested_repetitions},
     rule::{BetterleaksExpr, RULE_COMMENTS_PATTERN, Rule},
     rules::Rules,
     scanner_pool::ScannerPool,
@@ -48,10 +50,13 @@ pub struct RulesDatabase {
     pub(crate) anchored_regexes: Vec<Regex>,
     endpoint_regexes: Vec<OnceLock<Option<Regex>>>,
     #[cfg(feature = "__scanner-internals")]
+    replay_regexes: Vec<OnceLock<Option<crate::replay_regex::ReplayRegex>>>,
+    #[cfg(feature = "__scanner-internals")]
     confirmation_maximum_lengths: Vec<OnceLock<ConfirmationLengths>>,
     pub(crate) self_identifying_flags: Vec<bool>,
     pub(crate) vsdb: BlockDatabase,
     vectorscan_prefilter_flags: Vec<bool>,
+    chunked_prefilter_scanners: OnceLock<Option<Arc<ScannerPool>>>,
     betterleaks_rule_flags: Vec<bool>,
     has_non_betterleaks_rules: bool,
     betterleaks_prefilter: Option<BetterleaksPathPrefilter>,
@@ -217,8 +222,9 @@ impl RuleCacheConfig {
 }
 
 const CACHE_MAGIC: &[u8] = b"KFRULEDB";
-// Version 7 bounds path-only placeholder callbacks and keys their compilation mode.
-const CACHE_FORMAT_VERSION: u32 = 7;
+// Version 10 first widens nested repetitions into necessary native gates.
+// Older entries must not bypass the updated native compiler policy.
+const CACHE_FORMAT_VERSION: u32 = 10;
 const MAX_CACHE_HEADER_BYTES: usize = 1024 * 1024;
 const MAX_CACHE_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
 pub const DEFAULT_RULE_CACHE_MAX_ENTRIES: usize = 10;
@@ -290,66 +296,109 @@ pub fn compute_rule_cache_key(rules: &[Rule]) -> String {
     compute_cache_key_from_rules(rules.iter())
 }
 
-/// Compile every rule exactly when possible. If one expression exceeds a Vectorscan compiler
-/// limit, retry only that expression in candidate-prefilter mode. Confidence is reporting
-/// metadata and must not select a slower matching engine.
+/// Keep native refinement bounded even for unusually large custom expressions.
+const MAX_NATIVE_PATTERN_VARIANTS: usize = 32;
+
+#[derive(Clone)]
+enum NativeRulePatterns {
+    Exact,
+    /// Selective necessary gates; their first hit requests the original whole-buffer replay.
+    ReplayGate(Vec<String>),
+    ApproximateGate,
+}
+
+/// Compile every rule exactly when possible. For an oversized expression, first widen costly
+/// nested repetitions into a selective necessary gate. If needed, distribute non-repeated
+/// alternatives into a bounded union with the same rule ID. Both transformations retain one
+/// original whole-buffer Rust replay, including its captures, rejection filters, and match order.
+/// Unsupported or still-oversized expressions retain the approximate PREFILTER fallback.
+/// Confidence is reporting metadata and never selects a matching engine.
 fn compile_vectorscan_database(rules: &[Arc<Rule>]) -> Result<(BlockDatabase, Vec<bool>)> {
-    let mut prefilter_flags = vec![false; rules.len()];
+    compile_vectorscan_database_with(rules, BlockDatabase::new)
+}
+
+fn compile_vectorscan_database_with(
+    rules: &[Arc<Rule>],
+    mut compile: impl FnMut(Vec<Pattern>) -> std::result::Result<BlockDatabase, VectorscanError>,
+) -> Result<(BlockDatabase, Vec<bool>)> {
+    let mut modes = vec![NativeRulePatterns::Exact; rules.len()];
 
     loop {
-        let patterns = rules
-            .iter()
-            .enumerate()
-            .map(|(id, rule)| {
-                let flags = if rule.syntax().betterleaks_path_only {
-                    // This placeholder only keeps catalog IDs stable. Without
-                    // SINGLEMATCH, binary/archive data emits a callback per NUL
-                    // and turns metadata-only rules into a content-match storm.
-                    Flag::SINGLEMATCH
-                } else if prefilter_flags[id] {
-                    Flag::PREFILTER
-                } else {
-                    Flag::default()
-                };
-                Pattern::new(
-                    // Path-only rules are evaluated once against the source path by the
-                    // scanner. Keep their rule IDs in the database without empty-match
-                    // callbacks at every content byte.
-                    if rule.syntax().betterleaks_path_only {
-                        br"\x00".to_vec()
-                    } else {
-                        rule.syntax().pattern.clone().into_bytes()
-                    },
+        let mut patterns = Vec::new();
+        // Native errors identify expression positions, not the potentially shared rule IDs.
+        let mut expression_rules = Vec::new();
+        for (id, rule) in rules.iter().enumerate() {
+            let mode = &modes[id];
+            let path_only = rule.syntax().betterleaks_path_only;
+            let flags = if path_only || matches!(mode, NativeRulePatterns::ReplayGate(_)) {
+                Flag::SINGLEMATCH
+            } else if matches!(mode, NativeRulePatterns::ApproximateGate) {
+                Flag::PREFILTER | Flag::SINGLEMATCH
+            } else {
+                Flag::default()
+            };
+            let variants = match mode {
+                NativeRulePatterns::ReplayGate(variants) => variants.as_slice(),
+                _ => std::slice::from_ref(&rule.syntax().pattern),
+            };
+            for (variant, pattern) in variants.iter().enumerate() {
+                patterns.push(Pattern::new(
+                    // Metadata-only rules keep stable IDs without a callback at every byte.
+                    if path_only { br"\x00".to_vec() } else { pattern.as_bytes().to_vec() },
                     flags,
                     Some(id.try_into().expect("rule count fits in u32")),
-                )
-            })
-            .collect();
+                ));
+                expression_rules.push((id, variant));
+            }
+        }
 
-        match BlockDatabase::new(patterns) {
-            Ok(database) => return Ok((database, prefilter_flags)),
+        match compile(patterns) {
+            Ok(database) => {
+                let replay_flags =
+                    modes.iter().map(|mode| !matches!(mode, NativeRulePatterns::Exact)).collect();
+                return Ok((database, replay_flags));
+            }
             Err(VectorscanError::HyperscanCompile(message, expression)) if expression >= 0 => {
-                let index = expression as usize;
-                let Some(rule) = rules.get(index) else {
+                let Some(&(index, variant)) = expression_rules.get(expression as usize) else {
                     bail!(
                         "Vectorscan reported an out-of-range failing expression {expression}: \
                          {message}"
                     );
                 };
-                if prefilter_flags[index] {
-                    bail!(
-                        "Vectorscan could not compile rule {} even in candidate-prefilter mode: \
-                         {message}",
-                        rule.id()
+                let rule = &rules[index];
+                let mut variants = match &modes[index] {
+                    NativeRulePatterns::Exact => vec![rule.syntax().pattern.clone()],
+                    NativeRulePatterns::ReplayGate(variants) => variants.clone(),
+                    NativeRulePatterns::ApproximateGate => {
+                        bail!(
+                            "Vectorscan could not compile rule {} even in candidate-prefilter mode: \
+                             {message}",
+                            rule.id()
+                        );
+                    }
+                };
+                let available = MAX_NATIVE_PATTERN_VARIANTS - variants.len() + 1;
+                if message.contains("Pattern is too large")
+                    && let Some(replacements) = widen_nested_repetitions(&variants[variant])
+                        .map(|gate| vec![gate])
+                        .or_else(|| split_pattern(&variants[variant], available))
+                {
+                    variants.splice(variant..=variant, replacements);
+                    debug!(
+                        rule_id = rule.id(),
+                        native_pattern_count = variants.len(),
+                        %message,
+                        "Retrying oversized Vectorscan expression as selective native gates"
                     );
+                    modes[index] = NativeRulePatterns::ReplayGate(variants);
+                } else {
+                    debug!(
+                        rule_id = rule.id(),
+                        %message,
+                        "Exact native refinement unavailable; using approximate candidate gate"
+                    );
+                    modes[index] = NativeRulePatterns::ApproximateGate;
                 }
-                warn!(
-                    rule_id = rule.id(),
-                    %message,
-                    "Exact Vectorscan compilation exceeded an engine limit; retrying this rule \
-                     in candidate-prefilter mode"
-                );
-                prefilter_flags[index] = true;
             }
             Err(error) => return Err(error).context("compile rules with Vectorscan"),
         }
@@ -433,9 +482,7 @@ impl RulesDatabase {
         let rules: Vec<Arc<Rule>> = rules.into_iter().map(Arc::new).collect();
         let betterleaks_prefilter =
             betterleaks_prefilter.map(BetterleaksPathPrefilter::compile).transpose()?;
-        let betterleaks_filter_engine = BetterleaksFilterEngine::compile(
-            rules.iter().filter_map(|rule| rule.betterleaks_filter()),
-        )?;
+        let betterleaks_filter_engine = BetterleaksFilterEngine::compile_for_rules(&rules)?;
         Self::from_arc_rules(rules, betterleaks_prefilter, betterleaks_filter_engine)
     }
 
@@ -488,9 +535,7 @@ impl RulesDatabase {
         let rules: Vec<Arc<Rule>> = rules.into_iter().map(Arc::new).collect();
         let betterleaks_prefilter =
             betterleaks_prefilter.map(BetterleaksPathPrefilter::compile).transpose()?;
-        let betterleaks_filter_engine = BetterleaksFilterEngine::compile(
-            rules.iter().filter_map(|rule| rule.betterleaks_filter()),
-        )?;
+        let betterleaks_filter_engine = BetterleaksFilterEngine::compile_for_rules(&rules)?;
         Self::from_arc_rules_with_cache(
             rules,
             cache,
@@ -519,12 +564,15 @@ impl RulesDatabase {
         Ok(RulesDatabase {
             endpoint_regexes: (0..rules.len()).map(|_| OnceLock::new()).collect(),
             #[cfg(feature = "__scanner-internals")]
+            replay_regexes: (0..rules.len()).map(|_| OnceLock::new()).collect(),
+            #[cfg(feature = "__scanner-internals")]
             confirmation_maximum_lengths: (0..rules.len()).map(|_| OnceLock::new()).collect(),
             rules,
             vsdb,
             anchored_regexes,
             self_identifying_flags,
             vectorscan_prefilter_flags,
+            chunked_prefilter_scanners: OnceLock::new(),
             betterleaks_rule_flags,
             has_non_betterleaks_rules,
             betterleaks_prefilter,
@@ -596,12 +644,15 @@ impl RulesDatabase {
             return Ok(RulesDatabase {
                 endpoint_regexes: (0..rules.len()).map(|_| OnceLock::new()).collect(),
                 #[cfg(feature = "__scanner-internals")]
+                replay_regexes: (0..rules.len()).map(|_| OnceLock::new()).collect(),
+                #[cfg(feature = "__scanner-internals")]
                 confirmation_maximum_lengths: (0..rules.len()).map(|_| OnceLock::new()).collect(),
                 rules,
                 vsdb,
                 anchored_regexes,
                 self_identifying_flags,
                 vectorscan_prefilter_flags,
+                chunked_prefilter_scanners: OnceLock::new(),
                 betterleaks_rule_flags,
                 has_non_betterleaks_rules,
                 betterleaks_prefilter,
@@ -675,13 +726,77 @@ impl RulesDatabase {
         &self.vsdb
     }
 
-    /// Return whether Vectorscan uses an approximate candidate expression for this rule.
+    /// Return whether a native candidate requests one whole-buffer Rust-regex replay.
     ///
-    /// Exact Rust-regex confirmation is required for these candidates because their complete
-    /// expression exceeds Vectorscan's exact state limit.
+    /// Oversized expressions use selective necessary native gates when possible, or a broader
+    /// approximate prefilter otherwise. Both retain the original regex's captures and match order.
     #[inline]
     pub fn uses_vectorscan_prefilter(&self, index: usize) -> bool {
         self.vectorscan_prefilter_flags.get(index).copied().unwrap_or(false)
+    }
+
+    /// Lazily compile full-buffer replay without redundant literal prefiltering.
+    ///
+    /// Native gates have already established a candidate. Re-running the regex engine's
+    /// extracted literal prefilter can be costly on dense source files. The finder retains
+    /// the original full-input match spans and uses the original regex for every capture.
+    /// Ordinary bounded candidates never allocate this additional engine. Compilation failure
+    /// is cached and retains legacy confirmation rather than dropping any candidates.
+    #[cfg(feature = "__scanner-internals")]
+    #[doc(hidden)]
+    pub fn replay_regex(&self, index: usize) -> Option<&crate::replay_regex::ReplayRegex> {
+        if !self.uses_vectorscan_prefilter(index) {
+            return None;
+        }
+        let original = self.anchored_regexes.get(index)?;
+        self.replay_regexes
+            .get(index)?
+            .get_or_init(|| match crate::replay_regex::ReplayRegex::new(original) {
+                Ok(regex) => Some(regex),
+                Err(error) => {
+                    debug!(rule_id = self.rules[index].id(), %error, "Using original full-buffer confirmation");
+                    None
+                }
+            })
+            .as_ref()
+    }
+
+    /// Original approximate gates for replay rules when scanning overlapping chunks.
+    ///
+    /// An exact native gate can miss a whole-buffer match longer than the overlap when
+    /// no chunk contains its full span. Scanning these original PREFILTER expressions
+    /// on the same chunks retains the previous necessary-condition gate and rule IDs.
+    /// `None` means no replay rules or native compilation failed; callers must retain
+    /// candidates conservatively when replay rules exist but this pool is unavailable.
+    #[doc(hidden)]
+    pub fn chunked_prefilter_scanners(&self) -> Option<Arc<ScannerPool>> {
+        self.chunked_prefilter_scanners
+            .get_or_init(|| {
+                let patterns: Vec<_> = self
+                    .rules
+                    .iter()
+                    .enumerate()
+                    .filter(|(id, _)| self.uses_vectorscan_prefilter(*id))
+                    .map(|(id, rule)| {
+                        Pattern::new(
+                            rule.syntax().pattern.as_bytes().to_vec(),
+                            Flag::PREFILTER | Flag::SINGLEMATCH,
+                            Some(id.try_into().expect("rule count fits in u32")),
+                        )
+                    })
+                    .collect();
+                if patterns.is_empty() {
+                    return None;
+                }
+                match BlockDatabase::new(patterns) {
+                    Ok(database) => Some(Arc::new(ScannerPool::new(Arc::new(database)))),
+                    Err(error) => {
+                        debug!(%error, "Chunked replay prefilters unavailable; retain candidates conservatively");
+                        None
+                    }
+                }
+            })
+            .clone()
     }
 
     /// Lazily compile an endpoint regex for candidate confirmation. If wrapping
@@ -793,7 +908,9 @@ impl RulesDatabase {
             .map_or(Ok(false), |prefilter| prefilter.is_match_with_attributes(path, attributes))?;
         for (index, rule) in self.rules.iter().enumerate() {
             if !rule.syntax().betterleaks_path_only
-                || !rule.visible()
+                || (!rule.visible() && !rule.is_runtime_dependency_helper())
+                || (!rule.is_runtime_dependency_helper()
+                    && !rule.confidence().is_at_least(&rule.runtime_minimum_confidence()))
                 || !rule.matches_path(path)
                 || !rule.matches_keywords(bytes)
                 || (prefiltered && self.is_betterleaks_rule(index))
@@ -827,14 +944,7 @@ impl RulesDatabase {
             if outcome.is_some_and(|outcome| outcome.discard) {
                 continue;
             }
-            let confidence =
-                outcome.and_then(|outcome| outcome.confidence).unwrap_or_else(|| rule.confidence());
-            if !rule.accepts_effective_confidence(confidence) {
-                continue;
-            }
-            let mut syntax = rule.syntax().clone();
-            syntax.confidence = confidence;
-            matches.push((index, Arc::new(Rule::new(syntax))));
+            matches.push((index, Arc::clone(rule)));
         }
         Ok(matches)
     }
@@ -947,6 +1057,22 @@ impl RulesDatabase {
         evaluate_filter_with_engine(expression, context, &self.betterleaks_filter_engine)
     }
 
+    /// Evaluate only a certified leading secret-only OR prefix of an exact retained root.
+    /// `None` requires ordinary full evaluation. A remainder borrows the unchanged original AST
+    /// and requires normal full context; never restart the already-evaluated prefix.
+    ///
+    /// # Errors
+    ///
+    /// Propagates prefix/helper errors; callers must not continue with the remainder on error.
+    #[doc(hidden)]
+    pub fn evaluate_betterleaks_filter_prefix<'e>(
+        &self,
+        expression: &'e BetterleaksExpr,
+        secret: &str,
+    ) -> Result<Option<BetterleaksFilterPrefix<'e>>> {
+        self.betterleaks_filter_engine.evaluate_prefix(expression, secret)
+    }
+
     /// Internal scanner reuse of fixed regex results for one immutable source buffer.
     /// `line_range` must identify exactly `context.line` within that buffer; create
     /// a fresh cache for each raw or decoded buffer.
@@ -964,6 +1090,27 @@ impl RulesDatabase {
             &self.betterleaks_filter_engine,
             line_range,
             Some(cache),
+        )
+    }
+
+    /// Internal scanner reuse of line-filter results and fragment character offsets.
+    /// Both caches must belong to the immutable buffer used by `context`.
+    #[doc(hidden)]
+    pub fn evaluate_betterleaks_filter_with_caches(
+        &self,
+        expression: &BetterleaksExpr,
+        context: &BetterleaksFilterContext<'_>,
+        line_range: std::ops::Range<usize>,
+        cache: &mut BetterleaksFilterLineCache,
+        fragment: &BetterleaksFilterFragment<'_>,
+    ) -> Result<BetterleaksFilterOutcome> {
+        evaluate_filter_with_engine_and_fragment(
+            expression,
+            context,
+            &self.betterleaks_filter_engine,
+            line_range,
+            Some(cache),
+            fragment,
         )
     }
 
@@ -1773,6 +1920,193 @@ mod test_vectorscan {
         Ok(())
     }
 
+    fn native_fixture_rule(id: &str, pattern: &str) -> Arc<Rule> {
+        Arc::new(Rule::new(crate::RuleSyntax::new(id, "Native refinement fixture", pattern)))
+    }
+
+    fn native_fixture_pattern(pattern: &str, flags: Flag, id: u32) -> Pattern {
+        Pattern::new(pattern.as_bytes().to_vec(), flags, Some(id))
+    }
+
+    #[test]
+    fn native_refinement_resplits_the_failing_variant_with_shared_rule_ids() {
+        let source = r"\A(?:a{2}|b)(?:c{1}|d)\z";
+        let initial = split_pattern(source, MAX_NATIVE_PATTERN_VARIANTS).unwrap();
+        assert_eq!(initial.len(), 2);
+        let replacements = split_pattern(&initial[1], MAX_NATIVE_PATTERN_VARIANTS - 1).unwrap();
+        assert_eq!(replacements.len(), 2);
+        let rules = [native_fixture_rule("kept", "keep"), native_fixture_rule("split", source)];
+        let mut attempts = 0;
+        let (_, replay) = compile_vectorscan_database_with(&rules, |patterns| {
+            attempts += 1;
+            assert_eq!(patterns[0], native_fixture_pattern("keep", Flag::default(), 0));
+            match attempts {
+                1 => {
+                    assert_eq!(patterns.len(), 2);
+                    assert_eq!(patterns[1], native_fixture_pattern(source, Flag::default(), 1));
+                    Err(VectorscanError::HyperscanCompile("Pattern is too large".into(), 1))
+                }
+                2 => {
+                    assert_eq!(
+                        &patterns[1..],
+                        initial
+                            .iter()
+                            .map(|pattern| native_fixture_pattern(pattern, Flag::SINGLEMATCH, 1))
+                            .collect::<Vec<_>>()
+                    );
+                    // Error positions are expression indexes: index 2 is variant 1
+                    // of rule 1, not rule 2 or the first variant sharing ID 1.
+                    Err(VectorscanError::HyperscanCompile("Pattern is too large".into(), 2))
+                }
+                3 => {
+                    let expected = std::iter::once(&initial[0])
+                        .chain(replacements.iter())
+                        .map(|pattern| native_fixture_pattern(pattern, Flag::SINGLEMATCH, 1))
+                        .collect::<Vec<_>>();
+                    assert_eq!(&patterns[1..], expected);
+                    BlockDatabase::new(patterns)
+                }
+                _ => panic!("native refinement did not terminate"),
+            }
+        })
+        .unwrap();
+        assert_eq!(attempts, 3);
+        assert_eq!(replay, vec![false, true]);
+    }
+
+    #[test]
+    fn native_refinement_demotes_all_variants_after_a_non_size_compile_failure() {
+        let source = r"\A(?:a{2}|b)(?:c{1}|d)\z";
+        let variants = split_pattern(source, MAX_NATIVE_PATTERN_VARIANTS).unwrap();
+        let rules = [native_fixture_rule("kept", "keep"), native_fixture_rule("demoted", source)];
+        let mut attempts = 0;
+        let (_, replay) = compile_vectorscan_database_with(&rules, |patterns| {
+            attempts += 1;
+            assert_eq!(patterns[0], native_fixture_pattern("keep", Flag::default(), 0));
+            match attempts {
+                1 => Err(VectorscanError::HyperscanCompile("Pattern is too large".into(), 1)),
+                2 => {
+                    assert_eq!(
+                        &patterns[1..],
+                        variants
+                            .iter()
+                            .map(|pattern| native_fixture_pattern(pattern, Flag::SINGLEMATCH, 1))
+                            .collect::<Vec<_>>()
+                    );
+                    Err(VectorscanError::HyperscanCompile("Unsupported expression".into(), 2))
+                }
+                3 => {
+                    assert_eq!(patterns.len(), 2);
+                    assert_eq!(
+                        patterns[1],
+                        native_fixture_pattern(source, Flag::PREFILTER | Flag::SINGLEMATCH, 1)
+                    );
+                    BlockDatabase::new(patterns)
+                }
+                _ => panic!("native demotion did not terminate"),
+            }
+        })
+        .unwrap();
+        assert_eq!(attempts, 3);
+        assert_eq!(replay, vec![false, true]);
+    }
+
+    #[test]
+    fn native_refinement_caps_the_total_variants_before_demoting() {
+        let alternatives = (1..=MAX_NATIVE_PATTERN_VARIANTS)
+            .map(|count| format!("a{{{count}}}"))
+            .collect::<Vec<_>>()
+            .join("|");
+        let source = format!(r"\A(?:{alternatives})(?:x{{1}}|y)\z");
+        let variants = split_pattern(&source, MAX_NATIVE_PATTERN_VARIANTS).unwrap();
+        assert_eq!(variants.len(), MAX_NATIVE_PATTERN_VARIANTS);
+        assert!(split_pattern(&variants[0], 2).is_some(), "more splitting is possible without cap");
+        let rules = [native_fixture_rule("capped", &source)];
+        let mut attempts = 0;
+        let (_, replay) = compile_vectorscan_database_with(&rules, |patterns| {
+            attempts += 1;
+            match attempts {
+                1 => Err(VectorscanError::HyperscanCompile("Pattern is too large".into(), 0)),
+                2 => {
+                    assert_eq!(
+                        patterns,
+                        variants
+                            .iter()
+                            .map(|pattern| native_fixture_pattern(pattern, Flag::SINGLEMATCH, 0))
+                            .collect::<Vec<_>>()
+                    );
+                    Err(VectorscanError::HyperscanCompile("Pattern is too large".into(), 0))
+                }
+                3 => {
+                    assert_eq!(
+                        patterns,
+                        vec![native_fixture_pattern(
+                            &source,
+                            Flag::PREFILTER | Flag::SINGLEMATCH,
+                            0
+                        )]
+                    );
+                    BlockDatabase::new(patterns)
+                }
+                _ => panic!("native variant cap did not terminate refinement"),
+            }
+        })
+        .unwrap();
+        assert_eq!(attempts, 3);
+        assert_eq!(replay, vec![true]);
+    }
+
+    #[test]
+    fn path_only_rules_use_static_confidence_and_preserve_hidden_helpers() {
+        use crate::BetterleaksExpr as Expr;
+
+        let rule = |id: &str, configured: Confidence, helper: bool, discard: bool| {
+            let mut syntax = crate::RuleSyntax::new(id, "Path-only static confidence", "unused");
+            syntax.confidence = configured;
+            syntax.path = Some(r"(?:^|/)credential\.env$".into());
+            syntax.betterleaks_path_only = true;
+            syntax.betterleaks_filter = Some(Expr::Sequence {
+                nodes: vec![
+                    Expr::Call {
+                        callee: Box::new(Expr::Identifier { value: "setConfidence".into() }),
+                        arguments: vec![Expr::String {
+                            value: if configured == Confidence::Low { "high" } else { "low" }
+                                .into(),
+                        }],
+                    },
+                    Expr::Bool { value: discard },
+                ],
+            });
+            let mut rule = Rule::new(syntax);
+            rule.set_runtime_confidence_filter(Confidence::Medium, helper);
+            rule
+        };
+        let database = RulesDatabase::from_rules(vec![
+            rule("custom.low", Confidence::Low, false, false),
+            rule("custom.high", Confidence::High, false, false),
+            rule("custom.helper", Confidence::Low, true, false),
+            rule("custom.rejected", Confidence::High, false, true),
+        ])
+        .unwrap();
+        for _ in 0..2 {
+            let matches =
+                database.path_only_rules_for_source("config/credential.env", None, b"").unwrap();
+            assert_eq!(matches.len(), 2);
+            for (index, matched) in &matches {
+                assert!(Arc::ptr_eq(matched, &database.get_rule(*index).unwrap()));
+            }
+            let high = &matches.iter().find(|(_, rule)| rule.id() == "custom.high").unwrap().1;
+            assert_eq!(high.confidence(), Confidence::High);
+            assert!(high.visible());
+            let helper = &matches.iter().find(|(_, rule)| rule.id() == "custom.helper").unwrap().1;
+            assert_eq!(helper.confidence(), Confidence::Low);
+            assert!(!helper.visible());
+        }
+        assert!(
+            database.path_only_rules_for_source("config/other.env", None, b"").unwrap().is_empty()
+        );
+    }
+
     #[test]
     fn source_attribute_keys_include_prefilter_and_finding_filters_and_dynamic_keys() {
         let expression = |source: &str| {
@@ -1825,6 +2159,62 @@ mod test_vectorscan {
             Scan::Continue
         })?;
         assert_eq!(matches, vec![(5, 9)]);
+        Ok(())
+    }
+
+    #[test]
+    fn database_constructors_retain_literal_array_roots_and_allow_cloned_ast_fallback() -> Result<()>
+    {
+        let array = || BetterleaksExpr::Array {
+            nodes: vec![BetterleaksExpr::String { value: "retained".into() }],
+        };
+        let mut syntax = crate::RuleSyntax::new("custom.literal-array", "Literal array", "token");
+        syntax.betterleaks_filter = Some(BetterleaksExpr::Binary {
+            operator: "==".into(),
+            left: Box::new(array()),
+            right: Box::new(array()),
+        });
+        let check = |database: RulesDatabase| -> Result<()> {
+            let mut external = database.get_rule(0).unwrap();
+            // One Arc belongs to the database, one to its filter engine, and one to this caller.
+            assert_eq!(Arc::strong_count(&external), 3);
+            assert!(crate::betterleaks_filter::evaluate_prefilter_with_engine(
+                external.betterleaks_filter().unwrap(),
+                "",
+                &database.betterleaks_filter_engine,
+            )?);
+            let BetterleaksExpr::Binary { left, .. } =
+                Arc::make_mut(&mut external).syntax.betterleaks_filter.as_mut().unwrap()
+            else {
+                unreachable!()
+            };
+            let BetterleaksExpr::Array { nodes } = left.as_mut() else { unreachable!() };
+            nodes[0] = BetterleaksExpr::String { value: "changed".into() };
+            assert!(!crate::betterleaks_filter::evaluate_prefilter_with_engine(
+                external.betterleaks_filter().unwrap(),
+                "",
+                &database.betterleaks_filter_engine,
+            )?);
+            assert!(crate::betterleaks_filter::evaluate_prefilter_with_engine(
+                database.get_rule(0).unwrap().betterleaks_filter().unwrap(),
+                "",
+                &database.betterleaks_filter_engine,
+            )?);
+            drop(database);
+            assert!(Arc::get_mut(&mut external).is_some());
+            Ok(())
+        };
+        check(RulesDatabase::from_rules(vec![Rule::new(syntax.clone())])?)?;
+        let cache_dir = env::temp_dir()
+            .join(format!("kingfisher-literal-array-cache-test-{}", uuid::Uuid::new_v4()));
+        let cache = RuleCacheConfig::new(&cache_dir);
+        for expected_status in [RuleCacheStatus::Stored, RuleCacheStatus::Loaded] {
+            let database =
+                RulesDatabase::from_rules_with_cache(vec![Rule::new(syntax.clone())], &cache)?;
+            assert_eq!(database.cache_status(), expected_status);
+            check(database)?;
+        }
+        fs::remove_dir_all(cache_dir)?;
         Ok(())
     }
 
@@ -2167,6 +2557,144 @@ rules:
             })?;
             assert_eq!(matches, vec![(0, 15)], "{rejection}");
             assert!(load_cached_vectorscan_db(&cache_path, &header).is_some(), "{rejection}");
+        }
+        fs::remove_dir_all(cache_dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn fallback_prefilter_bounds_callbacks_but_exact_rules_keep_all_hits() -> Result<()> {
+        use kingfisher_vectorscan::BlockScanner;
+
+        let mut builtins = crate::defaults::get_builtin_rules(Some(Confidence::Low))?;
+        let generic =
+            builtins.rules.remove("betterleaks.generic-api-key").expect("bundled generic");
+        let exact = Rules::from_paths_and_contents(
+            [(
+                Path::new("exact.yml"),
+                br#"
+rules:
+  - id: test.exact
+    name: Exact keyword
+    pattern: '(api_key)'
+"#
+                .as_slice(),
+            )],
+            Confidence::Low,
+        )?;
+        let mut rules = vec![Rule::new(generic)];
+        rules.extend(exact.into_iter().map(Rule::new));
+        let cache_dir =
+            env::temp_dir().join(format!("kingfisher-rule-cache-test-{}", uuid::Uuid::new_v4()));
+        let cache = RuleCacheConfig::new(&cache_dir);
+        let line = b"api_key = \"v7Qm2Rk9Px4Tz8Nc6Bw3Dj5H\"\n";
+        let repetitions = 32_768;
+        let content = line.repeat(repetitions);
+
+        for expected_cache_status in [RuleCacheStatus::Stored, RuleCacheStatus::Loaded] {
+            let database = RulesDatabase::from_rules_with_cache(rules.clone(), &cache)?;
+            assert_eq!(database.cache_status(), expected_cache_status);
+            assert!(database.uses_vectorscan_prefilter(0));
+            assert!(!database.uses_vectorscan_prefilter(1));
+            let mut scanner = BlockScanner::new(database.vectorscan_db())?;
+            let mut counts = [0_usize; 2];
+            scanner.scan(&content, |id, _from, _to, _flags| {
+                counts[id as usize] += 1;
+                Scan::Continue
+            })?;
+            assert_eq!(counts, [1, repetitions], "one replay request; every exact hit");
+            // SINGLEMATCH resets per block and must not suppress later source buffers.
+            counts.fill(0);
+            scanner.scan(line, |id, _from, _to, _flags| {
+                counts[id as usize] += 1;
+                Scan::Continue
+            })?;
+            assert_eq!(counts, [1, 1]);
+            assert_eq!(database.anchored_regexes()[0].captures_iter(&content).count(), repetitions);
+            #[cfg(feature = "__scanner-internals")]
+            {
+                assert!(database.replay_regexes.iter().all(|entry| entry.get().is_none()));
+                assert!(database.replay_regex(1).is_none(), "ordinary candidates stay lazy");
+                assert!(database.replay_regexes[1].get().is_none());
+                let replay = database.replay_regex(0).expect("replay finder compiles");
+                assert!(std::ptr::eq(replay, database.replay_regex(0).unwrap()));
+                assert_eq!(replay.captures_iter(&content).count(), repetitions);
+                assert!(database.replay_regex(usize::MAX).is_none());
+            }
+
+            let secret = "v7Qm2Rk9Px4Tz8Nc6Bw3Dj5H";
+            for (case_index, text) in [
+                format!("API_KEY = \"{secret}\""),
+                format!("api_key = {{\"metadata\":0,\"value\":\"{secret}\"}}"),
+                format!("api_key = [{{\"value\":\"{secret}\"}}]"),
+                format!("<apiKey data-note=\"context\">{secret}</apiKey>"),
+                format!("api_key = <![CDATA[{secret}]]>"),
+                format!("token = \n \"{secret}\""),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let mut bytes = vec![0xff, b' '];
+                bytes.extend_from_slice(text.as_bytes());
+                bytes.push(0xfe);
+                let captures = database.anchored_regexes()[0]
+                    .captures(&bytes)
+                    .expect("synthetic wrapper must match the original Rust pattern");
+                assert!(
+                    &captures[1] == secret.as_bytes(),
+                    "synthetic wrapper capture mismatch at case {case_index}"
+                );
+                let mut gated = false;
+                scanner.scan(&bytes, |id, _, _, _| {
+                    gated |= id == 0;
+                    Scan::Continue
+                })?;
+                assert!(gated, "necessary gate must retain wrapper case {case_index}");
+            }
+
+            let broad = database
+                .chunked_prefilter_scanners()
+                .expect("the original generic approximate gate compiles");
+            let negatives = [
+                "ordinary source text without assignments or secrets".to_string(),
+                "api_key plain words then p7Y9v2N6r4Q8t1H3".to_string(),
+                "api_key = \"short\"".to_string(),
+                format!("api_key = \"{}\"", "a.".repeat(76)),
+                format!("<apiKey {}>{secret}</apiKey>", "a=\"x\" ".repeat(6)),
+                format!("api_key = {{{}\"value\":\"{secret}\"}}", "\"metadata\":0,".repeat(6)),
+            ];
+            let mut selective_replays = 0;
+            let mut broad_replays = 0;
+            for text in negatives {
+                assert!(!database.anchored_regexes()[0].is_match(text.as_bytes()));
+                let mut gated = false;
+                scanner.scan(text.as_bytes(), |id, _, _, _| {
+                    gated |= id == 0;
+                    Scan::Continue
+                })?;
+                selective_replays += usize::from(gated);
+                // Widened gates may retain bounded-wrapper negatives, but the unchanged
+                // original regex remains authoritative and must reject them in replay.
+                #[cfg(feature = "__scanner-internals")]
+                assert!(
+                    database
+                        .replay_regex(0)
+                        .unwrap()
+                        .captures_iter(text.as_bytes())
+                        .next()
+                        .is_none()
+                );
+                broad.try_with(|scanner| {
+                    scanner.scan(text.as_bytes(), |id, _, _, _| {
+                        broad_replays += usize::from(id == 0);
+                        Scan::Continue
+                    })
+                })??;
+            }
+            assert!(
+                selective_replays < broad_replays,
+                "selective gates must remove old false-positive replays"
+            );
         }
         fs::remove_dir_all(cache_dir)?;
         Ok(())

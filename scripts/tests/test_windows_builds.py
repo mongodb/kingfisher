@@ -94,6 +94,39 @@ class WindowsBuildDependenciesTests(unittest.TestCase):
         self.assertIn("WINDOWS_ONLY_DEPS=1 make windows-${{ matrix.arch }}", workflow)
         self.assertIn("make windows-test-${{ matrix.arch }}", workflow)
 
+    def test_ci_reuses_preinstalled_msys2_only_on_x64(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        windows = workflow.split("  windows:", 1)[1]
+        matrix = windows.split("      matrix:", 1)[1].split("    steps:", 1)[0]
+        # Runner availability and MSYSTEM are coupled: the x64 image has
+        # C:\msys64, but the ARM64 image omits MSYS2 and needs a fresh install.
+        # Do not migrate MINGW64 to UCRT64 as an installer-download workaround.
+        self.assertEqual(re.findall(
+            r"(?m)^          - arch: (\S+)\n"
+            r"            runs_on: (\S+)\n"
+            r"            msystem: (\S+)$", matrix,
+        ), [
+            ("x64", "windows-latest", "MINGW64"),
+            ("arm64", "windows-11-arm", "CLANGARM64"),
+        ])
+        setup = windows.split("      - name: Set up MSYS2\n", 1)[1].split("\n      - ", 1)[0]
+        self.assertIn("          release: ${{ matrix.arch == 'arm64' }}", setup)
+        self.assertIn("          msystem: ${{ matrix.msystem }}", setup)
+
+    def test_ci_msys2_setup_keeps_pinned_action_upgrades_and_required_packages(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        windows = workflow.split("  windows:", 1)[1]
+        setup = windows.split("      - name: Set up MSYS2\n", 1)[1].split("\n      - ", 1)[0]
+        self.assertIn("uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e", setup)
+        # Reusing the runner installation must not freeze old packages or hide
+        # setup failures. ARM64 still uses the action's checksum-verified install.
+        self.assertIn("          update: true", setup)
+        self.assertRegex(setup,
+                         r"(?m)^          install: >-\n"
+                         r"            make\n            git\n            perl$")
+        self.assertNotRegex(setup, r"(?m)^\s+(?:if|continue-on-error):")
+        self.assertNotIn("continue-on-error:", windows)
+
     def test_windows_test_profile_does_not_optimize_the_entire_sdk_graph(self):
         manifest = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
         profile = manifest["profile"]["ci-test"]

@@ -2,6 +2,55 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.18.0]
+
+### Added
+
+- Add [Kingfisher Workbench](javascript/examples/kingfisher-workbench/README.md), a commented
+  Node SDK showcase with working-tree and Git-history scans, live progress, redacted
+  HTML reports, synthetic screenshots, and a loopback validation/revocation demo.
+- Show live reportable finding occurrences during CLI scanning and validation without
+  changing final report deduplication. Keep progress on interactive stderr only.
+
+### Fixed
+
+- Deduplicate third-party notices while retaining offline attribution, and avoid packaging
+  duplicate SDK notices.
+- Bound native/replay and filter working memory; reject cheap filter/dictionary failures
+  before context or BPE work, materialize SDK captures lazily, and defer CLI Base64 discovery.
+  Preserve full-input captures, match ordering, rejection filters, and conservative fallbacks.
+- Align Betterleaks regex helpers with Go's character classes, case folding, whitespace and
+  end anchors; bound anchored replay work, continuing with one linear pass once exhausted,
+  and bound inline-ignore line probes.
+- Finish or suspend terminal progress before stdout reports, keep PDF deduplication independent
+  of progress, and preserve live totals through report generation.
+- Apply Workbench exclusions relative to the selected root, count all skipped inputs, redact
+  operational errors while still reporting local filesystem error codes, and restrict
+  validation to explicitly selected original findings while preserving required helper
+  context. Serialize live report snapshots, avoid copying input data for byte counts, and
+  reject `--audit` outside a live revoke-enabled session.
+
+### Changed
+
+- Remove dynamic confidence upgrades/demotions across the CLI and SDKs; selection and findings
+  use each rule's configured confidence. Legacy custom YAML/TOML confidence helpers remain inert.
+- Include Betterleaks `generic-api-key` at static low confidence (503 bundled rules). Default
+  medium-confidence CLI and SDK scans exclude it; opt in on the CLI with `--confidence low`.
+  `generic-password` and `generic-username` remain excluded. Explicit rule selectors no longer
+  bypass the threshold: an explicitly selected lower-confidence rule now errors before
+  compilation, including alongside `--rule all`. Add `--confidence low` to opt in;
+  `rules list` and `rules check` include all confidence levels by default and accept the flag.
+- Add opt-in Node `Rules.load({ includeDependencies: true })` to retain transitive helpers
+  below the requested confidence before compilation, and `Validator.validate(findings,
+  { candidates })` to scope provider checks without discarding the original helper batch.
+  Candidates are preflighted like `RevocationPlan.validate()`: incomplete inputs are skipped
+  before any provider request. Add non-copying `ScanInput.byteLength`.
+- Prepare rules 3.2.0, scanner 3.0.3 and Python SDK 1.6.3 for the shared-engine fixes.
+  Rules uses a minor release for the newly deprecated effective-confidence helpers.
+- Prepare the independently versioned Node SDK 1.0.0 stable release, with an expanded
+  npm README, logo, runnable pipeline examples, showcase walkthrough and Apache 2.0
+  package metadata; retain all bundled third-party licenses and notices.
+
 ## [v2.17.0]
 
 ### Added

@@ -11,14 +11,14 @@ import rulesSdk from 'kingfisher-secret-scanner/rules';
 import scannerSdk from 'kingfisher-secret-scanner/scanner';
 import inputsSdk from 'kingfisher-secret-scanner/inputs';
 import gitSdk from 'kingfisher-secret-scanner/git';
-import validationSdk from 'kingfisher-secret-scanner/validation';
+import validationSdk, { type ValidationOptions } from 'kingfisher-secret-scanner/validation';
 
 const defaultScanner: typeof Scanner = sdk.Scanner;
 const defaultSubpaths = [coreSdk.Finding, rulesSdk.Rules, scannerSdk.Scanner, inputsSdk.ScanInput,
   gitSdk.gitInputs, validationSdk.Validator, revocationSdk.Revoker];
 void [defaultScanner, defaultSubpaths];
 
-const rules: Rules = await Rules.load({ paths: [], cache: false, confidence: 'low' });
+const rules: Rules = await Rules.load({ paths: [], cache: false, confidence: 'low', includeDependencies: true });
 const sameRules: typeof Rules = SubpathRules;
 const sameScanner: typeof Scanner = SubpathScanner;
 const sameRevoker: typeof Revoker = SubpathRevoker;
@@ -31,7 +31,12 @@ const signal = new AbortController().signal;
 const cancellation = new CancellationToken();
 const findings: Finding[] = await scanner.scan(new Uint8Array(), { signal, cancellation, path: 'config.env' });
 const validator = new Validator({ httpFallbacks: false, timeoutMs: 0 });
-const results: ValidationResult[] = await validator.validate(findings);
+const selection: ValidationOptions = { candidates: Object.freeze([...findings]), signal };
+const results: ValidationResult[] = await validator.validate(findings, selection);
+// @ts-expect-error original Finding objects, not serialized reports
+await validator.validate(findings, { candidates: findings.map(finding => finding.toJSON()) });
+// @ts-expect-error dependency retention is a boolean opt-in
+await Rules.load({ includeDependencies: 'true' });
 for await (const result of scanner.scanInputs(expandContent(expandArchives(filesystem(['.']))))) {
   const fingerprint: string | undefined = result.findings[0]?.fingerprint;
   void fingerprint;
@@ -53,5 +58,7 @@ await revoker.revoke(findings[0].toJSON(), { confirm: true });
 // @ts-expect-error confidence is a constrained public option
 await Rules.load({ confidence: 'anything' });
 const input = new ScanInput({ path: 'config.env', data: 'synthetic' });
+const inputBytes: number | undefined = input.byteLength;
+void inputBytes;
 await scanner.scanInput(input);
 await Promise.all([scanner.close(), detection.close(), validator.close(), revoker.close()]);

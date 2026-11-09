@@ -1,0 +1,22 @@
+{
+  "name": "kingfisher-workbench-example",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Kingfisher Workbench: a runnable Node SDK showcase for offline detection, redacted reports, explicit validation and confirmed revocation",
+  "type": "module",
+  "scripts": {
+    "start": "node src/main.mjs",
+    "demo": "node demo/run.mjs",
+    "test": "node --test",
+    "check": "node scripts/check.mjs",
+    "start:checkout": "node scripts/checkout.mjs scan",
+    "demo:checkout": "node scripts/checkout.mjs demo",
+    "test:checkout": "node scripts/checkout.mjs test"
+  },
+  "engines": {
+    "node": "^22.13.0 || ^24.0.0 || ^26.0.0"
+  },
+  "dependencies": {
+    "kingfisher-secret-scanner": "1.0.0"
+  }
+}

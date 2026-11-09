@@ -403,10 +403,10 @@ mod tests {
             if let Ok(bytes) = std::fs::read(&path)
                 && let Ok(snapshot) = serde_json::from_slice::<serde_json::Value>(&bytes)
                 && snapshot["bytes"].as_u64() == Some(1_500_000_000)
-                && snapshot["phase"] == "Checking credentials"
+                && snapshot["phase"] == "Validating credentials"
             {
                 assert_eq!(snapshot["blobs"], 1);
-                assert_eq!(snapshot["phase"], "Checking credentials");
+                assert_eq!(snapshot["phase"], "Validating credentials");
                 assert_eq!(snapshot["kind"], "validation");
                 assert_eq!(snapshot["completed"], 1);
                 let scan_seconds = snapshot["scan_seconds"].as_f64().unwrap();
@@ -550,20 +550,13 @@ mod tests {
     fn process_fixture() {
         let Ok(mode) = std::env::var("KINGFISHER_DESKTOP_TEST_CHILD") else { return };
         if mode == "progress" {
-            let _guard = crate::scan_progress::start().unwrap();
-            crate::scan_progress::phase(
-                "Scanning files and Git history",
-                0,
-                crate::scan_progress::PhaseKind::Scan,
-            );
+            let _guard = crate::scan_progress::start(false, false).unwrap();
+            let scanning = crate::scan_progress::scanning();
             crate::scan_progress::scanned(1_500_000_000);
             thread::sleep(Duration::from_millis(50));
-            crate::scan_progress::phase(
-                "Checking credentials",
-                2,
-                crate::scan_progress::PhaseKind::Validation,
-            );
-            crate::scan_progress::advance();
+            drop(scanning);
+            let validation = crate::scan_progress::validating(2);
+            validation.advance(1);
             thread::sleep(Duration::from_millis(1100));
             return;
         }

@@ -19,6 +19,9 @@ on:
       - '.github/workflows/ci.yml'
       - '.github/workflows/release.yml'
       - 'scripts/tests/test_ci_workflows.py'
+      - '.github/actions/vectorscan-prebuilt/**'
+      - 'scripts/fetch-vectorscan.py'
+      - 'scripts/tests/test_fetch_vectorscan.py'
 
 permissions:
   contents: read
@@ -50,6 +53,7 @@ jobs:
         run: |
           brew list cmake >/dev/null 2>&1 || brew install cmake
           brew list pkg-config >/dev/null 2>&1 || brew install pkg-config
+      - uses: ./.github/actions/vectorscan-prebuilt
       # Includes the process fixture harness and GPUI's headless UI tests.
       - name: Run wizard regressions
         run: |

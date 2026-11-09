@@ -160,6 +160,52 @@ mod test {
     }
 
     #[test]
+    fn generic_api_key_requires_explicit_low_confidence_selection() {
+        let id = "betterleaks.generic-api-key";
+        let low = get_builtin_rules(Some(Confidence::Low)).unwrap();
+        assert_eq!(low.rules[id].confidence, Confidence::Low);
+        for minimum in [None, Some(Confidence::Medium), Some(Confidence::High)] {
+            let selected = get_builtin_rules(minimum).unwrap();
+            assert!(!selected.rules.contains_key(id), "generic API key selected at {minimum:?}");
+        }
+        let defaults = get_builtin_rules(None).unwrap();
+        assert_eq!(
+            defaults.rules["betterleaks.generic-credential-uri"].confidence,
+            Confidence::Medium
+        );
+    }
+
+    #[test]
+    fn builtin_filters_have_no_confidence_changing_calls_or_unused_uri_bindings() {
+        let rules = get_builtin_rules(Some(Confidence::Low)).unwrap();
+        for rule in rules.rules.values() {
+            let filter = serde_json::to_string(&rule.betterleaks_filter).unwrap();
+            assert!(!filter.contains("setConfidence"), "legacy confidence helper in {}", rule.id);
+        }
+        assert_eq!(rules.rules["betterleaks.generic-api-key"].confidence, Confidence::Low);
+        assert_eq!(
+            rules.rules["betterleaks.generic-credential-uri"].confidence,
+            Confidence::Medium
+        );
+        let uri = &rules.rules["betterleaks.generic-credential-uri"];
+        let filter = serde_json::to_string(uri.betterleaks_filter.as_ref().unwrap()).unwrap();
+        for name in [
+            "level",
+            "isExampleValue",
+            "isSyntheticCredentialTuple",
+            "isTestOrDocumentationSource",
+            "hasLowConfidenceHost",
+        ] {
+            let identifier = serde_json::to_string(&crate::BetterleaksExpr::Identifier {
+                value: name.to_string(),
+            })
+            .unwrap();
+            assert!(!filter.contains(&identifier), "unused URI reference {name}");
+            assert!(!filter.contains(&format!(r#""name":"{name}""#)), "unused URI binding {name}");
+        }
+    }
+
+    #[test]
     fn placeholder_private_keys_and_mongodb_passwords_are_filtered() {
         let rules = get_builtin_rules(Some(Confidence::Low)).unwrap();
         let key_rule = &rules.rules["betterleaks.private-key"];
@@ -469,7 +515,7 @@ mod test {
         use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 
         let rules = get_builtin_rules(Some(Confidence::Low)).unwrap();
-        assert_eq!(rules.num_rules(), 502);
+        assert_eq!(rules.num_rules(), 503);
         let provenance: serde_json::Value = serde_json::from_str(BUILTIN_RULE_PROVENANCE).unwrap();
         assert_eq!(
             provenance["betterleaks"]["revision"],
@@ -900,7 +946,20 @@ mod test {
         let gcp = rules.rules.get("betterleaks.gcp-service-account").unwrap();
         assert!(matches!(gcp.revocation, Some(Revocation::GCP)));
 
-        for id in ["generic-api-key", "generic-password", "generic-username"] {
+        let generic = rules.rules.get("betterleaks.generic-api-key").expect("generic API-key rule");
+        assert_eq!(generic.confidence, Confidence::Low);
+        assert_eq!(generic.specificity, -100);
+        let generic_filter =
+            serde_json::to_string(generic.betterleaks_filter.as_ref().unwrap()).unwrap();
+        assert!(!generic_filter.contains("setConfidence"));
+        // "level" remains a legitimate rejection-list string, not a confidence variable.
+        let level_identifier = serde_json::to_string(&crate::BetterleaksExpr::Identifier {
+            value: "level".to_string(),
+        })
+        .unwrap();
+        assert!(!generic_filter.contains(&level_identifier));
+        assert!(!generic_filter.contains(r#""name":"level""#));
+        for id in ["generic-password", "generic-username"] {
             assert!(!rules.rules.contains_key(&format!("betterleaks.{id}")), "unexpected {id}");
         }
 

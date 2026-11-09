@@ -253,6 +253,7 @@ class Rules {
     if (!['low', 'medium', 'high'].includes(confidence)) throw new RangeError('confidence must be low, medium or high');
     const configuration = {
       paths, confidence,
+      includeDependencies: bool(options.includeDependencies, false, 'includeDependencies'),
       builtins: bool(options.builtins, true, 'builtins'),
       cache: bool(options.cache, true, 'cache'),
       cacheDir: options.cacheDir === undefined ? undefined : string(options.cacheDir, 'cacheDir'),
@@ -438,6 +439,7 @@ class ScanInput {
   get path() { return inputHandles.get(this).path; }
   get file() { return inputHandles.get(this).file; }
   get data() { const value = inputHandles.get(this).data; return value === undefined ? undefined : Buffer.from(value); }
+  get byteLength() { return inputHandles.get(this).data?.byteLength; }
   get attributes() { return inputHandles.get(this).attributes; }
   get repository() { return inputHandles.get(this).repository; }
   get commit() { return inputHandles.get(this).commit; }
@@ -515,9 +517,27 @@ class Validator {
     return new Validator({ maxPendingOperations: state(this).maxPending }, internal, nativeCall(() => state(this).native.withVariables(values)));
   }
   async validate(findings, options = {}) {
-    const values = nativeFindings(findings);
+    object(options);
+    // Snapshot both arrays before native work, retaining all raw helpers even
+    // when the caller explicitly limits which findings may contact providers.
+    const batch = Array.isArray(findings) ? Array.from(findings) : findings;
+    const values = nativeFindings(batch);
+    const candidates = options.candidates;
+    let indices;
+    if (candidates !== undefined) {
+      if (!Array.isArray(candidates)) throw new TypeError('candidates must be an array of original Finding objects');
+      const membership = new Map(batch.map((value, index) => [value, index]));
+      const selected = new Set();
+      indices = Array.from(candidates, candidate => {
+        if (!findingHandles.has(candidate)) throw new TypeError('candidates must contain original Finding objects');
+        if (!membership.has(candidate)) throw new TypeError('candidates must be original members of findings');
+        if (selected.has(candidate)) throw new TypeError('candidates must not contain duplicates');
+        selected.add(candidate);
+        return membership.get(candidate);
+      });
+    }
     const results = await operation(this, options, (value, control) =>
-      value.validate(values, undefined, control.remaining(), control.token));
+      value.validate(values, indices, control.remaining(), control.token));
     return results.map(value => new ValidationResult(internal, value));
   }
   async inspect(findings, options = {}) {

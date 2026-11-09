@@ -57,6 +57,7 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        # actions/deploy-pages caps this input at 600000 ms (10 minutes); a slower
-        # Pages deployment has to be re-run rather than waited out.
+        # The pinned implementation (not just its default) caps timeout at 600000 ms:
+        # https://github.com/actions/deploy-pages/blob/368f82528645a54fb793d4d04e342629a3f51346/src/internal/deployment.js#L26-L67
+        # Larger inputs warn and are clamped; timed-out deployments must be re-run.
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

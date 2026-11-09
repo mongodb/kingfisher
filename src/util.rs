@@ -21,6 +21,33 @@ const MIN_TOKIO_BLOCKING_THREADS: usize = 32;
 const TOKIO_BLOCKING_THREADS_PER_JOB: usize = 8;
 const MAX_TOKIO_BLOCKING_THREADS: usize = 256;
 
+/// Tracing writer that suspends the live scan spinner while writing diagnostics.
+/// Non-interactive scans retain ordinary stderr output without progress escapes.
+pub fn progress_log_writer() -> impl std::io::Write {
+    ProgressLogWriter { writer: std::io::stderr(), terminal: crate::scan_progress::terminal() }
+}
+
+struct ProgressLogWriter<W> {
+    writer: W,
+    terminal: Option<indicatif::ProgressBar>,
+}
+
+impl<W: std::io::Write> std::io::Write for ProgressLogWriter<W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        match &self.terminal {
+            Some(terminal) => terminal.suspend(|| self.writer.write(bytes)),
+            None => self.writer.write(bytes),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match &self.terminal {
+            Some(terminal) => terminal.suspend(|| self.writer.flush()),
+            None => self.writer.flush(),
+        }
+    }
+}
+
 /// Per-runtime cap for Tokio's blocking thread pool.
 ///
 /// Tokio defaults to 512 blocking threads per runtime. Kingfisher can run the
@@ -420,6 +447,16 @@ mod tests {
         assert!(!is_base64(invalid_base64));
         assert!(!is_base64(invalid_length));
         assert!(!is_base64(invalid_characters));
+    }
+
+    #[test]
+    fn progress_log_writer_preserves_diagnostics_with_and_without_a_spinner() {
+        for terminal in [None, Some(indicatif::ProgressBar::hidden())] {
+            let mut writer = ProgressLogWriter { writer: Vec::new(), terminal };
+            writer.write_all(b"warning: actionable diagnostic\n").unwrap();
+            writer.flush().unwrap();
+            assert_eq!(writer.writer, b"warning: actionable diagnostic\n");
+        }
     }
 
     #[test]

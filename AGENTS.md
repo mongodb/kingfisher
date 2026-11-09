@@ -234,6 +234,6 @@ does not regenerate the catalog. See [publishing guidance](docs/PUBLISHING.md) f
 - Deployment/install: `docs/INSTALLATION.md`, `docs/DEPLOYMENT.md`, `docs/PYPI.md`, [Node SDK guide](docs/JAVASCRIPT.md)
 - Rust embedding: [library guide](docs/LIBRARY.md), [runnable examples](crates/kingfisher-scanner/examples) (`kingfisher-scanner`; validation and revocation via `validation`)
 - Python embedding: [SDK guide](docs/PYPI.md), [runnable examples](python/examples) (install `kingfisher-secret-scanner`, import `kingfisher_sdk`)
-- JavaScript/TypeScript embedding: [Node SDK guide](docs/JAVASCRIPT.md), [runnable examples](javascript/examples) (`kingfisher-secret-scanner` on npm; independent **0.1.0** preview of npm support)
+- JavaScript/TypeScript embedding: [Node SDK guide](docs/JAVASCRIPT.md), [runnable examples](javascript/examples) (`kingfisher-secret-scanner` on npm; independent stable **1.0.0** release)
 - Python SDK development: read [SDK contributor guidance](python/AGENTS.md) when changing Python-facing behavior, including changes implemented in shared Rust crates; [native binding guidance](crates/kingfisher-python/AGENTS.md) applies to the PyO3 bridge.
 - Node SDK development: read [SDK contributor guidance](javascript/AGENTS.md) when changing Node-facing behavior, including changes implemented in shared Rust crates or the [Node-API bridge](crates/kingfisher-node).

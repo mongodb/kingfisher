@@ -1,0 +1,10 @@
+# The repository ignores generated JSON globally; this source manifest must ship.
+!package.json
+node_modules/
+report.html
+demo-report.html
+revocations.jsonl
+revocations-*.jsonl
+*.log
+# Generated demo inputs/reports belong in an OS-private temporary directory.
+demo/work/

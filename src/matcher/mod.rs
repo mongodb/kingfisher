@@ -165,7 +165,8 @@ impl<'a> Drop for Matcher<'a> {
 }
 
 pub enum ScanResult<'a> {
-    SeenWithMatches,
+    /// Accepted observations are retained for progress, but must not be stored again.
+    SeenWithMatches(Vec<BlobMatch<'a>>),
     SeenSansMatches,
     New(Vec<BlobMatch<'a>>),
 }
@@ -222,6 +223,47 @@ impl<'a> Matcher<'a> {
         })
     }
 
+    /// Exact replay gates are safe on a complete buffer. For segmented inputs, retain
+    /// the original broad gates: an unbounded match can exceed the chunk overlap.
+    fn scan_native_chunk(&mut self, bytes: &[u8], base: u64, segmented: bool) -> Result<()> {
+        self.scanner_pool.try_with(|scanner| {
+            scanner.scan(bytes, |rule_id, _from, to, _flags| {
+                let index = rule_id as usize;
+                if index < self.rules_db.num_rules()
+                    && (!segmented || !self.rules_db.uses_vectorscan_prefilter(index))
+                {
+                    self.user_data
+                        .raw_matches_scratch
+                        .push(RawMatch { rule_id, end_idx: to + base });
+                }
+                kingfisher_vectorscan::Scan::Continue
+            })
+        })??;
+        if segmented {
+            if let Some(pool) = self.rules_db.chunked_prefilter_scanners() {
+                pool.try_with(|scanner| {
+                    scanner.scan(bytes, |rule_id, _from, to, _flags| {
+                        self.user_data
+                            .raw_matches_scratch
+                            .push(RawMatch { rule_id, end_idx: to + base });
+                        kingfisher_vectorscan::Scan::Continue
+                    })
+                })??;
+            } else {
+                // A broad gate compilation failure must not suppress Rust replay.
+                for index in 0..self.rules_db.num_rules() {
+                    if self.rules_db.uses_vectorscan_prefilter(index) {
+                        self.user_data.raw_matches_scratch.push(RawMatch {
+                            rule_id: index.try_into().expect("rule count fits in u32"),
+                            end_idx: base,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     fn scan_bytes_raw(&mut self, input: &[u8], _filename: &str) -> Result<()> {
         // Remember previous peak automatically
@@ -236,16 +278,7 @@ impl<'a> Matcher<'a> {
             let end = (offset + MAX_CHUNK_SIZE).min(input.len());
             let slice = &input[offset..end];
             let base = offset as u64;
-            self.scanner_pool.try_with(|scanner| {
-                scanner.scan(slice, |rule_id, _from, to, _flags| {
-                    if (rule_id as usize) < self.rules_db.num_rules() {
-                        self.user_data
-                            .raw_matches_scratch
-                            .push(RawMatch { rule_id, end_idx: to + base });
-                    }
-                    kingfisher_vectorscan::Scan::Continue
-                })
-            })??;
+            self.scan_native_chunk(slice, base, input.len() > MAX_CHUNK_SIZE)?;
 
             if end == input.len() {
                 break;
@@ -304,16 +337,7 @@ impl<'a> Matcher<'a> {
             let index_range = range.start.saturating_sub(RAW_MATCH_LOOKBACK)..range.end;
             self.user_data.raw_matches_scratch.clear();
             let base = range.start as u64;
-            self.scanner_pool.try_with(|scanner| {
-                scanner.scan(&input[range], |rule_id, _from, to, _flags| {
-                    if (rule_id as usize) < self.rules_db.num_rules() {
-                        self.user_data
-                            .raw_matches_scratch
-                            .push(RawMatch { rule_id, end_idx: to + base });
-                    }
-                    kingfisher_vectorscan::Scan::Continue
-                })
-            })??;
+            self.scan_native_chunk(&input[range], base, input.len() > MAX_CHUNK_SIZE)?;
 
             self.process_raw_matches(
                 blob,
@@ -377,7 +401,8 @@ impl<'a> Matcher<'a> {
             let rule = Arc::clone(&rules_db.rules()[rule_id_usize]);
             let re = &rules_db.anchored_regexes()[rule_id_usize];
             let end_idx_usize = end_idx as usize;
-            let (mut scan_start, scan_end) = if rules_db.uses_vectorscan_prefilter(rule_id_usize) {
+            let bounded_confirmation = !rules_db.uses_vectorscan_prefilter(rule_id_usize);
+            let (mut scan_start, scan_end) = if !bounded_confirmation {
                 if !seen_prefilter_rules.insert(rule_id_usize) {
                     continue;
                 }
@@ -401,7 +426,7 @@ impl<'a> Matcher<'a> {
                 continue;
             }
             let before_len = matches.len();
-            let candidate_index = if rules_db.uses_vectorscan_prefilter(rule_id_usize) {
+            let candidate_index = if !bounded_confirmation {
                 None
             } else {
                 candidate_indexes.entry(rule_id_usize).or_default().get_or_insert_with(
@@ -427,7 +452,8 @@ impl<'a> Matcher<'a> {
                     scan_start,
                     scan_end,
                     matches,
-                    Some(&mut *previous_full_matches),
+                    // The one-shot whole-blob replay cannot revisit rejected spans.
+                    bounded_confirmation.then_some(&mut *previous_full_matches),
                     previous_matches,
                     rule_id_usize,
                     seen_matches,
@@ -441,7 +467,7 @@ impl<'a> Matcher<'a> {
                     self.respect_ignore_if_contains,
                     &self.inline_ignore_config,
                     inline_ignore_index,
-                    !rules_db.uses_vectorscan_prefilter(rule_id_usize),
+                    bounded_confirmation,
                     candidate_index,
                     filter_line_cache,
                 );
@@ -524,15 +550,6 @@ impl<'a> Matcher<'a> {
         self.local_stats.blobs_scanned += 1;
         self.local_stats.bytes_scanned += blob.bytes().len() as u64;
         crate::scan_progress::scanned(blob.bytes().len() as u64);
-        // Opportunistically look for standalone Base64 blobs. If neither
-        // the raw scan nor this check yields anything, we can return early
-        // before doing any heavier work.
-        let mut b64_items = if no_base64 || self.resources.exceeds(blob.len(), BASE64_SCAN_LIMIT) {
-            Vec::new()
-        } else {
-            get_b64_strings(blob.bytes())
-        };
-
         let lang_hint = lang.as_deref();
         let mut seen_matches = FxHashSet::default();
         let mut previous_matches: FxHashMap<usize, MatchSpans> = FxHashMap::default();
@@ -585,6 +602,14 @@ impl<'a> Matcher<'a> {
             betterleaks_path_prefiltered,
             &inline_ignore_index,
         )?;
+
+        // Collect decoded buffers only after raw confirmation and filtering finish.
+        // The raw stage's local caches have been dropped when that call returns.
+        let mut b64_items = if no_base64 || self.resources.exceeds(blob.len(), BASE64_SCAN_LIMIT) {
+            Vec::new()
+        } else {
+            get_b64_strings(blob.bytes())
+        };
         if matches.is_empty() && b64_items.is_empty() {
             return Ok(ScanResult::New(Vec::new()));
         }
@@ -680,14 +705,9 @@ impl<'a> Matcher<'a> {
         suppress_credential_uri_fallbacks(&mut matches);
         if matches.iter().any(|finding| finding.rule.syntax().specificity != 0) {
             let lines = kingfisher_scanner::__cli_internals::LineIndex::new(blob.bytes());
-            let line_starts = std::iter::once(0)
-                .chain(
-                    blob.bytes()
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(index, byte)| (*byte == b'\n').then_some(index + 1)),
-                )
-                .collect::<Vec<_>>();
+            // Most specificity comparisons, including the generic fallback, have no component
+            // window. Do not retain a whole-blob line table unless a dependency actually needs it.
+            let line_starts = std::cell::OnceCell::new();
             let keep = kingfisher_scanner::__cli_internals::specificity_keep(
                 matches.iter().map(|finding| {
                     (
@@ -710,7 +730,12 @@ impl<'a> Matcher<'a> {
                 |primary, component, dependency| {
                     component_is_within(
                         blob.bytes(),
-                        &line_starts,
+                        line_starts.get_or_init(|| {
+                            use bstr::ByteSlice;
+                            std::iter::once(0)
+                                .chain(blob.bytes().find_iter(b"\n").map(|offset| offset + 1))
+                                .collect::<Vec<_>>()
+                        }),
                         matches[primary].association_offset_span,
                         matches[component].association_offset_span,
                         dependency.within.as_deref().unwrap_or("0"),
@@ -719,12 +744,16 @@ impl<'a> Matcher<'a> {
                 &kingfisher_scanner::ScanControl::default(),
             )
             .expect("unlimited scan cannot be cancelled");
+            let mut hidden_rules = FxHashMap::default();
             let mut index = 0;
             matches.retain_mut(|finding| {
-                if keep.suppress_reporting[index] {
-                    let mut rule = finding.rule.as_ref().clone();
-                    rule.suppress_runtime_reporting();
-                    finding.rule = Arc::new(rule);
+                if keep.keep[index] && keep.suppress_reporting[index] && finding.rule.visible() {
+                    let identity = Arc::as_ptr(&finding.rule) as usize;
+                    finding.rule = Arc::clone(hidden_rules.entry(identity).or_insert_with(|| {
+                        let mut hidden = finding.rule.as_ref().clone();
+                        hidden.suppress_runtime_reporting();
+                        Arc::new(hidden)
+                    }));
                 }
                 let retain = keep.keep[index];
                 index += 1;
@@ -738,7 +767,7 @@ impl<'a> Matcher<'a> {
             let blob_id = blob.id();
             if let Some(had_matches) = self.seen_blobs.insert(blob_id, true) {
                 return Ok(if had_matches {
-                    ScanResult::SeenWithMatches
+                    ScanResult::SeenWithMatches(matches)
                 } else {
                     ScanResult::SeenSansMatches
                 });
@@ -1265,6 +1294,14 @@ mod test {
     type TestFinding = (String, Confidence, Option<String>, bool);
 
     fn scan_test_rules(rules: Vec<Rule>, input: &[u8]) -> Result<Vec<TestFinding>> {
+        scan_test_rules_with_base64(rules, input, false)
+    }
+
+    fn scan_test_rules_with_base64(
+        rules: Vec<Rule>,
+        input: &[u8],
+        decode_base64: bool,
+    ) -> Result<Vec<TestFinding>> {
         let rules_db = RulesDatabase::from_rules(rules)?;
         let seen = BlobIdMap::new();
         let scanner_pool = Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
@@ -1273,7 +1310,7 @@ mod test {
         let blob = Blob::from_bytes(input.to_vec());
         let origin = OriginSet::from(Origin::from_file(PathBuf::from("compatibility.txt")));
         let ScanResult::New(matches) =
-            matcher.scan_blob(&blob, &origin, None, false, true, true)?
+            matcher.scan_blob(&blob, &origin, None, false, true, !decode_base64)?
         else {
             panic!("deduplication is disabled");
         };
@@ -1610,7 +1647,7 @@ mod test {
     }
 
     #[test]
-    fn dynamic_confidence_is_filtered_after_promotion_or_demotion() -> Result<()> {
+    fn legacy_confidence_calls_cannot_promote_or_demote_raw_or_decoded_findings() -> Result<()> {
         let mut promoted = compatibility_rule(
             "betterleaks.promoted",
             r"(PROMOTE_[A-Z0-9]{12})",
@@ -1623,16 +1660,213 @@ mod test {
         let mut demoted = compatibility_rule(
             "betterleaks.demoted",
             r"(DEMOTE_[A-Z0-9]{12})",
-            Confidence::Medium,
+            Confidence::High,
             Some(set_confidence_filter("low")),
             vec![],
             true,
         );
         demoted.set_runtime_confidence_filter(Confidence::Medium, false);
 
-        let findings =
-            scan_test_rules(vec![promoted, demoted], b"PROMOTE_123456ABCDEF DEMOTE_123456ABCDEF")?;
-        assert_eq!(findings, [("betterleaks.promoted".to_string(), Confidence::High, None, true)]);
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let input = b"PROMOTE_123456ABCDEF DEMOTE_123456ABCDEF";
+        let encoded = STANDARD.encode(input);
+        assert!(!get_base64_strings(encoded.as_bytes()).is_empty());
+        for bytes in [input.as_slice(), encoded.as_bytes()] {
+            let findings =
+                scan_test_rules_with_base64(vec![promoted.clone(), demoted.clone()], bytes, true)?;
+            assert_eq!(
+                findings,
+                [("betterleaks.demoted".to_string(), Confidence::High, None, true)]
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn static_confidence_findings_share_the_original_rule() -> Result<()> {
+        let mut rule = compatibility_rule(
+            "custom.static-confidence",
+            r"(TOKEN_[A-Z0-9]{12})",
+            Confidence::High,
+            Some(set_confidence_filter("low")),
+            vec![],
+            true,
+        );
+        rule.set_runtime_confidence_filter(Confidence::Medium, false);
+        let findings = scan_owned_test_rules(vec![rule], b"TOKEN_123456ABCDEF TOKEN_ABCDEF123456")?;
+        assert_eq!(findings.len(), 2);
+        assert!(findings.iter().all(|finding| finding.rule.confidence() == Confidence::High));
+        assert!(Arc::ptr_eq(&findings[0].rule, &findings[1].rule));
+        Ok(())
+    }
+
+    #[test]
+    fn below_threshold_helpers_stay_hidden_and_available_for_association() -> Result<()> {
+        let mut helper = compatibility_rule(
+            "custom.helper",
+            r"(HELPER_[A-Z0-9]{12})",
+            Confidence::Low,
+            Some(set_confidence_filter("high")),
+            vec![],
+            true,
+        );
+        helper.set_runtime_confidence_filter(Confidence::High, true);
+        let mut primary = compatibility_rule(
+            "custom.primary",
+            r"(PRIMARY_[A-Z0-9]{12})",
+            Confidence::High,
+            Some(set_confidence_filter("low")),
+            vec![DependsOnRule {
+                rule_id: "custom.helper".into(),
+                verify_candidates: false,
+                variable: "COMPONENT".into(),
+                optional: false,
+                within: Some("1L".into()),
+            }],
+            true,
+        );
+        primary.set_runtime_confidence_filter(Confidence::High, false);
+        let input = b"HELPER_123456ABCDEF PRIMARY_123456ABCDEF HELPER_123456ABCDEF";
+        let findings = scan_owned_test_rules(vec![helper, primary], input)?;
+        let helpers: Vec<_> =
+            findings.iter().filter(|finding| finding.rule.id() == "custom.helper").collect();
+        assert_eq!(helpers.len(), 2);
+        assert!(helpers.iter().all(|finding| {
+            !finding.rule.visible() && finding.rule.confidence() == Confidence::Low
+        }));
+        assert!(Arc::ptr_eq(&helpers[0].rule, &helpers[1].rule));
+        let primary =
+            findings.iter().find(|finding| finding.rule.id() == "custom.primary").unwrap();
+        assert_eq!(primary.rule.confidence(), Confidence::High);
+        assert!(primary.rule.visible());
+        assert!(primary.dependent_captures.contains_key("COMPONENT"));
+        Ok(())
+    }
+
+    #[test]
+    fn specificity_suppression_reuses_hidden_component_rules() -> Result<()> {
+        let helper = compatibility_rule(
+            "custom.component",
+            r"(TOKEN_[A-Z0-9]{12})",
+            Confidence::Medium,
+            None,
+            vec![],
+            true,
+        );
+        let primary = compatibility_rule(
+            "custom.primary",
+            r"(PRIMARY_[A-Z0-9]{12})",
+            Confidence::High,
+            None,
+            vec![DependsOnRule {
+                rule_id: "custom.component".into(),
+                verify_candidates: false,
+                variable: "COMPONENT".into(),
+                optional: false,
+                within: Some("1L".into()),
+            }],
+            true,
+        );
+        let mut specific = compatibility_rule(
+            "custom.specific",
+            r"(WRAP_TOKEN_[A-Z0-9]{12})",
+            Confidence::High,
+            None,
+            vec![],
+            true,
+        );
+        specific.syntax.specificity = 10;
+        let findings = scan_owned_test_rules(
+            vec![helper, primary, specific],
+            b"PRIMARY_123456ABCDEF WRAP_TOKEN_123456ABCDEF WRAP_TOKEN_ABCDEF123456",
+        )?;
+        let helpers: Vec<_> =
+            findings.iter().filter(|finding| finding.rule.id() == "custom.component").collect();
+        assert_eq!(helpers.len(), 2);
+        assert!(helpers.iter().all(|finding| {
+            !finding.rule.visible() && finding.rule.confidence() == Confidence::Medium
+        }));
+        assert!(Arc::ptr_eq(&helpers[0].rule, &helpers[1].rule));
+        assert!(
+            findings
+                .iter()
+                .any(|finding| { finding.rule.id() == "custom.primary" && finding.rule.visible() })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn secret_prefix_preserves_line_context_and_captures_for_raw_and_base64() -> Result<()> {
+        use crate::rules::BetterleaksExpr as Expr;
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        use kingfisher_rules::betterleaks_filter::BetterleaksFilterPrefix;
+
+        let contains = |field: &str, term: &str| Expr::Call {
+            callee: Box::new(Expr::Identifier { value: "containsAny".into() }),
+            arguments: vec![
+                Expr::Member {
+                    node: Box::new(Expr::Identifier { value: "finding".into() }),
+                    property: Box::new(Expr::String { value: field.into() }),
+                    optional: false,
+                    method: false,
+                },
+                Expr::Array { nodes: vec![Expr::String { value: term.into() }] },
+            ],
+        };
+        let rule = compatibility_rule(
+            "acme.prefix-context",
+            r"(?P<secret>token_[a-z]+)",
+            Confidence::Medium,
+            Some(Expr::Binary {
+                operator: "||".into(),
+                left: Box::new(contains("secret", "discard")),
+                right: Box::new(contains("line", "BLOCK")),
+            }),
+            vec![],
+            true,
+        );
+        let rules_db = RulesDatabase::from_rules(vec![rule])?;
+        let expression = rules_db.rules()[0].betterleaks_filter().unwrap();
+        assert!(matches!(
+            rules_db.evaluate_betterleaks_filter_prefix(expression, "token_discard")?,
+            Some(BetterleaksFilterPrefix::Complete(outcome)) if outcome.discard
+        ));
+        assert!(matches!(
+            rules_db.evaluate_betterleaks_filter_prefix(expression, "token_keepme")?,
+            Some(BetterleaksFilterPrefix::Remainder(_))
+        ));
+
+        let raw = b"\xff token_discard\r\nBLOCK token_ignoreme\r\nSAFE token_keepme\r\n";
+        // Base64 discovery intentionally accepts ASCII decoded buffers only.
+        let encoded = STANDARD.encode(&raw[1..]);
+        for (input, decoded) in [(raw.as_slice(), false), (encoded.as_bytes(), true)] {
+            let seen = BlobIdMap::new();
+            let scanner_pool =
+                Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
+            let mut matcher =
+                Matcher::new(&rules_db, scanner_pool, &seen, None, false, None, &[], false, true)?;
+            let blob = Blob::from_bytes(input.to_vec());
+            let origin = OriginSet::from(Origin::from_file(PathBuf::from("prefix-context.txt")));
+            let ScanResult::New(found) =
+                matcher.scan_blob(&blob, &origin, None, false, true, !decoded)?
+            else {
+                panic!("deduplication is disabled");
+            };
+            assert_eq!(found.len(), 1, "decoded={decoded}");
+            let finding = &found[0];
+            assert_eq!(finding.rule.confidence(), Confidence::Medium);
+            assert_eq!(finding.is_base64, decoded);
+            let captures: Vec<_> = finding
+                .captures
+                .captures
+                .iter()
+                .map(|capture| (capture.name, capture.match_number, capture.raw_value()))
+                .collect();
+            assert_eq!(
+                captures,
+                [(Some("TOKEN"), 1, "token_keepme"), (Some("secret"), 1, "token_keepme"),]
+            );
+        }
         Ok(())
     }
 
@@ -2146,7 +2380,7 @@ mod test {
 
         let matches = match matcher.scan_blob(&blob, &origin, None, false, false, false)? {
             ScanResult::New(matches) => matches,
-            ScanResult::SeenWithMatches => {
+            ScanResult::SeenWithMatches(_) => {
                 panic!(
                     "unexpected scan result: blob should not be considered previously seen with matches"
                 )
@@ -2225,7 +2459,7 @@ mod test {
 
         let matches = match matcher.scan_blob(&blob, &origin, None, false, false, false)? {
             ScanResult::New(matches) => matches,
-            ScanResult::SeenWithMatches => {
+            ScanResult::SeenWithMatches(_) => {
                 panic!(
                     "unexpected scan result: blob should not be considered previously seen with matches"
                 )
@@ -2463,6 +2697,58 @@ yaml_Q7mZ2pL9xR4vN8kT\nveles_Q7mZ2pL9xR4vN8kT"
         assert_eq!((item.pos_start, item.pos_end), (4, 4 + base64_payload.len()));
     }
 
+    #[test]
+    fn deferred_base64_preserves_raw_first_order_and_decode_policy() -> Result<()> {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+
+        let rule = compatibility_rule(
+            "acme.deferred-base64",
+            r"(DEFER_[A-Z0-9]{16})",
+            Confidence::High,
+            None,
+            vec![],
+            true,
+        );
+        let rules_db = RulesDatabase::from_rules(vec![rule])?;
+        let seen = BlobIdMap::new();
+        let scanner_pool = Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
+        let mut matcher =
+            Matcher::new(&rules_db, scanner_pool, &seen, None, false, None, &[], false, true)?;
+        let origin = OriginSet::from(Origin::from_file(PathBuf::from("deferred-base64.txt")));
+
+        let raw = "DEFER_A1B2C3D4E5F6G7H8";
+        let first = "DEFER_Q1R2S3T4U5V6W7X8";
+        let last = "DEFER_Z9Y8X7W6V5U4T3S2";
+        let encoded_first = STANDARD.encode(first);
+        let encoded_last = STANDARD.encode(last);
+        let nested = STANDARD.encode(encoded_first.as_bytes());
+        let mixed = format!("{encoded_first}\n{raw}\n{encoded_last}\n");
+
+        for (input, no_base64, expected) in [
+            (raw.to_owned(), false, vec![(raw, false)]),
+            (encoded_first.clone(), false, vec![(first, true)]),
+            (nested, false, vec![(first, true)]),
+            (mixed.clone(), false, vec![(raw, false), (last, true), (first, true)]),
+            (mixed, true, vec![(raw, false)]),
+            (encoded_first, true, vec![]),
+            (STANDARD.encode(format!("\u{00e9}{first}")), false, vec![]),
+            ("nothing here".to_string(), false, vec![]),
+        ] {
+            let blob = Blob::from_bytes(input.into_bytes());
+            let ScanResult::New(findings) =
+                matcher.scan_blob(&blob, &origin, None, false, true, no_base64)?
+            else {
+                panic!("deduplication is disabled");
+            };
+            let actual: Vec<_> = findings
+                .iter()
+                .map(|finding| (finding.captures.captures[0].raw_value(), finding.is_base64))
+                .collect();
+            assert_eq!(actual, expected, "no_base64={no_base64}, input={:?}", blob.bytes());
+        }
+        Ok(())
+    }
+
     /// `compute_finding_fingerprint` must be stable (same input => same output)
     /// and sensitive to any input component.
     #[test]
@@ -2555,6 +2841,127 @@ yaml_Q7mZ2pL9xR4vN8kT\nveles_Q7mZ2pL9xR4vN8kT"
     }
 
     #[test]
+    fn prefilter_replay_skips_rejected_span_history_and_preserves_chunk_offsets() -> Result<()> {
+        let mut builtins = crate::defaults::get_builtin_rules(Some(Confidence::Low))?;
+        let generic = Rule::new(
+            builtins.rules.remove("betterleaks.generic-api-key").expect("bundled generic"),
+        );
+        let exact = compatibility_rule(
+            "acme.exact",
+            r"(EXACT_[A-Za-z0-9]{12})",
+            Confidence::High,
+            None,
+            vec![],
+            true,
+        );
+        let rules_db = RulesDatabase::from_rules(vec![generic, exact])?;
+        assert!(rules_db.uses_vectorscan_prefilter(0));
+        assert!(!rules_db.uses_vectorscan_prefilter(1));
+        let seen = BlobIdMap::new();
+        let pool = Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
+        let mut matcher =
+            Matcher::new(&rules_db, pool, &seen, None, false, None, &[], false, true)?;
+        let positions = [64, MAX_CHUNK_SIZE - 16, MAX_CHUNK_SIZE + CHUNK_OVERLAP + 128];
+        let line = b"api_key = \"v7Qm2Rk9Px4Tz8Nc6Bw3Dj5H\"\nEXACT_A1b2C3d4E5f6\n";
+        let mut input = vec![b'\n'; positions[2] + line.len()];
+        for start in positions {
+            input[start..start + line.len()].copy_from_slice(line);
+        }
+        input.extend_from_slice(b"api_key = \"short\"\n");
+        input.extend_from_slice(&b"api_key = \"aaaaaaaaaaaaaaaaaaaaaaaa\"\n".repeat(128));
+        let blob = Blob::from_bytes(input);
+        let origin = OriginSet::from(Origin::from_file(PathBuf::from("prefilter-chunks.txt")));
+        matcher.scan_bytes_raw(blob.bytes(), "prefilter-chunks.txt")?;
+        let mut matches = Vec::new();
+        let mut previous_full_matches = FxHashMap::default();
+        matcher.process_raw_matches(
+            &blob,
+            &origin,
+            "prefilter-chunks.txt",
+            &std::collections::BTreeMap::new(),
+            false,
+            &mut matches,
+            &mut FxHashMap::default(),
+            &mut FxHashSet::default(),
+            &mut Vec::new(),
+            false,
+            &std::sync::OnceLock::new(),
+            &mut FxHashSet::default(),
+            &mut FxHashSet::default(),
+            &mut previous_full_matches,
+            &mut FxHashMap::default(),
+            0..blob.len(),
+            &mut kingfisher_rules::betterleaks_filter::BetterleaksFilterLineCache::default(),
+        );
+        assert!(!previous_full_matches.contains_key(&0), "one-shot replay needs no span history");
+        assert!(previous_full_matches.contains_key(&1), "exact endpoints retain span history");
+        assert_eq!(matches.len(), 6, "three generic secrets and every exact hit");
+        let expected: Vec<_> =
+            positions.iter().map(|start| start + b"api_key = \"".len()).collect();
+        let mut starts: Vec<_> = matches
+            .iter()
+            .filter(|finding| finding.rule.id() == "betterleaks.generic-api-key")
+            .map(|finding| finding.matching_input_offset_span.start)
+            .collect();
+        starts.sort_unstable();
+        assert_eq!(starts, expected);
+
+        // The real segmented path must neither replay overlap hits nor retain the
+        // one-shot rule set when reusing the matcher for the next blob.
+        for _ in 0..2 {
+            let ScanResult::New(found) =
+                matcher.scan_blob(&blob, &origin, None, false, true, true)?
+            else {
+                panic!("deduplication is disabled");
+            };
+            assert_eq!(found.len(), 6);
+            let mut starts: Vec<_> = found
+                .iter()
+                .filter(|finding| finding.rule.id() == "betterleaks.generic-api-key")
+                .map(|finding| finding.matching_input_offset_span.start)
+                .collect();
+            starts.sort_unstable();
+            assert_eq!(starts, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn oversized_generic_gate_keeps_matches_longer_than_chunk_overlap() -> Result<()> {
+        let mut builtins = crate::defaults::get_builtin_rules(Some(Confidence::Low))?;
+        let mut generic =
+            builtins.rules.remove("betterleaks.generic-api-key").expect("bundled generic");
+        // Isolate candidate completeness from the independent finding filters.
+        generic.betterleaks_filter = None;
+        generic.min_entropy = 0.0;
+        let rules_db = RulesDatabase::from_rules(vec![Rule::new(generic)])?;
+        assert!(rules_db.uses_vectorscan_prefilter(0));
+        let seen = BlobIdMap::new();
+        let pool = Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
+        let mut matcher =
+            Matcher::new(&rules_db, pool, &seen, None, false, None, &[], false, true)?;
+
+        let mut bytes = vec![b'\n'; MAX_CHUNK_SIZE - CHUNK_OVERLAP - 128];
+        bytes.extend_from_slice(b"api_key = ");
+        bytes.extend(std::iter::repeat_n(b' ', CHUNK_OVERLAP + 512));
+        let secret_start = bytes.len() + 1;
+        let secret = b"v7Qm2Rk9Px4Tz8Nc6Bw3Dj5H";
+        bytes.push(b'"');
+        bytes.extend_from_slice(secret);
+        bytes.extend_from_slice(b"\"\n");
+        let blob = Blob::from_bytes(bytes);
+        let origin = OriginSet::from(Origin::from_file(PathBuf::from("long-generic.txt")));
+        let ScanResult::New(found) = matcher.scan_blob(&blob, &origin, None, false, false, true)?
+        else {
+            panic!("fresh blob should return new matches");
+        };
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].matching_input, secret);
+        assert_eq!(found[0].matching_input_offset_span.start, secret_start);
+        Ok(())
+    }
+
+    #[test]
     fn scan_blob_finds_matches_across_chunk_boundary() -> Result<()> {
         const TOKEN: &[u8] = b"chunk_boundary_token_7f3a9c";
 
@@ -2604,7 +3011,7 @@ yaml_Q7mZ2pL9xR4vN8kT\nveles_Q7mZ2pL9xR4vN8kT"
             other => panic!(
                 "expected new scan result, got {}",
                 match other {
-                    ScanResult::SeenWithMatches => "seen with matches",
+                    ScanResult::SeenWithMatches(_) => "seen with matches",
                     ScanResult::SeenSansMatches => "seen without matches",
                     ScanResult::New(_) => unreachable!(),
                 }

@@ -23,13 +23,13 @@ The manifests currently prepare these releases; a Git tag does not override Carg
 | Package | Version | Published targets |
 | ------- | ------- | ----------------- |
 | `kingfisher-core` | `1.0.6` | `kingfisher_core` library |
-| `kingfisher-rules` | `3.1.0` | `kingfisher_rules` library |
-| `kingfisher-scanner` | `3.0.2` | `kingfisher_scanner` library |
-| `kingfisher-bin` | `2.17.0` | `kingfisher` executable and library |
+| `kingfisher-rules` | `3.2.0` | `kingfisher_rules` library |
+| `kingfisher-scanner` | `3.0.3` | `kingfisher_scanner` library |
+| `kingfisher-bin` | `2.18.0` | `kingfisher` executable and library |
 
 The Python SDK (`kingfisher-secret-scanner`) is independently versioned at
-`1.6.2` in `crates/kingfisher-python/Cargo.toml`; Python modules share that version.
-The npm SDK preview uses **0.1.0** in `crates/kingfisher-node/Cargo.toml` and
+`1.6.3` in `crates/kingfisher-python/Cargo.toml`; Python modules share that version.
+The stable npm SDK uses **1.0.0** in `crates/kingfisher-node/Cargo.toml` and
 `javascript/package.json`, with six same-version native packages. Its `npm-v*`
 release tags do not publish the CLI or Python SDK.
 
@@ -40,8 +40,11 @@ dependency minimums without changing its public API. Python SDK 1.6.0 adds
 compatible APIs for explicit analysis and source attributes. Rules/scanner 3.0.1
 and Python SDK 1.6.1 include the private-key detection fixes. Rules 3.1.0 adds public
 literal expression-input discovery and credential-specific revocation overlays without changing
-existing YAML/TOML or primary-action behavior. Scanner stays at its unpublished prepared
-3.0.2 version; core 1.0.6 is unchanged.
+existing YAML/TOML or primary-action behavior. Rules 3.2.0 and scanner 3.0.3 optimize
+fallback matching and filter evaluation, and include the static-low generic API-key detector.
+Rules 3.2.0 also deprecates the legacy effective-confidence helpers; new compiler deprecation
+warnings require a minor release. Scanner 3.0.3 and Python SDK 1.6.3 remain compatible
+patch releases with those shared-engine fixes; core 1.0.6 is unchanged.
 Scanner 3.0.2 and Python SDK 1.6.2 include the shared identity-response reporting fix;
 high-level SDK results still omit provider responses. Public signatures are unchanged,
 but strict budgeted TAR/ZIP/ASAR expansion now rejects malformed/unsafe members or
@@ -54,10 +57,23 @@ MSVC x64/ARM64 archives with a VS 2022 / MSVC 14.44 STL/CRT baseline. The compil
 cache identity includes both exact versions, so older engine-build entries cannot be
 reused silently.
 
+Native CI jobs stage the same pinned archive through GitHub's release asset API,
+which remains usable when browser download URLs return gateway errors. The fetcher
+reads SHA-256 pins from the immutable Cargo registry sys crate, not mutable release
+metadata; the sys build script verifies them again. To use the same path locally:
+
+```sh
+python3 scripts/fetch-vectorscan.py
+export VECTORSCAN_PREBUILT_DIR="$PWD/target/vectorscan-prebuilt"
+```
+
+Pass `--target <Rust-target-triple>` for cross builds. The Docker-based Linux
+Makefile targets mount this directory read-only; source builds remain explicit.
+
 After publishing, consumers can install the CLI with:
 
 ```sh
-cargo install --locked kingfisher-bin --version 2.17.0
+cargo install --locked kingfisher-bin --version 2.18.0
 ```
 
 This installs the `kingfisher` command. See [library usage](LIBRARY.md#quick-start)
@@ -132,7 +148,8 @@ Cargo can package the selected workspace members together before they exist in t
 
 ```sh
 cargo package --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner -p kingfisher-bin
-cargo test --locked -p kingfisher-bin --test licenses --test smoke_check_rules
+cargo test --locked -p kingfisher-bin --test smoke_check_rules
+make check-notices
 ```
 
 Use `--allow-dirty` only for local pre-commit verification. Inspect the `.crate` archives in
@@ -336,7 +353,7 @@ an authorized maintainer; committing workflow YAML does not configure them.
    2FA**, and confirm write access to all seven packages below. npm trust requires an
    existing package entry. Handle absent names in a separately authorized npm
    ownership/bootstrap setup, not an SDK release. Any dummy bootstrap stages must
-   remain unapproved and must not publish SDK `0.1.0`.
+   remain unapproved and must not publish SDK `1.0.0`.
    **Never approve the dummy bootstrap stages**; skip names already owned.
 5. For **each package**, open npmjs.com → package → **Settings → Trusted publishing**,
    select **GitHub Actions**, and save these exact values:
@@ -377,7 +394,7 @@ is separate. Self-hosted publishers are unsupported.
 
 For the initial SDK release, use a clean, current, reviewed upstream `main` checkout.
 Confirm `origin` points to `mongodb/kingfisher`, not a private development remote,
-the SDK version is `0.1.0`, and `npm-v0.1.0` does not already exist before explicitly
+the SDK version is `1.0.0`, and `npm-v1.0.0` does not already exist before explicitly
 authorizing publication:
 
 ```sh
@@ -451,7 +468,7 @@ publishing, first create fresh archives:
 
 ```sh
 cargo package --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner -p kingfisher-bin
-python3 scripts/publish-crates.py --tag v2.17.0
+python3 scripts/publish-crates.py --tag v2.18.0
 python3 -m unittest discover -s scripts/tests -v
 ```
 

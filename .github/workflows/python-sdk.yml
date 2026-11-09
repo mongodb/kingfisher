@@ -123,6 +123,11 @@ jobs:
           # vendored source inside manylinux to keep the advertised 2.28 floor.
           before-script-linux: yum install -y boost-devel ragel perl-core
           docker-options: -e VECTORSCAN_BUILD_FROM_SOURCE=1 -e CARGO_PROFILE_RELEASE_PANIC=unwind -e CARGO_PROFILE_RELEASE_LTO=false
+      # manylinux builds Vectorscan from source to preserve the glibc 2.28 floor.
+      - uses: ./.github/actions/vectorscan-prebuilt
+        if: runner.os != 'Linux'
+        with:
+          target: ${{ matrix.target }}
       - name: Build macOS wheel
         if: runner.os == 'macOS'
         run: uv run --no-project --with maturin==1.16.0 maturin build --profile python-release --locked --target ${{ matrix.target }} --out dist-python
@@ -292,6 +297,7 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+      - uses: ./.github/actions/vectorscan-prebuilt
       - name: Format, lint, and shared scanner tests
         run: |
           cargo fmt --all --check
