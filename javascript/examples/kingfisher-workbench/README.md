@@ -183,7 +183,7 @@ original native ValidationResult → retained in live owner
 | [Progress](<src/progress.mjs>) | Optional bounded terminal progress; no scanning logic. |
 | [Demo runner](<demo/run.mjs>), [fixture setup](<demo/fixture.mjs>), [mock provider](<demo/mock-provider.mjs>) | Deterministic private Git fixture and entirely local provider lifecycle. |
 | [Checkout runner](<scripts/checkout.mjs>), [syntax checker](<scripts/check.mjs>) | Portable development commands using Node subprocess argument arrays. |
-| [Regression tests](<test/report.test.mjs>) | Offline/native pipeline, helpers, provenance, extraction/budgets, redaction and HTTP mutation boundaries. |
+| [Regression tests](<test/report.test.mjs>), [filesystem safety tests](<test/safety.test.mjs>) | Offline/native pipeline, helpers, provenance, extraction/budgets, redaction, output aliases and HTTP mutation boundaries. |
 
 Working tree and history each have one in-process agent. Pending operations are
 bounded, but findings and their native analysis context remain in memory until
@@ -251,7 +251,10 @@ One representative matching commit is shown, not an invented complete history.
   work, and closes native owners. A server already processing a mutation waits
   for its bounded provider outcome before releasing the original snapshot.
 - **Output files contain sensitive metadata.** HTML/JSON are atomically replaced
-  with POSIX mode 0600 and reject existing non-regular targets. Audits use exclusive
+  with POSIX mode 0600 and reject existing non-regular targets. Export/audit aliases
+  are rejected before scanning, including linked parents and hardlinks. Uncreated
+  path components are conservatively compared case-insensitively even on
+  case-sensitive filesystems, without creating probe files or directories. Audits use exclusive
   creation with mode 0600 and retain that owned append descriptor until shutdown;
   existing files, hardlinks and symlinks are never appended to or chmod'ed.
   Use a private output directory and appropriate Windows ACLs; POSIX permission

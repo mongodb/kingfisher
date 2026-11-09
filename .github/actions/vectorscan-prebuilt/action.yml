@@ -1,0 +1,21 @@
+name: Verified Vectorscan archive
+description: Prefetch the pinned native archive via the GitHub release asset API
+inputs:
+  target:
+    description: Rust target triple; defaults to the rustc host
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      with:
+        python-version: '3.13'
+        architecture: ${{ runner.arch == 'ARM64' && 'arm64' || 'x64' }}
+    - name: Stage checksum-verified native archive
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PREFETCH_TARGET: ${{ inputs.target }}
+      run: python scripts/fetch-vectorscan.py --target "$PREFETCH_TARGET" --github-env

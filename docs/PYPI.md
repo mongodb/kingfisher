@@ -18,7 +18,7 @@ requires CPython 3.10+ with the standard GIL build. Wheels target Linux x64/ARM6
 (glibc 2.28+), macOS x64/ARM64 (11+), and native Windows x64/ARM64. PyPy,
 free-threaded Python and musl wheels are not currently part of the release matrix.
 
-The prepared SDK release is **1.6.2**, a backward-compatible patch release.
+The prepared SDK release is **1.6.3**, a backward-compatible patch release.
 
 CLI and low-level Rust validation responses can include
 [allowlisted identity metadata](RULES.md#validation-response-identity-metadata)
@@ -1500,7 +1500,7 @@ in sync. The read-only preflight runs **before** wheel/source jobs:
 For a read-only local/orchestrator check (Python 3.11+), run:
 
 ```bash
-python3 scripts/check-sdk-release.py --require-new --expected-version 1.6.2
+python3 scripts/check-sdk-release.py --require-new --expected-version 1.6.3
 ```
 
 Omit `--expected-version` to infer the prepared manifest version. The command
@@ -1515,7 +1515,7 @@ that `HEAD` is the current upstream `main` commit, and use the exact version/SHA
 gh workflow run python-sdk.yml --ref main \
   -f publish=true \
   -f expected_sha="$(git rev-parse HEAD)" \
-  -f expected_version=1.6.2
+  -f expected_version=1.6.3
 ```
 
 `publish` defaults to `false`. Publication requires both safety inputs: the full

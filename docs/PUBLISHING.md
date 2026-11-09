@@ -28,7 +28,7 @@ The manifests currently prepare these releases; a Git tag does not override Carg
 | `kingfisher-bin` | `2.18.0` | `kingfisher` executable and library |
 
 The Python SDK (`kingfisher-secret-scanner`) is independently versioned at
-`1.6.2` in `crates/kingfisher-python/Cargo.toml`; Python modules share that version.
+`1.6.3` in `crates/kingfisher-python/Cargo.toml`; Python modules share that version.
 The stable npm SDK uses **1.0.0** in `crates/kingfisher-node/Cargo.toml` and
 `javascript/package.json`, with six same-version native packages. Its `npm-v*`
 release tags do not publish the CLI or Python SDK.
@@ -42,7 +42,8 @@ and Python SDK 1.6.1 include the private-key detection fixes. Rules 3.1.0 adds p
 literal expression-input discovery and credential-specific revocation overlays without changing
 existing YAML/TOML or primary-action behavior. Rules 3.1.1 and scanner 3.0.3 optimize
 fallback matching and filter evaluation, and include the static-low generic API-key detector.
-These are compatible patches; core 1.0.6 is unchanged.
+Python SDK 1.6.3 includes those shared-engine fixes. These are compatible patches;
+core 1.0.6 is unchanged.
 Scanner 3.0.2 and Python SDK 1.6.2 include the shared identity-response reporting fix;
 high-level SDK results still omit provider responses. Public signatures are unchanged,
 but strict budgeted TAR/ZIP/ASAR expansion now rejects malformed/unsafe members or
@@ -54,6 +55,19 @@ The binding and sys crate are now pinned to published **0.1.4**, including
 MSVC x64/ARM64 archives with a VS 2022 / MSVC 14.44 STL/CRT baseline. The compiled-rule
 cache identity includes both exact versions, so older engine-build entries cannot be
 reused silently.
+
+Native CI jobs stage the same pinned archive through GitHub's release asset API,
+which remains usable when browser download URLs return gateway errors. The fetcher
+reads SHA-256 pins from the immutable Cargo registry sys crate, not mutable release
+metadata; the sys build script verifies them again. To use the same path locally:
+
+```sh
+python3 scripts/fetch-vectorscan.py
+export VECTORSCAN_PREBUILT_DIR="$PWD/target/vectorscan-prebuilt"
+```
+
+Pass `--target <Rust-target-triple>` for cross builds. The Docker-based Linux
+Makefile targets mount this directory read-only; source builds remain explicit.
 
 After publishing, consumers can install the CLI with:
 

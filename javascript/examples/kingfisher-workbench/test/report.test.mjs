@@ -40,6 +40,12 @@ function fakeEntry() {
 function fakeMeta() {
   return { root: '/synthetic', version: '1.0.0', startedAt: new Date(0), durationMs: 0, scanned: 1, rulesCount: 1, redact: true, validate: true, revokeEnabled: true, confidence: 'medium' };
 }
+function reportClientSource(html) {
+  // Extract our fixed template's inline script for VM tests, not HTML sanitization.
+  const scripts = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/gi)];
+  assert.equal(scripts.length, 1, 'report must contain exactly its constant client script');
+  return scripts[0][1];
+}
 async function live(t, revokeEntry, { enabled = true } = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), 'kingfisher-workbench-http-test-'));
   const entry = fakeEntry();
@@ -107,6 +113,15 @@ test('outcome summary counts not-attempted explicitly, preserving other native o
   assert.match(html, /<option value="assumed">Assumed<\/option>/);
 });
 
+test('report client test extraction handles case-insensitive tags and closing-tag attributes', () => {
+  const html = renderReport({ entries: [], meta: fakeMeta() });
+  const expected = reportClientSource(html);
+  for (const tag of ['SCRIPT', 'ScRiPt']) {
+    const variant = html.replace('<script>', `<${tag} data-test="fixed">`).replace('</script>', `</${tag} ignored="yes">`);
+    assert.equal(reportClientSource(variant), expected);
+  }
+});
+
 test('report client distinguishes empty scans and filters native outcome categories accurately', () => {
   function client(rows) {
     const elements = new Map();
@@ -124,7 +139,7 @@ test('report client distinguishes empty scans and filters native outcome categor
       },
     };
     const html = renderReport({ entries: [], meta: fakeMeta() });
-    runInNewContext(/<script>([\s\S]*?)<\/script>/.exec(html)[1], { document });
+    runInNewContext(reportClientSource(html), { document });
     return elements;
   }
   const empty = client([]);
@@ -231,6 +246,29 @@ test('CLI entrypoints run through owned directory symlinks or Windows junctions'
   assert.equal(demo.status, 1); assert.match(demo.stderr, /Demo accepts only --open/);
 });
 
+test('coordinator rejects aliased exports before loading rules, scanning or writing', async (t) => {
+  const f = await fixture(t);
+  const actual = path.join(f.directory, 'reports'), alias = path.join(f.directory, 'linked-reports');
+  await mkdir(actual);
+  await symlink(actual, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const prior = path.join(actual, 'prior.html'), hardlink = path.join(actual, 'prior.json');
+  await writeFile(prior, 'prior report\n'); await link(prior, hardlink);
+  for (const [out, json] of [
+    [path.join(actual, 'missing', 'nested', 'report.html'), path.join(alias, 'missing', 'nested', 'report.html')],
+    [path.join(actual, 'report.html'), path.join(actual, 'REPORT.HTML')],
+    [prior, hardlink],
+  ]) {
+    await assert.rejects(runReport({
+      ...f.options, out, json, quiet: true, validate: true,
+      rules: path.join(f.directory, 'missing-rules.yml'),
+    }), { code: 'ERR_WORKBENCH_OUTPUT_COLLISION' });
+  }
+  assert.equal(f.mock.state.validationRequests, 0); assert.equal(f.mock.state.revokeRequests, 0);
+  for (const file of [prior, hardlink]) assert.equal(await readFile(file, 'utf8'), 'prior report\n');
+  await assert.rejects(stat(path.join(actual, 'missing')), { code: 'ENOENT' });
+  await assert.rejects(stat(path.join(actual, 'report.html')), { code: 'ENOENT' });
+});
+
 test('redacted input errors are actionable without exposing arbitrary error messages', async (t) => {
   const f = await fixture(t);
   for (const [options, expected] of [
@@ -293,23 +331,55 @@ test('aborted pumping never returns empty success', async () => {
 });
 
 test('report HTML escapes untrusted source fields; snapshot strips even a supplied token', () => {
-  const entry = fakeEntry();
-  entry.path = '</script><script>globalThis.pwned=1</script>';
-  entry.finding.ruleName = '<img src=x onerror=alert(1)>';
-  const html = renderReport({ entries: [entry], meta: fakeMeta(), token: 'sensitive-session-token', interactive: false });
-  assert.match(html, /<title>Kingfisher Workbench — /);
-  assert.match(html, /<h1>Kingfisher Workbench<\/h1>/);
-  assert.ok(html.includes('&lt;script&gt;globalThis.pwned=1&lt;/script&gt;'));
-  assert.ok(!html.includes('<script>globalThis.pwned'));
-  assert.ok(!html.includes('sensitive-session-token'));
-  assert.ok(!html.includes('class="btn danger btn-revoke"'));
-  assert.ok(html.includes('18446744073709551615'));
+  const expectedClient = reportClientSource(renderReport({ entries: [], meta: fakeMeta() }));
+  for (const tag of ['script', 'SCRIPT', 'ScRiPt']) {
+    const entry = fakeEntry();
+    entry.path = `</${tag} ignored="yes"><${tag}>globalThis.pwned=1</${tag}>`;
+    entry.finding.ruleName = '<img src=x onerror=alert(1)>';
+    const html = renderReport({ entries: [entry], meta: fakeMeta(), token: 'sensitive-session-token', interactive: false });
+    assert.match(html, /<title>Kingfisher Workbench — /);
+    assert.match(html, /<h1>Kingfisher Workbench<\/h1>/);
+    assert.ok(html.includes(`&lt;${tag}&gt;globalThis.pwned=1&lt;/${tag}&gt;`));
+    assert.ok(!html.includes(`<${tag}>globalThis.pwned`));
+    assert.equal(reportClientSource(html), expectedClient);
+    assert.ok(!html.includes('sensitive-session-token'));
+    assert.ok(!html.includes('class="btn danger btn-revoke"'));
+    assert.ok(html.includes('18446744073709551615'));
+  }
 });
 
 test('deduplication prefers a verified native context; no-dedup remains a coordinator choice', () => {
   const first = { dedupeKey: 'private', outcome: 'skipped' };
   const second = { dedupeKey: 'private', outcome: 'verified_active' };
   assert.deepEqual(dedupeEntries([first, second]), [second]);
+});
+
+test('no-serve stops an active TTY progress line before printing the snapshot path', async (t) => {
+  const f = await fixture(t);
+  const chunks = [];
+  const stream = process.stdout;
+  const tty = Object.getOwnPropertyDescriptor(stream, 'isTTY');
+  const interval = globalThis.setInterval;
+  Object.defineProperty(stream, 'isTTY', { value: true, configurable: true });
+  try {
+    t.mock.method(stream, 'write', (chunk) => { chunks.push(String(chunk)); return true; });
+    t.mock.method(globalThis, 'setInterval', (callback, delay, ...args) => {
+      const timer = interval(callback, delay, ...args);
+      // Force a real live line even when the tiny native scan finishes before a tick.
+      if (delay === 200) callback(...args);
+      return timer;
+    });
+    await runReport({ ...f.options, progress: true, quiet: false, gitHistory: false });
+  } finally {
+    t.mock.restoreAll();
+    if (tty) Object.defineProperty(stream, 'isTTY', tty);
+    else delete stream.isTTY;
+  }
+  const snapshot = chunks.findIndex((chunk) => chunk.startsWith('[report] snapshot:'));
+  assert.ok(snapshot > 0);
+  assert.ok(chunks.slice(0, snapshot).some((chunk) => chunk.startsWith('\r') && !/^\r +\r$/.test(chunk)), 'regression must exercise an active live line');
+  assert.match(chunks[snapshot - 1], /^\r +\r$/, 'clear the live line before printing');
+  assert.ok(chunks.slice(snapshot + 1).every((chunk) => !chunk.includes('\r')), 'cleanup must not clear the final location');
 });
 
 test('offline tree/history pipeline retains provenance and leaks no credential fields', async (t) => {

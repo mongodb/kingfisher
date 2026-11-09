@@ -72,6 +72,8 @@ class CiWorkflowTests(unittest.TestCase):
             "rust-toolchain*", "docs/viewer/**", "tests/wizard_cli.rs",
             ".github/workflows/wizard.yml", ".github/workflows/ci.yml",
             ".github/workflows/release.yml", "scripts/tests/test_ci_workflows.py",
+            ".github/actions/vectorscan-prebuilt/**", "scripts/fetch-vectorscan.py",
+            "scripts/tests/test_fetch_vectorscan.py",
         }
         self.assertEqual(set(paths), required)
         self.assertEqual(len(paths), len(required))

@@ -50,7 +50,7 @@ All notable changes to this project will be documented in this file.
   { candidates })` to scope provider checks without discarding the original helper batch.
   Candidates are preflighted like `RevocationPlan.validate()`: incomplete inputs are skipped
   before any provider request. Add non-copying `ScanInput.byteLength`.
-- Prepare rules 3.1.1 and scanner 3.0.3 for the shared-engine fixes.
+- Prepare rules 3.1.1, scanner 3.0.3 and Python SDK 1.6.3 for the shared-engine fixes.
 - Prepare the independently versioned Node SDK 1.0.0 stable release, with an expanded
   npm README, logo, runnable pipeline examples, showcase walkthrough and Apache 2.0
   package metadata; retain all bundled third-party licenses and notices.

@@ -404,6 +404,64 @@ async fn dependent_validation_advances_findings_before_the_blob_finishes() {
 }
 
 #[tokio::test]
+async fn baseline_suppression_preserves_reportable_validation_counts() {
+    for dependent in [false, true] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(4)
+            .mount(&server)
+            .await;
+        // Both occurrences share a validation group, but baseline visibility belongs
+        // to each stored occurrence, not to the rule or the group's representative.
+        let fixture =
+            Fixture::new(&server.uri(), &["secret_1234\nsecret_1234\nhelper_1234\n"], dependent);
+        let baseline_path = fixture._root.path().join("baseline.yml");
+        let mut command = tokio::process::Command::from(fixture.command());
+        command
+            .args(["--no-validate", "--no-dedup", "--quiet", "--manage-baseline"])
+            .arg("--baseline-file")
+            .arg(&baseline_path);
+        assert_eq!(
+            report(&command.output().await.unwrap())["findings"].as_array().unwrap().len(),
+            2
+        );
+        let baseline = kingfisher::baseline::load_baseline(&baseline_path).unwrap();
+        for suppressed in [1, 2] {
+            let mut baseline = baseline.clone();
+            for repository in &mut baseline.repositories {
+                repository.findings.retain(|finding| {
+                    finding.rule_id == "acme.progress.secret" && finding.line <= suppressed
+                });
+            }
+            kingfisher::baseline::save_baseline(&baseline_path, &baseline).unwrap();
+            for include_hidden in [false, true] {
+                let mut command = tokio::process::Command::from(fixture.command());
+                command.args(["--no-dedup", "--quiet", "--baseline-file"]).arg(&baseline_path);
+                if include_hidden {
+                    command.arg("--include-hidden-findings");
+                }
+                let output = command.output().await.unwrap();
+                assert!(
+                    matches!(output.status.code(), Some(0 | 200 | 205)),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let expected = if include_hidden { 3 } else { 2 - suppressed };
+                let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+                assert_eq!(report["findings"].as_array().unwrap().len(), expected);
+                let progress = fixture.snapshot();
+                assert_eq!(progress["total"], expected);
+                assert_eq!(
+                    progress["completed"], expected,
+                    "dependent={dependent}, suppressed={suppressed}, include_hidden={include_hidden}"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn simple_validation_groups_advance_all_reportable_occurrences() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

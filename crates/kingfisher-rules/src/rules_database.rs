@@ -2623,27 +2623,33 @@ rules:
             }
 
             let secret = "v7Qm2Rk9Px4Tz8Nc6Bw3Dj5H";
-            for text in [
+            for (case_index, text) in [
                 format!("API_KEY = \"{secret}\""),
                 format!("api_key = {{\"metadata\":0,\"value\":\"{secret}\"}}"),
                 format!("api_key = [{{\"value\":\"{secret}\"}}]"),
                 format!("<apiKey data-note=\"context\">{secret}</apiKey>"),
                 format!("api_key = <![CDATA[{secret}]]>"),
                 format!("token = \n \"{secret}\""),
-            ] {
+            ]
+            .into_iter()
+            .enumerate()
+            {
                 let mut bytes = vec![0xff, b' '];
                 bytes.extend_from_slice(text.as_bytes());
                 bytes.push(0xfe);
                 let captures = database.anchored_regexes()[0]
                     .captures(&bytes)
                     .expect("synthetic wrapper must match the original Rust pattern");
-                assert_eq!(&captures[1], secret.as_bytes());
+                assert!(
+                    &captures[1] == secret.as_bytes(),
+                    "synthetic wrapper capture mismatch at case {case_index}"
+                );
                 let mut gated = false;
                 scanner.scan(&bytes, |id, _, _, _| {
                     gated |= id == 0;
                     Scan::Continue
                 })?;
-                assert!(gated, "necessary gate must retain {text:?}");
+                assert!(gated, "necessary gate must retain wrapper case {case_index}");
             }
 
             let broad = database

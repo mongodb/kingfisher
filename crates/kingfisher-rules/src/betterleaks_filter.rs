@@ -2436,17 +2436,19 @@ mod tests {
         let engine =
             BetterleaksFilterEngine::compile_for_rules(std::slice::from_ref(&rule)).unwrap();
         let expression = rule.betterleaks_filter().unwrap();
-        for secret in
+        for (secret_index, secret) in
             ["", "placeholder", "ÉCOLE", "aaaa", "X9qB2mK7pR4zT8", "linkedinX9qB2mK7pR4zT8", "�"]
+                .into_iter()
+                .enumerate()
         {
-            for line in ["deny", "allow"] {
+            for (line_index, line) in ["deny", "allow"].into_iter().enumerate() {
                 let mut context = context(secret, "source.rs");
                 context.line = line;
                 context.fragment_raw = line;
                 let full = evaluate_filter_with_engine(expression, &context, &engine).unwrap();
                 let staged =
                     evaluate_secret_prefix_for_test(&engine, expression, &context).unwrap();
-                assert_eq!(full, staged, "{secret:?} {line:?}");
+                assert_eq!(full, staged, "secret case {secret_index}, line case {line_index}");
                 assert_eq!(staged.confidence, None);
                 if secret == "X9qB2mK7pR4zT8" && line == "allow" {
                     assert!(!staged.discard);

@@ -8,7 +8,7 @@ import { createAgent } from './agent.mjs';
 import { createProgress } from './progress.mjs';
 import { renderReport } from './report.mjs';
 import { startReportServer } from './server.mjs';
-import { dedupeEntries, errorForReport, isCliEntrypoint, WorkbenchInputError, writePrivateFile } from './safety.mjs';
+import { assertDistinctOutputs, dedupeEntries, errorForReport, isCliEntrypoint, WorkbenchInputError, writePrivateFile } from './safety.mjs';
 
 function openBrowser(url) {
   // The URL is generated internally from a bound loopback port, not user text.
@@ -33,14 +33,13 @@ export async function runReport(options, { signal = new AbortController().signal
     throw error;
   });
   if (!root || !root.isDirectory()) throw new WorkbenchInputError('INVALID_ROOT');
-  if (options.out === options.json) throw new WorkbenchInputError('OUTPUT_COLLISION');
   if (options.revoke && !options.validate) throw new WorkbenchInputError('VALIDATION_REQUIRED');
   // Select the exact excluded path before scanning; only a mutation-enabled live
   // server creates it. Every default session gets its own new private audit file.
   const auditPath = options.serve && options.revoke
     ? options.audit ?? path.join(path.dirname(options.out), `revocations-${crypto.randomUUID()}.jsonl`)
     : null;
-  if (auditPath && [options.out, options.json].includes(auditPath)) throw new WorkbenchInputError('OUTPUT_COLLISION');
+  await assertDistinctOutputs([options.out, options.json, auditPath]);
   options = { ...options, audit: auditPath };
   const progress = createProgress({ quiet: options.quiet, enabled: options.progress });
   const agents = [];
@@ -99,6 +98,7 @@ export async function runReport(options, { signal = new AbortController().signal
     if (options.json) await writePrivateFile(options.json, `${JSON.stringify({ meta, entries }, null, 2)}\n`);
     if (!options.serve) {
       await writePrivateFile(options.out, renderReport({ entries, meta }));
+      progress.stop();
       console.log(`[report] snapshot: ${options.out}`);
       return { entries, meta };
     }

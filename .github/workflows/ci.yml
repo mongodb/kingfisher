@@ -42,6 +42,9 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends rpm
           cargo install --locked cargo-deb cargo-generate-rpm
+      - uses: ./.github/actions/vectorscan-prebuilt
+        with:
+          target: x86_64-unknown-linux-musl
       - name: Build and verify real Linux packages
         env:
           CARGO_BUILD_JOBS: 2
@@ -67,6 +70,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends cmake pkg-config perl curl
+      - uses: ./.github/actions/vectorscan-prebuilt
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
         env:
           CARGO_BUILD_JOBS: 2
@@ -94,6 +98,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends cmake pkg-config perl curl
+      - uses: ./.github/actions/vectorscan-prebuilt
       - name: Check workspace and all targets
         run: cargo check --locked --workspace --all-targets
         env:
@@ -132,6 +137,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends cmake pkg-config perl curl libboost-all-dev ragel
+      - uses: ./.github/actions/vectorscan-prebuilt
       # Plain cargo test includes doctests, unlike --all-targets and nextest.
       - name: Test libraries, consumer contracts, and README examples
         env:
@@ -203,6 +209,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             cmake pkg-config perl curl
 
+      - uses: ./.github/actions/vectorscan-prebuilt
       - name: Run tests
         run: make tests
         env:
@@ -245,6 +252,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             cmake pkg-config perl curl
 
+      - uses: ./.github/actions/vectorscan-prebuilt
       - name: Run tests
         run: make tests
         env:
@@ -280,6 +288,7 @@ jobs:
           brew list cmake >/dev/null 2>&1 || brew install cmake
           brew list pkg-config >/dev/null 2>&1 || brew install pkg-config
 
+      - uses: ./.github/actions/vectorscan-prebuilt
       - name: Run tests
         run: make tests
 
@@ -342,6 +351,9 @@ jobs:
           shared-key: kingfisher-tests-v2-${{ runner.os }}-${{ runner.arch }}
           cache-on-failure: true
 
+      - uses: ./.github/actions/vectorscan-prebuilt
+        with:
+          target: ${{ matrix.arch == 'x64' && 'x86_64-pc-windows-gnu' || 'aarch64-pc-windows-gnullvm' }}
       - name: Prepare Windows dependencies
         shell: msys2 {0}
         run: WINDOWS_ONLY_DEPS=1 make windows-${{ matrix.arch }}

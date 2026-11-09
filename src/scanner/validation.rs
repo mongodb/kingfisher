@@ -926,26 +926,31 @@ pub async fn run_secret_validation(
                             })
                             .collect::<Vec<_>>();
 
-                        // Drop Arc clones early — we only need OwnedBlobMatch from here
-                        drop(matches_for_blob);
-
                         let (dep_vars, missing_deps) = collect_variables_and_dependencies(&owned);
                         let dep_vars = Arc::new(dep_vars);
                         let missing_deps = Arc::new(missing_deps);
 
-                        let mut by_key: FxHashMap<String, Vec<OwnedBlobMatch>> =
+                        let mut by_key: FxHashMap<String, (Vec<OwnedBlobMatch>, u64)> =
                             FxHashMap::default();
-                        for om in owned {
-                            by_key
+                        for (om, message) in owned.into_iter().zip(matches_for_blob) {
+                            // Baseline suppression changes the stored occurrence's visibility,
+                            // not the rule's. Keep its reportable count through grouping and
+                            // drop the Arc clones before starting validation.
+                            let checked =
+                                u64::from(crate::scan_progress::reportable(message.2.visible));
+                            let (group, count) = by_key
                                 .entry(build_cache_key_with_policy(&om, clients.http_fallbacks))
-                                .or_default()
-                                .push(om);
+                                .or_default();
+                            group.push(om);
+                            *count += checked;
                         }
-                        let reps: Vec<_> =
-                            by_key.into_values().map(|mut v| (v.remove(0), v)).collect();
+                        let reps: Vec<_> = by_key
+                            .into_values()
+                            .map(|(mut v, checked)| (v.remove(0), v, checked))
+                            .collect();
 
                         let validated: Vec<_> =
-                            stream::iter(reps.into_iter().map(|(mut rep, mut dups)| {
+                            stream::iter(reps.into_iter().map(|(mut rep, mut dups, checked)| {
                                 let parser = parser.clone();
                                 let clients = clients.clone();
                                 let dep_vars = dep_vars.clone();
@@ -959,13 +964,6 @@ pub async fn run_secret_validation(
                                 let rate_limiter = rate_limiter.clone();
                                 let provider_endpoints = provider_endpoints.clone();
                                 async move {
-                                    let checked = std::iter::once(&rep)
-                                        .chain(dups.iter())
-                                        .filter(|finding| {
-                                            crate::scan_progress::reportable(finding.rule.visible())
-                                        })
-                                        .count()
-                                        as u64;
                                     validate_single(
                                         &mut rep,
                                         &parser,

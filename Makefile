@@ -541,8 +541,13 @@ windows-test: windows-test-x64 windows-test-arm64
 # Stage archive inputs together: BusyBox tar applies -C to every input path.
 linux-x64 linux-arm64: check-docker create-dockerignore prepare-release-notices
 	@mkdir -p target/release
-	docker run --pull=always --platform $(DOCKER_PLATFORM) --rm \
-          -v "$$(pwd):/src" -w /src \
+	@set --; \
+	  if [ -n "$${VECTORSCAN_PREBUILT_DIR:-}" ]; then \
+	    set -- -v "$${VECTORSCAN_PREBUILT_DIR}:/vectorscan-prebuilt:ro" \
+	      -e VECTORSCAN_PREBUILT_DIR=/vectorscan-prebuilt; \
+	  fi; \
+	  docker run --pull=always --platform $(DOCKER_PLATFORM) --rm \
+          "$$@" -v "$$(pwd):/src" -w /src \
           -e VECTORSCAN_BUILD_FROM_SOURCE -e CARGO_BUILD_JOBS \
           -e CARGO_INCREMENTAL -e CARGO_PROFILE_DEV_DEBUG -e CARGO_PROFILE_TEST_DEBUG \
           rust:1.99.0-alpine3.23 sh -eu -c '\

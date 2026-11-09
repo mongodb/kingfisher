@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { mkdir, open, rename, rm, lstat } from 'node:fs/promises';
+import { mkdir, open, rename, rm, lstat, stat } from 'node:fs/promises';
 
 // Node resolves module URLs through symlinks (including macOS /var → /private/var),
 // while argv may retain the caller's spelling. Canonicalize BOTH paths. Avoid
@@ -61,6 +61,39 @@ export function dedupeEntries(entries) {
     if (!previous || (entry.outcome === 'verified_active' && previous.outcome !== 'verified_active')) best.set(entry.dedupeKey, entry);
   }
   return [...best.values()];
+}
+
+async function destinationIdentity(destination) {
+  let ancestor = path.resolve(destination);
+  const missing = [];
+  for (;;) {
+    try {
+      // stat follows existing file/directory aliases; bigint avoids rounding file IDs.
+      const existing = await stat(ancestor, { bigint: true });
+      return { dev: existing.dev, ino: existing.ino, suffix: missing.join(path.sep).toLowerCase() };
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) throw error;
+      missing.unshift(path.basename(ancestor));
+      ancestor = parent;
+    }
+  }
+}
+
+export async function assertDistinctOutputs(destinations) {
+  const seen = [];
+  for (const destination of destinations.filter(Boolean)) {
+    // Anchor new paths at the nearest existing ancestor's filesystem identity,
+    // including linked parents and still-missing subdirectories. Conservatively
+    // reject case-only missing suffixes even on case-sensitive filesystems: no
+    // portable read-only query can determine a new name's case sensitivity.
+    const identity = await destinationIdentity(destination);
+    if (seen.some((previous) => previous.dev === identity.dev && previous.ino === identity.ino && previous.suffix === identity.suffix)) {
+      throw new WorkbenchInputError('OUTPUT_COLLISION');
+    }
+    seen.push(identity);
+  }
 }
 
 export async function writePrivateFile(destination, data) {
