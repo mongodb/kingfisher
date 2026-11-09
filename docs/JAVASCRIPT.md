@@ -2,7 +2,7 @@
 
 [← Back to README](../README.md)
 
-The `kingfisher-secret-scanner` npm SDK **1.0.0** is a stable release.
+The `kingfisher-secret-scanner` npm SDK **1.0.1** is a stable release.
 It exposes Kingfisher's Rust components in-process through napi-rs and Node-API.
 Install with npm and import/require `kingfisher-secret-scanner` in JavaScript. No
 Python interpreter, CLI process, or separate Kingfisher installation is involved.
@@ -82,7 +82,7 @@ After publication, create an application directory and run:
 
 ```sh
 npm init -y
-npm install kingfisher-secret-scanner@1.0.0 --ignore-scripts
+npm install kingfisher-secret-scanner@1.0.1 --ignore-scripts
 ```
 
 Use `import { Scanner } from 'kingfisher-secret-scanner'` in a `.mjs` file,

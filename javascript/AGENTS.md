@@ -83,7 +83,7 @@ Guidance for extending and maintaining the JavaScript/TypeScript SDK.
   root `make notices` updates attribution; `npm run check:notices` verifies coverage.
 - Add commented runnable [examples](examples) and update the [SDK guide](../docs/JAVASCRIPT.md)
   and [package README](README.md) for public changes. Keep sample output redacted.
-- **1.0.0 is the stable npm SDK release**, versioned independently of the CLI, Python
+- **1.0.1 is the stable npm SDK release**, versioned independently of the CLI, Python
   SDK, and Rust crates. Follow semantic versioning for SDK changes; do not bump it
   just for a CLI release. Follow the [npm publishing guidance](../docs/PUBLISHING.md#npm-publishing-with-github-actions); account
   changes, tags, and uploads require separate authorization. Never publish the

@@ -1,6 +1,6 @@
 {
   "name": "kingfisher-secret-scanner",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Native Kingfisher secret detection, credential validation and explicit revocation for Node.js",
   "license": "Apache-2.0",

@@ -1,6 +1,6 @@
 # Kingfisher Workbench — runnable Node SDK application
 
-A complete local application built with the stable **Kingfisher Node SDK 1.0.0**:
+A complete local application built with the stable **Kingfisher Node SDK 1.0.1**:
 scan a directory and its Git history, inspect a searchable HTML report, optionally
 validate findings, and explicitly revoke an authorized credential from the live
 report. Detection uses Rust **in process through Node-API**, not a scanner CLI,
@@ -61,7 +61,7 @@ npm test
 ```
 
 The [private example manifest](<package.json>) pins
-`"kingfisher-secret-scanner": "1.0.0"`. Normal commands import that installed
+`"kingfisher-secret-scanner": "1.0.1"`. Normal commands import that installed
 package; they never auto-discover a source-tree addon. Only the explicit checkout
 runner overrides SDK selection. Installation and native build details are in the
 [SDK guide](<https://github.com/mongodb/kingfisher/blob/main/docs/JAVASCRIPT.md#build-and-test-from-a-checkout>).

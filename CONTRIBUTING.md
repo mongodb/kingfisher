@@ -78,7 +78,7 @@ For repository layout and project-specific guidance, see:
 
 ### JavaScript/TypeScript SDK Development
 
-The `kingfisher-secret-scanner` npm SDK **1.0.0** is a stable release.
+The `kingfisher-secret-scanner` npm SDK **1.0.1** is a stable release.
 Its version is independent of the CLI, Python SDK, and Rust crates. Use the
 checkout instructions below for SDK development.
 

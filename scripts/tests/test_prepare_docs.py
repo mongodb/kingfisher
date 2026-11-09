@@ -60,7 +60,7 @@ class PrepareDocsTests(unittest.TestCase):
             generated = target.read_text(encoding="utf-8")
             frontmatter = generated.split("---", 2)[1]
             self.assertIn('title: "JavaScript and TypeScript SDK"', frontmatter)
-            self.assertIn("stable Node SDK (1.0.0)", frontmatter)
+            self.assertIn("stable Node SDK (1.0.1)", frontmatter)
             self.assertNotIn("preview", frontmatter)
             self.assertNotIn("0.1.0", frontmatter)
             self.assertIn(

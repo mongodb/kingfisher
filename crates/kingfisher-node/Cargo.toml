@@ -1,6 +1,6 @@
 [package]
 name = "kingfisher-node"
-version = "1.0.0"
+version = "1.0.1"
 description = "Native Node-API bindings for the Kingfisher JavaScript SDK"
 repository.workspace = true
 edition.workspace = true
