@@ -59,7 +59,7 @@ thread_local = "1.1.10"
 
 [package]
 name = "kingfisher-bin"
-version = "2.18.0"
+version = "2.18.1"
 description = "MongoDB's blazingly fast and accurate secret scanning, validation, blast radius mapping, and secret revocation tool"
 edition.workspace = true
 rust-version.workspace = true

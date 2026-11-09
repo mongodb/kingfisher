@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.18.1]
+
+### Fixed
+
+- Retry transient Maturin downloads in Python SDK Linux builds and reject HTTP error pages.
+- Avoid PowerShell 7 archive-extraction crashes when installing Node on Windows ARM64.
+
 ## [v2.18.0]
 
 ### Added

@@ -8,7 +8,7 @@ For native JavaScript/TypeScript and VS Code embedding, see the [Node SDK](JAVAS
 The prepared library releases are **kingfisher-core 1.0.6**,
 **kingfisher-rules 3.2.0**, and **kingfisher-scanner 3.0.3**.
 They require Rust **1.99** or newer and are versioned independently of the
-`kingfisher-bin` CLI, currently **2.18.0**. See [publishing](PUBLISHING.md).
+`kingfisher-bin` CLI, currently **2.18.1**. See [publishing](PUBLISHING.md).
 
 ## Crate Overview
 
@@ -120,12 +120,12 @@ additional validator features your project needs.
 To install the CLI from crates.io:
 
 ```sh
-cargo install --locked kingfisher-bin --version 2.18.0
+cargo install --locked kingfisher-bin --version 2.18.1
 kingfisher scan path/to/project --no-validate --format json --no-update-check
 ```
 
 For the `kingfisher-bin` library example in your own application, use
-`kingfisher = { package = "kingfisher-bin", version = "2.18.0" }` and `anyhow = "1"`.
+`kingfisher = { package = "kingfisher-bin", version = "2.18.1" }` and `anyhow = "1"`.
 The focused library examples use the crate versions listed above;
 `kingfisher-rules` and `kingfisher-scanner` examples also use `anyhow = "1"`.
 
@@ -902,7 +902,7 @@ input limits and bound worker counts for untrusted or large workloads.
 The full application's library is available separately:
 
 ```toml
-kingfisher = { package = "kingfisher-bin", version = "2.18.0" }
+kingfisher = { package = "kingfisher-bin", version = "2.18.1" }
 ```
 
 It carries CLI dependencies and all validator features. The stable embedding
