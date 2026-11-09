@@ -336,6 +336,10 @@ jobs:
       - name: Set up MSYS2
         uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
         with:
+          # x64 hosted runners include C:\msys64; avoid a redundant installer
+          # download from GitHub Releases. ARM64 images omit MSYS2, so retain
+          # the action's checksum-verified installation there.
+          release: ${{ matrix.arch == 'arm64' }}
           msystem: ${{ matrix.msystem }}
           # MINGW64 is deprecated in MSYS2 but remains the supported GNU x64
           # toolchain here; migrating to UCRT64 changes released binary runtimes.

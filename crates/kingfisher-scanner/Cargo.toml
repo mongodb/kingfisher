@@ -110,7 +110,7 @@ validation-all = ["validation"]
 [dependencies]
 # Internal dependencies
 kingfisher-core = { version = "1.0.6", path = "../kingfisher-core" }
-kingfisher-rules = { version = "3.1.1", path = "../kingfisher-rules", features = ["__scanner-internals"] }
+kingfisher-rules = { version = "3.2.0", path = "../kingfisher-rules", features = ["__scanner-internals"] }
 
 # Error handling
 anyhow.workspace = true

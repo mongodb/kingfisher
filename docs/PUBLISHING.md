@@ -23,7 +23,7 @@ The manifests currently prepare these releases; a Git tag does not override Carg
 | Package | Version | Published targets |
 | ------- | ------- | ----------------- |
 | `kingfisher-core` | `1.0.6` | `kingfisher_core` library |
-| `kingfisher-rules` | `3.1.1` | `kingfisher_rules` library |
+| `kingfisher-rules` | `3.2.0` | `kingfisher_rules` library |
 | `kingfisher-scanner` | `3.0.3` | `kingfisher_scanner` library |
 | `kingfisher-bin` | `2.18.0` | `kingfisher` executable and library |
 
@@ -40,10 +40,11 @@ dependency minimums without changing its public API. Python SDK 1.6.0 adds
 compatible APIs for explicit analysis and source attributes. Rules/scanner 3.0.1
 and Python SDK 1.6.1 include the private-key detection fixes. Rules 3.1.0 adds public
 literal expression-input discovery and credential-specific revocation overlays without changing
-existing YAML/TOML or primary-action behavior. Rules 3.1.1 and scanner 3.0.3 optimize
+existing YAML/TOML or primary-action behavior. Rules 3.2.0 and scanner 3.0.3 optimize
 fallback matching and filter evaluation, and include the static-low generic API-key detector.
-Python SDK 1.6.3 includes those shared-engine fixes. These are compatible patches;
-core 1.0.6 is unchanged.
+Rules 3.2.0 also deprecates the legacy effective-confidence helpers; new compiler deprecation
+warnings require a minor release. Scanner 3.0.3 and Python SDK 1.6.3 remain compatible
+patch releases with those shared-engine fixes; core 1.0.6 is unchanged.
 Scanner 3.0.2 and Python SDK 1.6.2 include the shared identity-response reporting fix;
 high-level SDK results still omit provider responses. Public signatures are unchanged,
 but strict budgeted TAR/ZIP/ASAR expansion now rejects malformed/unsafe members or

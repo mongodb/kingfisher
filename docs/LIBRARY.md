@@ -6,7 +6,7 @@ For native JavaScript/TypeScript and VS Code embedding, see the [Node SDK](JAVAS
 [← Back to README](../README.md)
 
 The prepared library releases are **kingfisher-core 1.0.6**,
-**kingfisher-rules 3.1.1**, and **kingfisher-scanner 3.0.3**.
+**kingfisher-rules 3.2.0**, and **kingfisher-scanner 3.0.3**.
 They require Rust **1.99** or newer and are versioned independently of the
 `kingfisher-bin` CLI, currently **2.18.0**. See [publishing](PUBLISHING.md).
 
@@ -140,11 +140,11 @@ module is required. Choose dependencies from this table in addition to
 | ------ | ---------------------------------- |
 | `scan_content` | None |
 | `detection_policy` | Scanner feature `context` |
-| `inspect_rules` | `serde_json = "1"`; `kingfisher-rules = "3.1.1"` for loading custom YAML/TOML |
+| `inspect_rules` | `serde_json = "1"`; `kingfisher-rules = "3.2.0"` for loading custom YAML/TOML |
 | `scan_files` | `serde_json = "1"` |
-| `scan_custom_rules` | `kingfisher-rules = "3.1.1"` |
+| `scan_custom_rules` | `kingfisher-rules = "3.2.0"` |
 | `scan_async` | `tokio = { version = "1.53", features = ["macros", "rt", "sync"] }` |
-| `local_validation` | Scanner feature `validation`; `kingfisher-rules = "3.1.1"` |
+| `local_validation` | Scanner feature `validation`; `kingfisher-rules = "3.2.0"` |
 | `http_validation` | Complete manifest below; also copy `fixtures/acme-http.yml` and `support/mod.rs` into `src/fixtures/` and `src/support/` |
 | `validate_file` | Scanner feature `validation`; `serde_json = "1"`; `tokio = { version = "1.53", features = ["macros", "rt"] }` |
 | `git_inputs` | Scanner feature `git` |
@@ -321,7 +321,7 @@ rust-version = "1.99"
 [dependencies]
 anyhow = "1"
 kingfisher-scanner = { version = "3.0.3", features = ["validation"] }
-kingfisher-rules = "3.1.1"
+kingfisher-rules = "3.2.0"
 serde_json = "1"
 tokio = { version = "1.53", features = ["macros", "rt", "net", "io-util", "time"] }
 ```
@@ -540,7 +540,7 @@ Compile once and share the database. Preserve catalog metadata with
 `RulesDatabase::from_rule_collection`; converting the loaded collection into a
 `Vec<Rule>` loses its database-level source prefilter.
 
-For custom files, add `kingfisher-rules = "3.1.1"` and use:
+For custom files, add `kingfisher-rules = "3.2.0"` and use:
 
 ```rust
 use kingfisher_rules::{Confidence, Rules, RulesDatabase};
@@ -601,7 +601,7 @@ services or when every file occurrence must be reported.
 
 ## Scanning Methods
 
-For reuse across processes, add `kingfisher-rules = "3.1.1"` to your dependencies and load the collection with
+For reuse across processes, add `kingfisher-rules = "3.2.0"` to your dependencies and load the collection with
 `kingfisher_rules::RulesDatabase::from_rule_collection_with_cache` and
 `kingfisher_rules::RuleCacheConfig::from_dir_or_env(None)` (or `RuleCacheConfig::new(path)`).
 This is the CLI/Python compiled content-database cache and honors `KF_RULE_CACHE_DIR`.

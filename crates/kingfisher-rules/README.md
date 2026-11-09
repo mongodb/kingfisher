@@ -8,7 +8,7 @@ secrets are detected without changing the Rust API.
 
 ```toml
 [dependencies]
-kingfisher-rules = "3.1.1"
+kingfisher-rules = "3.2.0"
 anyhow = "1"
 ```
 
