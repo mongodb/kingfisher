@@ -25,7 +25,7 @@ The manifests currently prepare these releases; a Git tag does not override Carg
 | `kingfisher-core` | `1.0.6` | `kingfisher_core` library |
 | `kingfisher-rules` | `3.2.0` | `kingfisher_rules` library |
 | `kingfisher-scanner` | `3.0.3` | `kingfisher_scanner` library |
-| `kingfisher-bin` | `2.18.0` | `kingfisher` executable and library |
+| `kingfisher-bin` | `2.18.1` | `kingfisher` executable and library |
 
 The Python SDK (`kingfisher-secret-scanner`) is independently versioned at
 `1.6.3` in `crates/kingfisher-python/Cargo.toml`; Python modules share that version.
@@ -73,7 +73,7 @@ Makefile targets mount this directory read-only; source builds remain explicit.
 After publishing, consumers can install the CLI with:
 
 ```sh
-cargo install --locked kingfisher-bin --version 2.18.0
+cargo install --locked kingfisher-bin --version 2.18.1
 ```
 
 This installs the `kingfisher` command. See [library usage](LIBRARY.md#quick-start)
@@ -468,7 +468,7 @@ publishing, first create fresh archives:
 
 ```sh
 cargo package --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner -p kingfisher-bin
-python3 scripts/publish-crates.py --tag v2.18.0
+python3 scripts/publish-crates.py --tag v2.18.1
 python3 -m unittest discover -s scripts/tests -v
 ```
 
