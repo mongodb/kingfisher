@@ -1,0 +1,42 @@
+name: Set up Node with safe Windows ARM64 extraction
+description: Keep the pinned installer while avoiding the hosted ARM64 PowerShell 7 ZIP crash.
+inputs:
+  node-version:
+    description: Exact Node version to install.
+    required: true
+  cache:
+    description: Package manager cache passed to setup-node.
+  cache-dependency-path:
+    description: Dependency lockfile paths passed to setup-node.
+  package-manager-cache:
+    description: Enable setup-node's automatic package manager cache.
+    default: 'true'
+runs:
+  using: composite
+  steps:
+    - name: Select the Windows ARM64 archive extractor
+      if: runner.os == 'Windows' && runner.arch == 'ARM64'
+      id: extractor
+      shell: powershell
+      run: |
+        $ErrorActionPreference = 'Stop'
+        # Node-spawned pwsh can abort before tool-cache's ZIP fallback runs:
+        # https://github.com/actions/runner-images/issues/15107
+        # Hide every pwsh directory only from this setup-node invocation. The
+        # existing tool-cache fallback then uses Windows PowerShell instead.
+        Get-Command powershell.exe -CommandType Application -ErrorAction Stop | Out-Null
+        $path = (($env:PATH -split ';') | Where-Object {
+          $directory = $_.Trim().Trim('"')
+          $directory -and -not (Test-Path -LiteralPath (Join-Path $directory 'pwsh.exe'))
+        }) -join ';'
+        $overrides = @{ PATH = $path }
+        $json = ConvertTo-Json -InputObject $overrides -Compress
+        "env=$json" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+    - name: Set up the pinned Node runtime
+      uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      env: ${{ fromJSON(steps.extractor.outputs.env || '{}') }}
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: ${{ inputs.cache }}
+        cache-dependency-path: ${{ inputs.cache-dependency-path }}
+        package-manager-cache: ${{ inputs.package-manager-cache }}

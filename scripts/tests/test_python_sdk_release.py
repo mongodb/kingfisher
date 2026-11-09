@@ -2,9 +2,16 @@
 import importlib.util
 import io
 import json
+import os
 import re
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import shlex
+import shutil
+import subprocess
+import tarfile
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 import urllib.error
@@ -126,6 +133,109 @@ class PythonSdkReleaseTests(unittest.TestCase):
         ]), patch.object(publisher.time, "sleep") as sleep:
             self.assertEqual(publisher.published_filenames("1.3.0"), set())
             sleep.assert_called_once_with(1)
+
+
+class MaturinDownloadTests(unittest.TestCase):
+    def container_environment(self, workspace):
+        workflow = (ROOT / ".github/workflows/python-sdk.yml").read_text(encoding="utf-8")
+        build = workflow.split("      - name: Build portable Linux wheel\n", 1)[1]
+        build = build.split("      # manylinux builds", 1)[0]
+        self.assertIn("if: runner.os == 'Linux'", build)
+        self.assertIn("PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b", build)
+        self.assertIn("manylinux: '2_28'", build)
+        self.assertIn("maturin-version: 'v1.16.0'", build)
+        self.assertNotIn("CURL_HOME", workflow.split("jobs:\n", 1)[0])
+        folded = re.search(r"(?m)^          docker-options: >-\n((?:            .+\n)+)", build)
+        self.assertIsNotNone(folded)
+        options = " ".join(line.strip() for line in folded.group(1).splitlines())
+        options = shlex.split(options.replace("${{ github.workspace }}", workspace.as_posix()))
+        self.assertEqual(options[::2], ["-e"] * 4)
+        environment = dict(option.split("=", 1) for option in options[1::2])
+        self.assertEqual(environment, {
+            "VECTORSCAN_BUILD_FROM_SOURCE": "1",
+            "CARGO_PROFILE_RELEASE_PANIC": "unwind",
+            "CARGO_PROFILE_RELEASE_LTO": "false",
+            "CURL_HOME": (workspace / ".github/maturin-curl").as_posix(),
+        })
+        return environment
+
+    def download(self, statuses):
+        curl = shutil.which("curl")
+        self.assertIsNotNone(curl, "curl is required to exercise the container download configuration")
+        archive = io.BytesIO()
+        payload = b"fixture maturin binary\n"
+        with tarfile.open(fileobj=archive, mode="w:gz") as bundle:
+            entry = tarfile.TarInfo("maturin")
+            entry.size = len(payload)
+            bundle.addfile(entry, io.BytesIO(payload))
+        requests = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                status = statuses[min(len(requests), len(statuses) - 1)]
+                requests.append(status)
+                body = archive.getvalue() if status == 200 else b"upstream gateway error\n"
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        with tempfile.TemporaryDirectory(prefix="kingfisher maturin downloads ") as temporary:
+            workspace = Path(temporary)
+            config_dir = workspace / ".github/maturin-curl"
+            config_dir.mkdir(parents=True)
+            config = (ROOT / ".github/maturin-curl/.curlrc").read_bytes()
+            (config_dir / ".curlrc").write_bytes(config)
+            environment = {**os.environ, **self.container_environment(workspace)}
+            with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+                thread = threading.Thread(
+                    target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True,
+                )
+                thread.start()
+                try:
+                    # Match the action's curl -L download; keep test requests local,
+                    # even when the developer or runner has proxy variables set.
+                    result = subprocess.run(
+                        [curl, "-L", "--noproxy", "*", f"http://127.0.0.1:{server.server_port}/maturin.tar.gz"],
+                        env=environment, capture_output=True, timeout=30, check=False,
+                    )
+                finally:
+                    server.shutdown()
+                    thread.join(timeout=5)
+                self.assertFalse(thread.is_alive())
+        return result, requests, payload
+
+    def test_gateway_timeout_retries_without_piping_error_page_into_tar(self):
+        result, requests, payload = self.download([504, 200])
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(requests, [504, 200])
+        with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r:gz") as bundle:
+            with bundle.extractfile("maturin") as binary:
+                self.assertEqual(binary.read(), payload)
+
+    def test_permanent_http_error_fails_without_retry_or_error_body(self):
+        result, requests, _ = self.download([404])
+        self.assertEqual(result.returncode, 22, result.stderr.decode())
+        self.assertEqual(requests, [404])
+        self.assertEqual(result.stdout, b"")
+
+    def test_persistent_outage_exhausts_bounded_retries_and_still_fails(self):
+        result, requests, _ = self.download([503])
+        self.assertEqual(result.returncode, 22, result.stderr.decode())
+        self.assertEqual(requests, [503] * 5)
+        self.assertEqual(result.stdout, b"")
+
+    def test_download_attempts_and_connection_time_are_bounded(self):
+        config = (ROOT / ".github/maturin-curl/.curlrc").read_text(encoding="utf-8")
+        for setting in ("retry-max-time", "connect-timeout", "max-time"):
+            with self.subTest(setting=setting):
+                value = re.search(rf"(?m)^{setting}\s*=\s*(\d+)\s*$", config)
+                self.assertIsNotNone(value)
+                self.assertGreater(int(value.group(1)), 0)
+                self.assertLessEqual(int(value.group(1)), 300)
 
 
 if __name__ == "__main__":
