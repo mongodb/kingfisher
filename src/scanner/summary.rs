@@ -163,6 +163,9 @@ pub fn print_scan_summary(
                 let id_w = stats.iter().map(|s| s.rule_id.len()).max().unwrap_or(2);
                 safe_println!("\n{:-^1$}", " Rule Performance Stats ", name_w + id_w + 47);
                 safe_println!(
+                    "Confirmation/filter stage only; average = total stage time / accepted matches."
+                );
+                safe_println!(
                     "{: <name_w$}  {: <id_w$}  {: >8}  {: >15}  {: >15}",
                     "Rule",
                     "ID",
@@ -324,6 +327,9 @@ pub fn print_scan_summary(
             let name_w = stats.iter().map(|s| s.rule_name.len()).max().unwrap_or(4);
             let id_w = stats.iter().map(|s| s.rule_id.len()).max().unwrap_or(2);
             safe_println!("\n{:-^1$}", " Rule Performance Stats ", name_w + id_w + 47);
+            safe_println!(
+                "Confirmation/filter stage only; average = total stage time / accepted matches."
+            );
             safe_println!(
                 "{: <name_w$}  {: <id_w$}  {: >8}  {: >15}  {: >15}",
                 "Rule",

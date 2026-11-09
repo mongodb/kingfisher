@@ -30,9 +30,43 @@ function scalar(text) {
   if (text.startsWith("'")) return text.slice(1, -1).replaceAll("''", "'");
   return text;
 }
+// Standard YAML anchors keep identical license/evidence texts in the shipped
+// document only once. Expand before inspecting individual crate blocks so even
+// aliases whose definitions belong to another crate are checked fail-closed.
+function expandTexts(text) {
+  const anchors = new Map();
+  return text.replace(/^( +text:[ \t]*)([&*][^\n]*)$/gm, (line, prefix, value) => {
+    const alias = /^\*(text_[a-f0-9]{64})$/.exec(value);
+    if (alias) {
+      assert.ok(anchors.has(alias[1]), `Unknown notice text alias: ${alias[1]}`);
+      return prefix + anchors.get(alias[1]);
+    }
+    const definition = /^&(text_[a-f0-9]{64}) ("[^\n]*")$/.exec(value);
+    assert.ok(definition, `Malformed notice text reference: ${value}`);
+    const [, name, quoted] = definition;
+    assert.ok(!anchors.has(name), `Duplicate notice text anchor: ${name}`);
+    assert.equal(name, `text_${sha256(JSON.parse(quoted))}`, `Mismatched notice text anchor: ${name}`);
+    anchors.set(name, quoted);
+    return prefix + quoted;
+  });
+}
+function deduplicateTexts(text) {
+  text = expandTexts(text);
+  const counts = new Map();
+  const pattern = /^( +text:[ \t]*)("[^\n]*")$/gm;
+  for (const [, , quoted] of text.matchAll(pattern)) counts.set(quoted, (counts.get(quoted) || 0) + 1);
+  const seen = new Set();
+  return text.replace(pattern, (line, prefix, quoted) => {
+    if (counts.get(quoted) === 1) return line;
+    const name = `text_${sha256(JSON.parse(quoted))}`;
+    if (seen.has(name)) return `${prefix}*${name}`;
+    seen.add(name);
+    return `${prefix}&${name} ${quoted}`;
+  });
+}
 function inventory(text) {
   assert.match(text, /^root_name: kingfisher-bin\nthird_party_libraries:\n/);
-  const cargoText = text.split(/^non_cargo_notices:\n/m)[0];
+  const cargoText = expandTexts(text).split(/^non_cargo_notices:\n/m)[0];
   const entries = new Map();
   for (const match of cargoText.matchAll(/^- package_name: ([^\n]+)\n  package_version: ([^\n]+)\n[\s\S]*?(?=^- package_name: |$(?![\s\S]))/gm)) {
     const key = `${scalar(match[1])}@${scalar(match[2])}`;
@@ -225,8 +259,10 @@ function nonCargoSection(base = root) {
   return lines.join('\n') + '\n';
 }
 function render(entries, supplementary = nonCargoSection()) {
-  return 'root_name: kingfisher-bin\nthird_party_libraries:\n' +
-    [...entries].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, block]) => block).join('') + supplementary;
+  return deduplicateTexts('root_name: kingfisher-bin\nthird_party_libraries:\n' +
+    '# Identical texts are stored once using standard YAML anchors and aliases.\n' +
+    '# Each *text_... refers to the full verbatim text at &text_... in this file.\n' +
+    [...entries].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, block]) => block).join('') + supplementary);
 }
 function main(argv = process.argv.slice(2)) {
   assert.ok(argv.length === 1 && ['--check', '--generate', '--refresh'].includes(argv[0]), 'Use --check, --generate or --refresh');
@@ -251,4 +287,4 @@ function main(argv = process.argv.slice(2)) {
 }
 if (require.main === module) main();
 module.exports = { inventory, dependencies, validate, generate, placeholders, licenses, satisfies, entry, complete,
-  render, nonCargoSection, nonCargoSources, sha256 };
+  render, nonCargoSection, nonCargoSources, sha256, expandTexts, deduplicateTexts };

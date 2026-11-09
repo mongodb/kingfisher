@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
 
 use kingfisher_rules::{Confidence, RuleCacheConfig, RuleCacheStatus, Rules, RulesDatabase};
 use napi::{Env, Result, bindgen_prelude::PromiseRaw};
@@ -12,6 +12,7 @@ pub struct NativeRulesOptions {
     pub paths: Vec<String>,
     pub builtins: bool,
     pub confidence: String,
+    pub include_dependencies: Option<bool>,
     pub cache: bool,
     pub cache_dir: Option<String>,
 }
@@ -71,6 +72,29 @@ impl NativeRules {
     }
 }
 
+/// Keep only threshold-selected roots and their declared dependency closure.
+/// This opt-in selection happens before native regex compilation; unrelated low
+/// rules never become detectors merely because a selected rule needs a helper.
+fn retain_dependencies(rules: &mut Rules, confidence: Confidence) {
+    let mut selected: BTreeSet<_> = rules
+        .rules
+        .iter()
+        .filter(|(_, rule)| rule.confidence.is_at_least(&confidence))
+        .map(|(id, _)| id.clone())
+        .collect();
+    let mut pending: Vec<_> = selected.iter().cloned().collect();
+    while let Some(id) = pending.pop() {
+        if let Some(rule) = rules.rules.get(&id) {
+            for dependency in rule.depends_on_rule.iter().flatten() {
+                if selected.insert(dependency.rule_id.clone()) {
+                    pending.push(dependency.rule_id.clone());
+                }
+            }
+        }
+    }
+    rules.rules.retain(|id, _| selected.contains(id));
+}
+
 #[napi(catch_unwind)]
 pub fn load_rules<'env>(
     env: &'env Env,
@@ -85,10 +109,12 @@ pub fn load_rules<'env>(
         "high" => Confidence::High,
         _ => return Err(invalid("confidence must be low, medium, or high")),
     };
+    let include_dependencies = options.include_dependencies.unwrap_or(false);
+    let load_confidence = if include_dependencies { Confidence::Low } else { confidence };
     env.spawn_future(blocking(control, move |control| {
         crate::control::compilation_stack(move || {
             let mut rules = if options.builtins {
-                kingfisher_rules::get_builtin_rules(Some(confidence))
+                kingfisher_rules::get_builtin_rules(Some(load_confidence))
                     .map_err(|_| failure("KF_RULES", "built-in catalog could not be loaded"))?
             } else {
                 Rules::new()
@@ -96,9 +122,12 @@ pub fn load_rules<'env>(
             control.check().map_err(crate::control::interrupted)?;
             if !options.paths.is_empty() {
                 rules.update(
-                    Rules::from_paths(options.paths, confidence)
+                    Rules::from_paths(options.paths, load_confidence)
                         .map_err(|_| failure("KF_RULES", "custom rules could not be loaded"))?,
                 );
+            }
+            if include_dependencies {
+                retain_dependencies(&mut rules, confidence);
             }
             if rules.is_empty() {
                 return Err(invalid("no rules loaded"));

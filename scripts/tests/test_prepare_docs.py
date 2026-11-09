@@ -28,6 +28,47 @@ class PrepareDocsTests(unittest.TestCase):
             "[example](https://github.com/mongodb/kingfisher/blob/main/javascript/examples/content.cjs)",
         )
 
+    def test_source_images_use_raw_bytes_but_normal_links_use_blob_viewer(self):
+        path = "javascript/examples/kingfisher-workbench/screenshots/report-overview.png"
+        raw_url = f"https://raw.githubusercontent.com/mongodb/kingfisher/main/{path}"
+        blob_url = f"https://github.com/mongodb/kingfisher/blob/main/{path}"
+        for root_level in (False, True):
+            for prefix in ("", "../"):
+                with self.subTest(root_level=root_level, prefix=prefix):
+                    self.assertEqual(
+                        prepare_docs.rewrite_links(
+                            f'![synthetic findings]({prefix}{path} "Workbench") '
+                            f"[screenshot]({prefix}{path}#preview)",
+                            root_level=root_level,
+                        ),
+                        f'![synthetic findings]({raw_url} "Workbench") '
+                        f"[screenshot]({blob_url}#preview)",
+                    )
+
+    def test_javascript_frontmatter_is_stable_when_regenerated(self):
+        destination, title, description = prepare_docs.DOC_MAP["JAVASCRIPT.md"]
+        with tempfile.TemporaryDirectory(prefix="SDK docs fixture ") as temporary:
+            root = Path(temporary)
+            source = root / "JAVASCRIPT.md"
+            source.write_text(
+                "# SDK\n\n![showcase](../javascript/examples/workbench/report.png)\n",
+                encoding="utf-8",
+            )
+            target = root / destination
+            with patch.object(prepare_docs, "DOCS_DST", str(root)):
+                prepare_docs.process_file(str(source), str(target), title, description)
+            generated = target.read_text(encoding="utf-8")
+            frontmatter = generated.split("---", 2)[1]
+            self.assertIn('title: "JavaScript and TypeScript SDK"', frontmatter)
+            self.assertIn("stable Node SDK (1.0.0)", frontmatter)
+            self.assertNotIn("preview", frontmatter)
+            self.assertNotIn("0.1.0", frontmatter)
+            self.assertIn(
+                "![showcase](https://raw.githubusercontent.com/mongodb/kingfisher/main/"
+                "javascript/examples/workbench/report.png)",
+                generated,
+            )
+
     def test_nested_pages_keep_existing_relative_links(self):
         for source, destination in prepare_docs.LINK_REWRITES.items():
             with self.subTest(source=source):

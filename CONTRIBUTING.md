@@ -78,7 +78,7 @@ For repository layout and project-specific guidance, see:
 
 ### JavaScript/TypeScript SDK Development
 
-The `kingfisher-secret-scanner` npm SDK **0.1.0** is a preview of npm support.
+The `kingfisher-secret-scanner` npm SDK **1.0.0** is a stable release.
 Its version is independent of the CLI, Python SDK, and Rust crates. Use the
 checkout instructions below for SDK development.
 
@@ -124,7 +124,11 @@ The generator derives the **exact locked third-party crate/version union** acros
 and proc macros (also optional allocators, GUI and tools). Dev-only dependencies and
 first-party crates are excluded; stale Cargo entries are removed. Independent
 non-Cargo notices for the project, rule sources and Vectorscan are preserved, and
-the SDK's packaged notices are synchronized.
+the SDK's packaged notices are synchronized. Identical license/evidence texts are
+stored once using standard YAML anchors and aliases, preserving every original
+text and copyright notice offline. Do not replace required notices with URLs.
+These are distribution files, not imported JavaScript or embedded executable data;
+normal JS bundlers do not include them, although whole-directory deployment copies do.
 
 From `javascript/`, `npm run check:notices` provides the same read-only check. Missing,
 stale or incomplete license texts (including `NOT FOUND` placeholders) fail closed;
@@ -167,7 +171,8 @@ For Kingfisher custom rules:
   it.
 - Keep patterns specific and efficient.
 - Add realistic examples and relevant tests.
-- Set rule confidence to `medium`.
+- Choose a static rule confidence appropriate to the detector; filters cannot upgrade or
+  downgrade findings. See the [configured-confidence policy](docs/RULES.md#configured-confidence).
 
 Useful validation commands:
 

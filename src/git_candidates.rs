@@ -9,6 +9,7 @@ use std::sync::{
 };
 
 use anyhow::Result;
+use kingfisher_rules::scanner_pool::ScannerPool as RulesScannerPool;
 use kingfisher_scanner::primitives::is_base64_byte;
 
 use crate::{
@@ -21,6 +22,8 @@ const BASE64_SCAN_LIMIT: usize = 64 * 1024 * 1024;
 
 pub(crate) struct GitContentFilter {
     scanners: Arc<ScannerPool>,
+    chunked_prefilter_scanners: Option<Arc<RulesScannerPool>>,
+    has_replay_rules: bool,
     num_rules: usize,
     base64: bool,
     archives: bool,
@@ -40,6 +43,8 @@ impl GitContentFilter {
     ) -> Self {
         Self {
             scanners,
+            chunked_prefilter_scanners: None,
+            has_replay_rules: false,
             num_rules,
             base64,
             archives,
@@ -48,6 +53,16 @@ impl GitContentFilter {
             clean_blobs: AtomicU64::new(0),
             clean_bytes: AtomicU64::new(0),
         }
+    }
+
+    pub(crate) fn with_chunked_prefilters(
+        mut self,
+        scanners: Option<Arc<RulesScannerPool>>,
+        has_replay_rules: bool,
+    ) -> Self {
+        self.chunked_prefilter_scanners = scanners;
+        self.has_replay_rules = has_replay_rules;
+        self
     }
 
     pub(crate) fn with_max_blob_size(mut self, max_blob_size: Option<u64>) -> Self {
@@ -89,6 +104,18 @@ impl GitContentFilter {
             return Ok(true);
         }
 
+        // Exact whole-language gates can miss long matches crossing the chunk overlap.
+        // Keep the former broad gates for those inputs, including conservative retention
+        // if their auxiliary native database could not be compiled.
+        let chunked_prefilters = if bytes.len() > MAX_CHUNK_SIZE && self.has_replay_rules {
+            let Some(scanners) = self.chunked_prefilter_scanners.as_ref() else {
+                return Ok(true);
+            };
+            Some(scanners)
+        } else {
+            None
+        };
+
         let mut offset = 0;
         while offset < bytes.len() {
             let end = (offset + MAX_CHUNK_SIZE).min(bytes.len());
@@ -105,6 +132,21 @@ impl GitContentFilter {
             })??;
             if found {
                 return Ok(true);
+            }
+            if let Some(scanners) = chunked_prefilters {
+                scanners.try_with(|scanner| {
+                    scanner.scan(&bytes[offset..end], |rule, _, _, _| {
+                        if (rule as usize) < self.num_rules {
+                            found = true;
+                            kingfisher_vectorscan::Scan::Terminate
+                        } else {
+                            kingfisher_vectorscan::Scan::Continue
+                        }
+                    })
+                })??;
+                if found {
+                    return Ok(true);
+                }
             }
             if end == bytes.len() {
                 break;
@@ -285,6 +327,55 @@ mod tests {
         let start = MAX_CHUNK_SIZE - 10;
         bytes[start..start + secret.len()].copy_from_slice(secret);
         assert!(filter(false, false).may_match(&bytes).unwrap());
+    }
+
+    #[test]
+    fn chunked_prefilter_keeps_matches_longer_than_the_segment_overlap() {
+        let pattern = b"long_gate_start[ ]+long_gate_end";
+        let exact =
+            BlockDatabase::new(vec![Pattern::new(pattern.to_vec(), Flag::SINGLEMATCH, Some(0))])
+                .unwrap();
+        let filter = GitContentFilter::new(
+            Arc::new(ScannerPool::new(Arc::new(exact))),
+            1,
+            false,
+            false,
+            ResourceLimits::default(),
+        );
+        let mut bytes = vec![b'.'; MAX_CHUNK_SIZE + 64];
+        let start = MAX_CHUNK_SIZE - CHUNK_OVERLAP - 1;
+        let prefix = b"long_gate_start";
+        let suffix = b"long_gate_end";
+        let suffix_start = bytes.len() - suffix.len();
+        bytes[start..start + prefix.len()].copy_from_slice(prefix);
+        bytes[start + prefix.len()..suffix_start].fill(b' ');
+        bytes[suffix_start..].copy_from_slice(suffix);
+        assert!(
+            regex::bytes::Regex::new(std::str::from_utf8(pattern).unwrap())
+                .unwrap()
+                .is_match(&bytes)
+        );
+        // Neither original chunk contains the complete exact-language match.
+        assert!(!filter.may_match(&bytes).unwrap());
+
+        // Model a broad necessary-condition gate by its retained literal prefix.
+        let broad = BlockDatabase::new(vec![Pattern::new(
+            prefix.to_vec(),
+            Flag::PREFILTER | Flag::SINGLEMATCH,
+            Some(0),
+        )])
+        .unwrap();
+        let filter = filter
+            .with_chunked_prefilters(Some(Arc::new(RulesScannerPool::new(Arc::new(broad)))), true);
+        assert!(filter.may_match(&bytes).unwrap());
+        assert!(!filter.may_match(b"long_gate_start but no valid ending").unwrap());
+    }
+
+    #[test]
+    fn missing_chunked_prefilters_conservatively_keep_only_large_inputs() {
+        let filter = filter(false, false).with_chunked_prefilters(None, true);
+        assert!(!filter.may_match(b"ordinary text").unwrap());
+        assert!(filter.may_match(&vec![b'.'; MAX_CHUNK_SIZE + 1]).unwrap());
     }
 
     #[test]

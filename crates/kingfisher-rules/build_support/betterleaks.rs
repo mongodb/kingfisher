@@ -80,8 +80,7 @@ fn bare_pattern(pattern: &str, secret_group: usize) -> Result<String> {
     Ok(result)
 }
 
-const OMITTED_BUILTIN_RULE_IDS: &[&str] =
-    &["generic-api-key", "generic-password", "generic-username"];
+const OMITTED_BUILTIN_RULE_IDS: &[&str] = &["generic-password", "generic-username"];
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -635,13 +634,16 @@ fn import_config_with_namespace(
         bail!("unsupported Betterleaks capability overlay version {}", capability_overlay.version);
     }
     let source_count = source_config.rules.len();
-    let prefilter = source_config
+    let mut prefilter = source_config
         .prefilter
         .as_deref()
         .map(parse_expression)
         .transpose()
         .context("failed to parse the Betterleaks global prefilter")?;
-    if let Some(expression) = prefilter.as_ref() {
+    if let Some(expression) = prefilter.as_mut() {
+        if filter_builtins {
+            remove_builtin_confidence_computation("global prefilter", expression)?;
+        }
         validate_filter_expression(expression)
             .context("unsupported operation in the Betterleaks global prefilter")?;
     }
@@ -877,8 +879,14 @@ fn import_config_with_namespace(
                 format!("unsupported filter override operation in {}", source_rule.id)
             })?;
         }
-        let betterleaks_filter =
+        let mut betterleaks_filter =
             combine_filters([global_filter.clone(), rule_filter, capability_filter]);
+        // Built-ins must contain no legacy confidence-only computation, including
+        // global/overlay calls. Custom TOML retains calls only for their string return
+        // values in rejection expressions; evaluation never changes rule confidence.
+        if filter_builtins && let Some(expression) = betterleaks_filter.as_mut() {
+            remove_builtin_confidence_computation(&source_rule.id, expression)?;
+        }
 
         imported.push(ImportedRule {
             name: if source_rule.description.trim().is_empty() {
@@ -1039,11 +1047,185 @@ fn combine_filters<const N: usize>(
     })
 }
 
+/// Strip only the pinned detectors' known legacy confidence computations. Even no-op
+/// calls would leave needless matching work in the built-in AST. Match exact expressions
+/// and reject remaining references/calls rather than risk deleting rejection logic or errors.
+fn remove_builtin_confidence_computation(
+    rule_id: &str,
+    expression: &mut BetterleaksExpr,
+) -> Result<()> {
+    let level = match rule_id {
+        "generic-api-key" => Some(
+            r#"matchesAny(genericMatchContext, [`(?i)\b[a-z0-9]+[_.-]+token\b`]) ? "medium" : "low""#,
+        ),
+        "generic-credential-uri" => Some(
+            r#"(isExampleValue || isSyntheticCredentialTuple || isTestOrDocumentationSource || hasLowConfidenceHost) ? "low" : "medium""#,
+        ),
+        _ => None,
+    }
+    .map(parse_expression)
+    .transpose()?;
+    // These exact literal-regex computations feed only the URI confidence branch.
+    // Keep isInstructionalPlaceholder, isSyntheticExampleURI, hasIgnoredHost and all
+    // other bindings intact. Any new use of a removed binding fails closed below.
+    let bindings = if rule_id == "generic-credential-uri" {
+        [
+            (
+                "isExampleValue",
+                r#"matchesAny(finding["secret"], [
+                  `(?i)^(?:(?:(?:an?|my)(?:[ _.-]|%(?:20|2d|5f))*)?example(?:(?:[ _.-]|%(?:20|2d|5f))*(?:password|passwd|pwd))?|(?:password|passwd|pwd)(?:[ _.-]|%(?:20|2d|5f))*example)(?:(?:[ _.-]|%(?:20|2d|5f))*[0-9]{1,4})?[!?.]*$`
+                ])"#,
+            ),
+            (
+                "isSyntheticCredentialTuple",
+                r#"matchesAny(finding["match"], [
+                  `(?i)^[a-z][a-z0-9+.-]*://(?:foo|test|user(?:name)?|example(?:[_.-]?user)?)[0-9]{0,4}:(?:bar|test|pass(?:word)?|passwd|pwd|token|secret)[0-9]{0,4}[!?.]?@`
+                ])"#,
+            ),
+            (
+                "isTestOrDocumentationSource",
+                r#"matchesAny(attributes["path"], [
+                  `(?i)(?:^|[/\\])(?:__tests__|tests?|testdata|specs?|fixtures?|mocks?|examples?|samples?|demos?|tutorials?|templates?|qa|e2e|documentation|docs?(?:[-_][a-z0-9-]+)?)(?:[/\\]|$)`,
+                  `(?i)(?:^|[/\\])readme(?:\.[^/\\]+)?$`,
+                  `(?i)(?:^|[/\\])[^/\\]*(?:[_.-](?:test|spec)|(?:test|spec)[_.-])[^/\\]*\.[^/\\]+$`,
+                  `(?i)\.(?:example|sample|template)(?:\.[^/\\]+)?$`,
+                  `(?i)\.(?:md|mdx|rst|adoc|asciidoc)$`
+                ])"#,
+            ),
+            (
+                "hasLowConfidenceHost",
+                r#"matchesAny(finding["match"], [
+                  `(?i)^[a-z][a-z0-9+.-]*://[^@\s]+@(?:(?:[a-z0-9_-]+\.)*example(?:\.(?:com|org|net))?|(?:[a-z0-9_-]+\.)*(?:invalid|test|localhost))\.?(?::[0-9]{1,5})?(?:,(?:(?:[a-z0-9_-]+\.)*example(?:\.(?:com|org|net))?|(?:[a-z0-9_-]+\.)*(?:invalid|test|localhost))\.?(?::[0-9]{1,5})?)*(?:[/?\s'"\x60#<>{}\[\];)]|,?$)`
+                ])"#,
+            ),
+        ]
+        .into_iter()
+        .map(|(name, source)| Ok((name, parse_expression(source)?)))
+        .collect::<Result<BTreeMap<_, _>>>()?
+    } else {
+        BTreeMap::new()
+    };
+
+    fn visit(
+        expression: &mut BetterleaksExpr,
+        rule_id: &str,
+        level: Option<&BetterleaksExpr>,
+        bindings: &BTreeMap<&str, BetterleaksExpr>,
+    ) -> Result<()> {
+        let replacement = match expression {
+            BetterleaksExpr::VariableDeclarator { name, value, expr }
+                if name == "level" && level.is_some_and(|level| value.as_ref() == level) =>
+            {
+                match expr.as_mut() {
+                    BetterleaksExpr::VariableDeclarator { name, value, expr }
+                        if name == "_"
+                            && matches!(value.as_ref(), BetterleaksExpr::Call { callee, arguments }
+                                if expression_name(callee).as_deref() == Some("setConfidence")
+                                    && arguments == &[BetterleaksExpr::Identifier { value: "level".into() }]) =>
+                    {
+                        Some(std::mem::replace(expr.as_mut(), BetterleaksExpr::Nil))
+                    }
+                    _ => None,
+                }
+            }
+            BetterleaksExpr::VariableDeclarator { name, value, expr }
+                if bindings
+                    .get(name.as_str())
+                    .is_some_and(|expected| value.as_ref() == expected) =>
+            {
+                Some(std::mem::replace(expr.as_mut(), BetterleaksExpr::Nil))
+            }
+            _ => None,
+        };
+        if let Some(replacement) = replacement {
+            *expression = replacement;
+            // Consecutive confidence-only bindings may now be at the root.
+            return visit(expression, rule_id, level, bindings);
+        }
+
+        match expression {
+            BetterleaksExpr::Call { callee, arguments } => {
+                if matches!(
+                    expression_name(callee).as_deref(),
+                    Some("setConfidence" | "filter.setConfidence")
+                ) {
+                    bail!(
+                        "unsupported {rule_id} legacy confidence call; review the pinned upstream filter"
+                    );
+                }
+                visit(callee, rule_id, level, bindings)?;
+                for argument in arguments {
+                    visit(argument, rule_id, level, bindings)?;
+                }
+            }
+            BetterleaksExpr::Identifier { value }
+                if (value == "level" && level.is_some())
+                    || bindings.contains_key(value.as_str()) =>
+            {
+                bail!(
+                    "unexpected {rule_id} reference to confidence-only variable {value}; review the pinned upstream filter"
+                );
+            }
+            BetterleaksExpr::VariableDeclarator { name, .. }
+                if (name == "level" && level.is_some()) || bindings.contains_key(name.as_str()) =>
+            {
+                bail!(
+                    "unsupported {rule_id} confidence-only computation {name}; review the pinned upstream filter"
+                );
+            }
+            BetterleaksExpr::Unary { node, .. }
+            | BetterleaksExpr::Chain { node }
+            | BetterleaksExpr::Predicate { node } => visit(node, rule_id, level, bindings)?,
+            BetterleaksExpr::Binary { left, right, .. } => {
+                visit(left, rule_id, level, bindings)?;
+                visit(right, rule_id, level, bindings)?;
+            }
+            BetterleaksExpr::Member { node, property, .. } => {
+                visit(node, rule_id, level, bindings)?;
+                visit(property, rule_id, level, bindings)?;
+            }
+            BetterleaksExpr::Slice { node, from, to } => {
+                visit(node, rule_id, level, bindings)?;
+                visit(from, rule_id, level, bindings)?;
+                visit(to, rule_id, level, bindings)?;
+            }
+            BetterleaksExpr::Conditional { cond, exp1, exp2 } => {
+                visit(cond, rule_id, level, bindings)?;
+                visit(exp1, rule_id, level, bindings)?;
+                visit(exp2, rule_id, level, bindings)?;
+            }
+            BetterleaksExpr::VariableDeclarator { value, expr, .. } => {
+                visit(value, rule_id, level, bindings)?;
+                visit(expr, rule_id, level, bindings)?;
+            }
+            BetterleaksExpr::Pair { key, value } => {
+                visit(key, rule_id, level, bindings)?;
+                visit(value, rule_id, level, bindings)?;
+            }
+            BetterleaksExpr::Builtin { arguments, .. }
+            | BetterleaksExpr::Sequence { nodes: arguments }
+            | BetterleaksExpr::Array { nodes: arguments }
+            | BetterleaksExpr::Map { pairs: arguments } => {
+                for argument in arguments {
+                    visit(argument, rule_id, level, bindings)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    visit(expression, rule_id, level.as_ref(), &bindings)
+}
+
 fn validate_filter_expression(expression: &BetterleaksExpr) -> Result<()> {
     match expression {
         BetterleaksExpr::Call { callee, arguments } => {
             let name = expression_name(callee)
                 .ok_or_else(|| anyhow!("dynamic function calls are not supported"))?;
+            // Legacy setConfidence/filter.setConfidence are recognized only so existing
+            // custom YAML/TOML rejection expressions keep loading. Runtime calls return
+            // their string argument unchanged and never mutate configured confidence.
             let supported = if let BetterleaksExpr::Member { method: true, .. } = callee.as_ref() {
                 if name.starts_with("filter.") {
                     matches!(
@@ -2636,7 +2818,150 @@ regex = '''token_(?P<secret>[a-z]+)'''
     }
 
     #[test]
-    fn omits_low_value_generic_rules_only_from_builtins() {
+    fn builtin_generic_confidence_is_static_without_changing_rejection_predicates() {
+        let source = r#"
+[[rules]]
+id = "generic-api-key"
+regex = '''key = (\w{10,})'''
+confidence = "low"
+filter = '''
+    entropy(finding.secret) < 3 || (
+      let genericMatchContext = finding.match;
+      let level = matchesAny(genericMatchContext, [
+        `(?i)\b[a-z0-9]+[_.-]+token\b`
+      ]) ? "medium" : "low";
+      let _ = setConfidence(level);
+      finding.secret == "reject-me"
+    )
+'''
+"#;
+        let capabilities = "version: 1\nrules:\n  generic-api-key:\n    confidence: low\n";
+        let builtin = import_config(source, "test", capabilities).unwrap();
+        let builtin: serde_yaml::Value = serde_yaml::from_str(&builtin).unwrap();
+        let rule = &builtin["rules"][0];
+        assert_eq!(rule["confidence"].as_str(), Some("low"));
+        let expected_filter = parse_expression(
+            r#"
+            entropy(finding.secret) < 3 || (
+              let genericMatchContext = finding.match;
+              finding.secret == "reject-me"
+            )
+        "#,
+        )
+        .unwrap();
+        assert_eq!(rule["betterleaks_filter"], serde_yaml::to_value(expected_filter).unwrap());
+
+        let custom = import_custom_config(source, "test").unwrap();
+        let custom: serde_yaml::Value = serde_yaml::from_str(&custom).unwrap();
+        assert_eq!(custom["rules"][0]["confidence"].as_str(), Some("low"));
+        let original: toml::Value = toml::from_str(source).unwrap();
+        let original_filter = original["rules"][0]["filter"].as_str().unwrap();
+        assert_eq!(
+            custom["rules"][0]["betterleaks_filter"],
+            serde_yaml::to_value(parse_expression(original_filter).unwrap()).unwrap()
+        );
+    }
+
+    #[test]
+    fn builtin_generic_import_requires_review_of_unknown_legacy_confidence_layouts() {
+        let source = r#"
+[[rules]]
+id = "generic-api-key"
+regex = '''key = (\w{10,})'''
+filter = 'let _ = setConfidence("high"); false'
+"#;
+        let error = import_config(source, "test", EMPTY_CAPABILITIES).unwrap_err();
+        assert!(error.to_string().contains("unsupported generic-api-key legacy confidence call"));
+        // Custom calls remain loadable solely as inert string-value passthroughs.
+        assert!(import_custom_config(source, "test").is_ok());
+    }
+
+    #[test]
+    fn builtin_credential_uri_removes_only_pinned_confidence_computations() {
+        let archived = resolve_config("[extend]\nuseDefault=true", &mut Vec::new(), 0).unwrap();
+        let original_filter = archived
+            .rules
+            .iter()
+            .find(|rule| rule.id == "generic-credential-uri")
+            .unwrap()
+            .filter
+            .as_deref()
+            .unwrap();
+        let source = format!(
+            "[[rules]]\nid='generic-credential-uri'\nregex='token'\nconfidence='medium'\nfilter='''{original_filter}'''"
+        );
+        let builtin = import_config(&source, "archived-uri", EMPTY_CAPABILITIES).unwrap();
+        let builtin: serde_yaml::Value = serde_yaml::from_str(&builtin).unwrap();
+        let rule = &builtin["rules"][0];
+        assert!(rule["confidence"].is_null() || rule["confidence"].as_str() == Some("medium"));
+
+        // Independently remove only the six confidence-only source statements. The
+        // resulting AST must preserve every other binding and rejection predicate.
+        let removed = [
+            "isExampleValue",
+            "isSyntheticCredentialTuple",
+            "isTestOrDocumentationSource",
+            "hasLowConfidenceHost",
+            "level",
+            "_",
+        ];
+        let mut expected = String::new();
+        let mut skipping = false;
+        for line in original_filter.lines() {
+            if removed.iter().any(|name| line.trim_start().starts_with(&format!("let {name} ="))) {
+                skipping = true;
+            }
+            if skipping {
+                skipping = !line.trim_end().ends_with(';');
+            } else {
+                expected.push_str(line);
+                expected.push('\n');
+            }
+        }
+        assert!(!skipping);
+        assert_eq!(
+            rule["betterleaks_filter"],
+            serde_yaml::to_value(parse_expression(&expected).unwrap()).unwrap()
+        );
+        let custom = import_custom_config(&source, "archived-uri").unwrap();
+        let custom: serde_yaml::Value = serde_yaml::from_str(&custom).unwrap();
+        assert_eq!(
+            custom["rules"][0]["betterleaks_filter"],
+            serde_yaml::to_value(parse_expression(original_filter).unwrap()).unwrap()
+        );
+
+        // Do not discard a changed computation (which might now error), or a binding
+        // that upstream starts sharing with the rejection body.
+        for (original, changed) in [
+            ("let isExampleValue = matchesAny", "let isExampleValue = fromBase64"),
+            ("\nisInstructionalPlaceholder\n", "\nisExampleValue\n"),
+        ] {
+            assert!(original_filter.contains(original));
+            let mut changed =
+                parse_expression(&original_filter.replacen(original, changed, 1)).unwrap();
+            assert!(
+                remove_builtin_confidence_computation("generic-credential-uri", &mut changed)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_builtin_confidence_calls_require_review_in_all_filter_inputs() {
+        for field in ["prefilter", "filter"] {
+            let source = format!(
+                "{field}='let _ = setConfidence(\"high\"); false'\n[[rules]]\nid='token'\nregex='token'\n"
+            );
+            assert!(import_config(&source, "test", EMPTY_CAPABILITIES).is_err());
+            assert!(import_custom_config(&source, "test").is_ok());
+        }
+        let source = "[[rules]]\nid='token'\nregex='token'\n";
+        let overlay = "version: 1\nrules:\n  token:\n    filter_override: 'setConfidence(\"low\") == \"low\"'\n";
+        assert!(import_config(source, "test", overlay).is_err());
+    }
+
+    #[test]
+    fn imports_generic_api_keys_but_omits_generic_passwords_and_usernames_from_builtins() {
         let source = r#"
 [[rules]]
 id = "generic-api-key"
@@ -2660,7 +2985,7 @@ regex = '''specific_(?P<secret>[a-z]+)'''
 "#;
 
         let builtins = import_config(source, "test", EMPTY_CAPABILITIES).unwrap();
-        assert!(!builtins.contains("betterleaks.generic-api-key"));
+        assert!(builtins.contains("betterleaks.generic-api-key"));
         assert!(!builtins.contains("betterleaks.generic-password"));
         assert!(!builtins.contains("betterleaks.generic-username"));
         assert!(builtins.contains("betterleaks.specific-token"));

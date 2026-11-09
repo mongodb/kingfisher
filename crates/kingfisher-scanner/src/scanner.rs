@@ -7,8 +7,11 @@ use std::sync::Arc;
 use anyhow::Result;
 use kingfisher_core::{Blob, BlobId, LocationMapping, OffsetSpan, calculate_shannon_entropy};
 use kingfisher_rules::{
-    Confidence, Rule, RulesDatabase,
-    betterleaks_filter::{BetterleaksFilterContext, BetterleaksFilterLineCache},
+    RulesDatabase,
+    betterleaks_filter::{
+        BetterleaksFilterContext, BetterleaksFilterFragment, BetterleaksFilterLineCache,
+        BetterleaksFilterPrefix,
+    },
 };
 use parking_lot::RwLock;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -512,6 +515,7 @@ impl Scanner {
         let mut candidate_indexes: FxHashMap<usize, primitives::CandidateMatchCache> =
             FxHashMap::default();
         let fragment_raw = std::cell::OnceCell::new();
+        let filter_fragment = std::cell::OnceCell::new();
         let line_index = std::cell::OnceCell::new();
         let mut filter_lines = FxHashMap::default();
         let mut filter_line_cache = BetterleaksFilterLineCache::default();
@@ -524,7 +528,10 @@ impl Scanner {
                 Some(r) => r,
                 None => continue,
             };
-            if rule.syntax().betterleaks_path_only {
+            if rule.syntax().betterleaks_path_only
+                || (!rule.is_runtime_dependency_helper()
+                    && !rule.confidence().is_at_least(&rule.runtime_minimum_confidence()))
+            {
                 continue;
             }
             if !rule.matches_path(path) {
@@ -589,7 +596,11 @@ impl Scanner {
                         control,
                     )?
                 } else {
-                    crate::confirmation::IndexedCaptures::search(confirmation_regex, haystack)
+                    crate::confirmation::IndexedCaptures::replay(
+                        confirmation_regex,
+                        haystack,
+                        self.rules_db.replay_regex(rule_id),
+                    )
                 };
                 while let Some(captures) = captures.next_with_control(control)? {
                     control.check()?;
@@ -605,11 +616,15 @@ impl Scanner {
                     let full_capture_span = OffsetSpan::from_range(
                         (scan_start + full_capture.start())..(scan_start + full_capture.end()),
                     );
-                    if !primitives::record_indexed_match(
-                        &mut previous_full_spans,
-                        rule_id,
-                        full_capture_span,
-                    ) {
+                    // Whole-blob PREFILTER confirmation runs once per rule, so rejected
+                    // spans cannot be replayed and need no full-span history.
+                    if bounded_confirmation
+                        && !primitives::record_indexed_match(
+                            &mut previous_full_spans,
+                            rule_id,
+                            full_capture_span,
+                        )
+                    {
                         continue;
                     }
 
@@ -659,58 +674,68 @@ impl Scanner {
                         continue;
                     }
 
-                    let capture_map = named_captures(confirmation_regex, &captures);
+                    let mut capture_map = None;
                     let filter_outcome = if let Some(expression) = rule.betterleaks_filter() {
-                        let full_match = String::from_utf8_lossy(full_capture.as_bytes());
-                        let secret = String::from_utf8_lossy(secret_bytes);
-                        let fragment_raw =
-                            fragment_raw.get_or_init(|| String::from_utf8_lossy(bytes));
-                        let match_start_idx = scan_start + full_capture.start();
-                        let match_end_idx = scan_start + full_capture.end();
-                        let (match_line_start_idx, match_line_end_idx) = line_index
-                            .get_or_init(|| crate::line_index::LineIndex::new(bytes))
-                            .bounds(match_start_idx, match_end_idx);
-                        let line = filter_line(
-                            bytes,
-                            match fragment_raw {
-                                std::borrow::Cow::Borrowed(text) => Some(*text),
-                                _ => None,
-                            },
-                            (match_line_start_idx, match_line_end_idx),
-                            line_index.get().unwrap(),
-                            &mut filter_lines,
-                        );
-                        let context = BetterleaksFilterContext {
-                            attributes: source_attributes,
-                            path,
-                            secret: &secret,
-                            full_match: &full_match,
-                            line: &line,
-                            fragment_raw,
-                            match_start_idx,
-                            match_end_idx,
-                            match_line_start_idx,
-                            match_line_end_idx,
-                            rule_id: rule.id(),
-                            description: rule.name(),
-                            captures: capture_map.clone(),
-                        };
-                        Some(self.rules_db.evaluate_betterleaks_filter_with_line_cache(
-                            expression,
-                            &context,
-                            match_line_start_idx..match_line_end_idx,
-                            &mut filter_line_cache,
-                        )?)
+                        Some('filter: {
+                            let secret = String::from_utf8_lossy(secret_bytes);
+                            let expression = match self
+                                .rules_db
+                                .evaluate_betterleaks_filter_prefix(expression, &secret)?
+                            {
+                                Some(BetterleaksFilterPrefix::Complete(outcome)) => {
+                                    break 'filter outcome;
+                                }
+                                Some(BetterleaksFilterPrefix::Remainder(expression)) => expression,
+                                None => expression,
+                            };
+                            let full_match = String::from_utf8_lossy(full_capture.as_bytes());
+                            let fragment_raw =
+                                fragment_raw.get_or_init(|| String::from_utf8_lossy(bytes));
+                            let match_start_idx = scan_start + full_capture.start();
+                            let match_end_idx = scan_start + full_capture.end();
+                            let (match_line_start_idx, match_line_end_idx) = line_index
+                                .get_or_init(|| crate::line_index::LineIndex::new(bytes))
+                                .bounds(match_start_idx, match_end_idx);
+                            let line = filter_line(
+                                bytes,
+                                match fragment_raw {
+                                    std::borrow::Cow::Borrowed(text) => Some(*text),
+                                    _ => None,
+                                },
+                                (match_line_start_idx, match_line_end_idx),
+                                line_index.get().unwrap(),
+                                &mut filter_lines,
+                            );
+                            let context = BetterleaksFilterContext {
+                                attributes: source_attributes,
+                                path,
+                                secret: &secret,
+                                full_match: &full_match,
+                                line: &line,
+                                fragment_raw,
+                                match_start_idx,
+                                match_end_idx,
+                                match_line_start_idx,
+                                match_line_end_idx,
+                                rule_id: rule.id(),
+                                description: rule.name(),
+                                captures: named_captures(confirmation_regex, &captures),
+                            };
+                            let outcome = self.rules_db.evaluate_betterleaks_filter_with_caches(
+                                expression,
+                                &context,
+                                match_line_start_idx..match_line_end_idx,
+                                &mut filter_line_cache,
+                                filter_fragment
+                                    .get_or_init(|| BetterleaksFilterFragment::new(fragment_raw)),
+                            )?;
+                            capture_map = Some(context.captures);
+                            outcome
+                        })
                     } else {
                         None
                     };
                     if filter_outcome.is_some_and(|outcome| outcome.discard) {
-                        continue;
-                    }
-                    let confidence = filter_outcome
-                        .and_then(|outcome| outcome.confidence)
-                        .unwrap_or_else(|| rule.confidence());
-                    if !rule.accepts_effective_confidence(confidence) {
                         continue;
                     }
 
@@ -742,7 +767,7 @@ impl Scanner {
 
                     findings.push(ScanFinding {
                         finding: Finding {
-                            rule: finding_rule(&rule, confidence),
+                            rule: Arc::clone(&rule),
                             rule_id: rule.id().to_string(),
                             rule_name: rule.name().to_string(),
                             secret,
@@ -754,10 +779,13 @@ impl Scanner {
                                 source_span.end.line,
                                 source_span.end.column,
                             ),
-                            confidence,
+                            confidence: rule.confidence(),
                             entropy,
                             fingerprint,
-                            captures: capture_map.into_iter().collect::<HashMap<_, _>>(),
+                            captures: capture_map
+                                .unwrap_or_else(|| named_captures(confirmation_regex, &captures))
+                                .into_iter()
+                                .collect::<HashMap<_, _>>(),
                             is_base64_encoded: false,
                             blob_id: blob.id(),
                         },
@@ -845,20 +873,9 @@ impl Scanner {
         }
         control.check()?;
         if !retain_unresolved {
-            let line_starts_for_specificity = if cli_match_semantics
-                && findings.iter().any(|finding| finding.rule.syntax().specificity != 0)
-            {
-                std::iter::once(0)
-                    .chain(
-                        bytes
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(index, byte)| (*byte == b'\n').then_some(index + 1)),
-                    )
-                    .collect::<Vec<_>>()
-            } else {
-                Vec::new()
-            };
+            // Ordinary specificity comparisons need no component line table. Build it only if
+            // the CLI-compatible dependency callback actually evaluates a component window.
+            let line_starts_for_specificity = std::cell::OnceCell::new();
             let specificity_context = match_context.as_deref();
             #[cfg(feature = "context")]
             let specificity_context = specificity_context.filter(|_| options.is_none());
@@ -885,7 +902,12 @@ impl Scanner {
                         .is_some_and(|window| {
                             crate::postprocess::component_is_within_window(
                                 bytes.len(),
-                                &line_starts_for_specificity,
+                                line_starts_for_specificity.get_or_init(|| {
+                                    use bstr::ByteSlice;
+                                    std::iter::once(0)
+                                        .chain(bytes.find_iter(b"\n").map(|offset| offset + 1))
+                                        .collect::<Vec<_>>()
+                                }),
                                 primary.association_span,
                                 component.association_span,
                                 window,
@@ -901,13 +923,17 @@ impl Scanner {
                 },
                 control,
             )?;
+            let mut hidden_rules = FxHashMap::default();
             let mut index = 0;
             findings.retain_mut(|finding| {
-                if keep.suppress_reporting[index] {
+                if keep.keep[index] && keep.suppress_reporting[index] && finding.rule.visible() {
                     let old_rule = Arc::as_ptr(&finding.rule) as usize;
-                    let mut rule = finding.rule.as_ref().clone();
-                    rule.suppress_runtime_reporting();
-                    finding.finding.rule = Arc::new(rule);
+                    finding.finding.rule =
+                        Arc::clone(hidden_rules.entry(old_rule).or_insert_with(|| {
+                            let mut hidden = finding.rule.as_ref().clone();
+                            hidden.suppress_runtime_reporting();
+                            Arc::new(hidden)
+                        }));
                     if let Some(context) = match_context.as_deref_mut() {
                         context.remap_rule_identity(finding, old_rule);
                     }
@@ -995,6 +1021,7 @@ impl Scanner {
             let seen_matches =
                 if cli_match_semantics { &mut decoded_seen_matches } else { &mut *seen_matches };
             let fragment_raw = std::cell::OnceCell::new();
+            let filter_fragment = std::cell::OnceCell::new();
             let line_index = std::cell::OnceCell::new();
             let mut filter_lines = FxHashMap::default();
             let mut filter_line_cache = BetterleaksFilterLineCache::default();
@@ -1022,7 +1049,10 @@ impl Scanner {
                 let Some(rule) = self.rules_db.get_rule(rule_id) else {
                     continue;
                 };
-                if rule.syntax().betterleaks_path_only {
+                if rule.syntax().betterleaks_path_only
+                    || (!rule.is_runtime_dependency_helper()
+                        && !rule.confidence().is_at_least(&rule.runtime_minimum_confidence()))
+                {
                     continue;
                 }
                 if !rule.matches_path(path) {
@@ -1068,56 +1098,66 @@ impl Scanner {
                         continue;
                     }
 
-                    let capture_map = named_captures(regex, &captures);
+                    let mut capture_map = None;
                     let filter_outcome = if let Some(expression) = rule.betterleaks_filter() {
-                        let full_match = String::from_utf8_lossy(full_capture.as_bytes());
-                        let secret = String::from_utf8_lossy(secret_bytes);
-                        let fragment_raw =
-                            fragment_raw.get_or_init(|| String::from_utf8_lossy(&item.decoded));
-                        let (match_line_start_idx, match_line_end_idx) = line_index
-                            .get_or_init(|| crate::line_index::LineIndex::new(&item.decoded))
-                            .bounds(full_capture.start(), full_capture.end());
-                        let line = filter_line(
-                            &item.decoded,
-                            match fragment_raw {
-                                std::borrow::Cow::Borrowed(text) => Some(*text),
-                                _ => None,
-                            },
-                            (match_line_start_idx, match_line_end_idx),
-                            line_index.get().unwrap(),
-                            &mut filter_lines,
-                        );
-                        let context = BetterleaksFilterContext {
-                            attributes: source_attributes,
-                            path,
-                            secret: &secret,
-                            full_match: &full_match,
-                            line: &line,
-                            fragment_raw,
-                            match_start_idx: full_capture.start(),
-                            match_end_idx: full_capture.end(),
-                            match_line_start_idx,
-                            match_line_end_idx,
-                            rule_id: rule.id(),
-                            description: rule.name(),
-                            captures: capture_map.clone(),
-                        };
-                        Some(self.rules_db.evaluate_betterleaks_filter_with_line_cache(
-                            expression,
-                            &context,
-                            match_line_start_idx..match_line_end_idx,
-                            &mut filter_line_cache,
-                        )?)
+                        Some('filter: {
+                            let secret = String::from_utf8_lossy(secret_bytes);
+                            let expression = match self
+                                .rules_db
+                                .evaluate_betterleaks_filter_prefix(expression, &secret)?
+                            {
+                                Some(BetterleaksFilterPrefix::Complete(outcome)) => {
+                                    break 'filter outcome;
+                                }
+                                Some(BetterleaksFilterPrefix::Remainder(expression)) => expression,
+                                None => expression,
+                            };
+                            let full_match = String::from_utf8_lossy(full_capture.as_bytes());
+                            let fragment_raw =
+                                fragment_raw.get_or_init(|| String::from_utf8_lossy(&item.decoded));
+                            let (match_line_start_idx, match_line_end_idx) = line_index
+                                .get_or_init(|| crate::line_index::LineIndex::new(&item.decoded))
+                                .bounds(full_capture.start(), full_capture.end());
+                            let line = filter_line(
+                                &item.decoded,
+                                match fragment_raw {
+                                    std::borrow::Cow::Borrowed(text) => Some(*text),
+                                    _ => None,
+                                },
+                                (match_line_start_idx, match_line_end_idx),
+                                line_index.get().unwrap(),
+                                &mut filter_lines,
+                            );
+                            let context = BetterleaksFilterContext {
+                                attributes: source_attributes,
+                                path,
+                                secret: &secret,
+                                full_match: &full_match,
+                                line: &line,
+                                fragment_raw,
+                                match_start_idx: full_capture.start(),
+                                match_end_idx: full_capture.end(),
+                                match_line_start_idx,
+                                match_line_end_idx,
+                                rule_id: rule.id(),
+                                description: rule.name(),
+                                captures: named_captures(regex, &captures),
+                            };
+                            let outcome = self.rules_db.evaluate_betterleaks_filter_with_caches(
+                                expression,
+                                &context,
+                                match_line_start_idx..match_line_end_idx,
+                                &mut filter_line_cache,
+                                filter_fragment
+                                    .get_or_init(|| BetterleaksFilterFragment::new(fragment_raw)),
+                            )?;
+                            capture_map = Some(context.captures);
+                            outcome
+                        })
                     } else {
                         None
                     };
                     if filter_outcome.is_some_and(|outcome| outcome.discard) {
-                        continue;
-                    }
-                    let confidence = filter_outcome
-                        .and_then(|outcome| outcome.confidence)
-                        .unwrap_or_else(|| rule.confidence());
-                    if !rule.accepts_effective_confidence(confidence) {
                         continue;
                     }
 
@@ -1157,7 +1197,7 @@ impl Scanner {
 
                     findings.push(ScanFinding {
                         finding: Finding {
-                            rule: finding_rule(&rule, confidence),
+                            rule: Arc::clone(&rule),
                             rule_id: rule.id().to_string(),
                             rule_name: rule.name().to_string(),
                             secret,
@@ -1169,10 +1209,13 @@ impl Scanner {
                                 source_span.end.line,
                                 source_span.end.column,
                             ),
-                            confidence,
+                            confidence: rule.confidence(),
                             entropy,
                             fingerprint,
-                            captures: capture_map.into_iter().collect::<HashMap<_, _>>(),
+                            captures: capture_map
+                                .unwrap_or_else(|| named_captures(regex, &captures))
+                                .into_iter()
+                                .collect::<HashMap<_, _>>(),
                             is_base64_encoded: true,
                             blob_id: blob.id(),
                         },
@@ -1243,21 +1286,6 @@ fn deduplicate_imported_catalog_findings(
         retain
     });
     Ok(())
-}
-
-fn finding_rule(rule: &Arc<Rule>, confidence: Confidence) -> Arc<Rule> {
-    let suppress_helper_reporting =
-        rule.is_runtime_dependency_helper() && !rule.reports_effective_confidence(confidence);
-    if confidence == rule.confidence() && !suppress_helper_reporting {
-        return Arc::clone(rule);
-    }
-
-    let mut effective_rule = rule.as_ref().clone();
-    effective_rule.syntax.confidence = confidence;
-    if suppress_helper_reporting {
-        effective_rule.suppress_runtime_reporting();
-    }
-    Arc::new(effective_rule)
 }
 
 fn enforce_context_components(
@@ -1601,7 +1629,7 @@ fn filter_line<'a>(
     bytes: &[u8],
     fragment: Option<&'a str>,
     (start, end): (usize, usize),
-    line_index: &crate::line_index::LineIndex,
+    line_index: &crate::line_index::LineIndex<'_>,
     cache: &'a mut FxHashMap<(usize, usize), String>,
 ) -> std::borrow::Cow<'a, str> {
     if let Some(text) = fragment {
@@ -1749,6 +1777,192 @@ mod tests {
         let findings =
             scanner.scan_bytes(b"first secret_aaaa1111 and second secret_bbbb2222").unwrap();
         assert_eq!(findings.len(), 2);
+    }
+
+    #[test]
+    fn static_confidence_preserves_original_rules_and_raw_decoded_offsets() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        use kingfisher_rules::BetterleaksExpr as Expr;
+
+        let set_confidence = |confidence: &str| Expr::Call {
+            callee: Box::new(Expr::Identifier { value: "setConfidence".into() }),
+            arguments: vec![Expr::String { value: confidence.into() }],
+        };
+        let input =
+            b"UPHIGH_123456ABCDEF UPMED_123456ABCDEF UPHIGH_ABCDEF123456 UPMED_ABCDEF123456";
+        let encoded = STANDARD.encode(input);
+        for configured in [Confidence::Low, Confidence::High] {
+            let mut syntax = RuleSyntax::new(
+                "custom.static-confidence",
+                "Static confidence fixture",
+                r"(UP(?:HIGH|MED)_[A-Z0-9]{12})",
+            );
+            syntax.confidence = configured;
+            syntax.betterleaks_filter = Some(Expr::Sequence {
+                nodes: vec![
+                    Expr::Conditional {
+                        cond: Box::new(Expr::Call {
+                            callee: Box::new(Expr::Identifier { value: "matchesAny".into() }),
+                            arguments: vec![
+                                Expr::Member {
+                                    node: Box::new(Expr::Identifier { value: "finding".into() }),
+                                    property: Box::new(Expr::String { value: "secret".into() }),
+                                    optional: false,
+                                    method: false,
+                                },
+                                Expr::Array {
+                                    nodes: vec![Expr::String { value: "^UPHIGH_".into() }],
+                                },
+                            ],
+                        }),
+                        exp1: Box::new(set_confidence("high")),
+                        exp2: Box::new(set_confidence("low")),
+                    },
+                    Expr::Bool { value: false },
+                ],
+            });
+            let mut rule = Rule::new(syntax);
+            rule.set_runtime_confidence_filter(Confidence::Medium, false);
+            let database = Arc::new(RulesDatabase::from_rules(vec![rule]).unwrap());
+            let original = database.get_rule(0).unwrap();
+            let scanner = Scanner::with_config(
+                database,
+                ScannerConfig { enable_dedup: false, ..Default::default() },
+            );
+            for bytes in [input.as_slice(), encoded.as_bytes(), input.as_slice()] {
+                let findings = scanner.scan_bytes(bytes).unwrap();
+                if configured == Confidence::Low {
+                    assert!(findings.is_empty(), "legacy setters cannot bypass static selection");
+                    continue;
+                }
+                assert_eq!(findings.len(), 4);
+                let decoded = bytes == encoded.as_bytes();
+                for finding in findings {
+                    assert_eq!(finding.confidence, configured);
+                    assert_eq!(finding.rule.confidence(), configured);
+                    assert!(Arc::ptr_eq(&original, &finding.rule));
+                    assert_eq!(finding.is_base64_encoded, decoded);
+                    if decoded {
+                        assert_eq!(finding.location.start_offset, 0);
+                        assert_eq!(finding.location.end_offset, encoded.len());
+                    } else {
+                        assert_eq!(
+                            &bytes[finding.location.start_offset..finding.location.end_offset],
+                            finding.secret.as_bytes()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn specificity_suppression_preserves_shared_hidden_rules_and_scan_context() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        use kingfisher_rules::DependsOnRule;
+
+        let mut helper = RuleSyntax::new("custom.component", "Component", r"(TOKEN_[A-Z0-9]{12})");
+        helper.confidence = Confidence::Medium;
+        let mut primary = RuleSyntax::new("custom.primary", "Primary", r"(PRIMARY_[A-Z0-9]{12})");
+        primary.confidence = Confidence::High;
+        primary.depends_on_rule = vec![Some(DependsOnRule {
+            rule_id: "custom.component".into(),
+            verify_candidates: false,
+            variable: "COMPONENT".into(),
+            optional: false,
+            within: Some("1L".into()),
+        })];
+        let mut specific =
+            RuleSyntax::new("custom.specific", "Specific", r"(WRAP_TOKEN_[A-Z0-9]{12})");
+        specific.specificity = 10;
+        let database = Arc::new(
+            RulesDatabase::from_rules(vec![
+                Rule::new(helper),
+                Rule::new(primary),
+                Rule::new(specific),
+            ])
+            .unwrap(),
+        );
+        let original_helper = database.get_rule(0).unwrap();
+        let scanner = Scanner::with_config(
+            database,
+            ScannerConfig { enable_dedup: false, ..Default::default() },
+        );
+        let input = b"PRIMARY_123456ABCDEF WRAP_TOKEN_123456ABCDEF WRAP_TOKEN_ABCDEF123456";
+        let encoded = STANDARD.encode(input);
+        for bytes in [input.as_slice(), encoded.as_bytes()] {
+            let output = scanner
+                .scan_blob_with_context(&Blob::from_bytes(bytes.to_vec()), "components.txt")
+                .unwrap();
+            let helpers: Vec<_> = output
+                .findings
+                .iter()
+                .filter(|finding| finding.rule_id == "custom.component")
+                .collect();
+            assert_eq!(helpers.len(), 2);
+            for finding in &helpers {
+                assert!(!finding.rule.visible());
+                assert!(!finding.rule.syntax().visible);
+                assert_eq!(finding.confidence, Confidence::Medium);
+                assert_eq!(finding.rule.confidence(), Confidence::Medium);
+                assert!(
+                    output.context.get(finding).is_some(),
+                    "suppression must remap context identity"
+                );
+                assert!(!Arc::ptr_eq(&original_helper, &finding.rule));
+            }
+            if bytes == input.as_slice() {
+                assert!(Arc::ptr_eq(&helpers[0].rule, &helpers[1].rule));
+            }
+            assert!(output.findings.iter().any(|finding| {
+                finding.rule_id == "custom.primary"
+                    && finding.rule.visible()
+                    && output.context.get(finding).is_some()
+            }));
+            assert!(original_helper.visible(), "suppression must not mutate the configured rule");
+        }
+    }
+
+    #[test]
+    fn fallback_prefilter_replay_keeps_all_exact_confirmations_and_scanner_reuse() {
+        let mut builtins = get_builtin_rules(Some(Confidence::Low)).unwrap();
+        let generic = Rule::new(
+            builtins.rules.remove("betterleaks.generic-api-key").expect("bundled generic"),
+        );
+        let exact =
+            Rule::new(RuleSyntax::new("acme.exact", "Exact fixture", r"(EXACT_[A-Za-z0-9]{12})"));
+        let database = Arc::new(RulesDatabase::from_rules(vec![generic, exact]).unwrap());
+        assert!(database.uses_vectorscan_prefilter(0));
+        assert!(!database.uses_vectorscan_prefilter(1));
+        let scanner = Scanner::with_config(
+            database,
+            ScannerConfig {
+                enable_dedup: false,
+                enable_base64_decoding: false,
+                ..Default::default()
+            },
+        );
+        let line = b"api_key = \"v7Qm2Rk9Px4Tz8Nc6Bw3Dj5H\"\nEXACT_A1b2C3d4E5f6\n";
+        let mut input = line.repeat(128);
+        input.extend_from_slice(b"api_key = \"short\"\n");
+        input.extend_from_slice(&b"api_key = \"aaaaaaaaaaaaaaaaaaaaaaaa\"\n".repeat(128));
+        for _ in 0..2 {
+            let found = scanner.scan_bytes(&input).unwrap();
+            assert_eq!(found.len(), 256);
+            let mut generic_starts: Vec<_> = found
+                .iter()
+                .filter(|finding| finding.rule_id == "betterleaks.generic-api-key")
+                .map(|finding| finding.location.start_offset)
+                .collect();
+            generic_starts.sort_unstable();
+            assert_eq!(
+                generic_starts,
+                (0..128)
+                    .map(|index| index * line.len() + b"api_key = \"".len())
+                    .collect::<Vec<_>>(),
+            );
+            assert_eq!(found.iter().filter(|finding| finding.rule_id == "acme.exact").count(), 128);
+        }
     }
 
     #[test]
@@ -2094,6 +2308,76 @@ toml_AbCdEfGhIjKlMnOp\nyaml_AbCdEfGhIjKlMnOp\nveles_AbCdEfGhIjKlMnOp"
 
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].secret, "token_keepme");
+    }
+
+    #[test]
+    fn secret_prefix_keeps_source_context_and_named_captures_for_raw_and_decoded_findings() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+
+        let contains = |field: &str, term: &str| BetterleaksExpr::Call {
+            callee: Box::new(BetterleaksExpr::Identifier { value: "containsAny".into() }),
+            arguments: vec![
+                BetterleaksExpr::Member {
+                    node: Box::new(BetterleaksExpr::Identifier { value: "finding".into() }),
+                    property: Box::new(BetterleaksExpr::String { value: field.into() }),
+                    optional: false,
+                    method: false,
+                },
+                BetterleaksExpr::Array {
+                    nodes: vec![BetterleaksExpr::String { value: term.into() }],
+                },
+            ],
+        };
+        let mut syntax = RuleSyntax::new(
+            "acme.prefix-context",
+            "Prefix context test",
+            r"(?P<token>token_[a-z]+)",
+        );
+        syntax.min_entropy = 0.0;
+        syntax.confidence = Confidence::Medium;
+        syntax.betterleaks_secret_group = Some(1);
+        syntax.betterleaks_filter = Some(BetterleaksExpr::Binary {
+            operator: "||".into(),
+            left: Box::new(contains("secret", "discard")),
+            right: Box::new(contains("line", "BLOCK")),
+        });
+        let database = Arc::new(RulesDatabase::from_rules(vec![Rule::new(syntax)]).unwrap());
+        let expression = database.rules()[0].betterleaks_filter().unwrap();
+        assert!(matches!(
+            database.evaluate_betterleaks_filter_prefix(expression, "token_discard").unwrap(),
+            Some(BetterleaksFilterPrefix::Complete(outcome)) if outcome.discard
+        ));
+        assert!(matches!(
+            database.evaluate_betterleaks_filter_prefix(expression, "token_keepme").unwrap(),
+            Some(BetterleaksFilterPrefix::Remainder(_))
+        ));
+        let scanner = Scanner::with_config(
+            database,
+            ScannerConfig { enable_dedup: false, ..Default::default() },
+        );
+        let raw = b"\xff token_discard\nBLOCK token_ignoreme\nSAFE token_keepme\n";
+        // Base64 discovery intentionally accepts ASCII decoded buffers only.
+        let encoded = STANDARD.encode(&raw[1..]);
+        for (bytes, decoded) in [(raw.as_slice(), false), (encoded.as_bytes(), true)] {
+            let findings = scanner.scan_bytes(bytes).unwrap();
+            assert_eq!(findings.len(), 1, "decoded={decoded}");
+            let finding = &findings[0];
+            assert_eq!(finding.secret, "token_keepme");
+            assert_eq!(finding.captures["token"], "token_keepme");
+            assert_eq!(finding.confidence, Confidence::Medium);
+            assert_eq!(finding.is_base64_encoded, decoded);
+            if !decoded {
+                let start = raw
+                    .windows(b"token_keepme".len())
+                    .position(|window| window == b"token_keepme")
+                    .unwrap();
+                assert_eq!(finding.location.start_offset, start);
+                assert_eq!(finding.location.end_offset, start + b"token_keepme".len());
+            } else {
+                assert_eq!(finding.location.start_offset, 0);
+                assert_eq!(finding.location.end_offset, encoded.len());
+            }
+        }
     }
 
     #[test]

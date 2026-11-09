@@ -20,6 +20,8 @@ async function main() {
   const env = { ...process.env };
   delete env.NAPI_RS_NATIVE_LIBRARY_PATH;
   delete env.NAPI_RS_FORCE_WASI;
+  // A clean consumer is not a worker of the outer Node test runner.
+  delete env.NODE_TEST_CONTEXT;
   try {
     const { readArchives } = require('./pack-release.cjs');
     const archives = readArchives(root);
@@ -37,6 +39,62 @@ async function main() {
         fs.readFileSync(path.join(root, notice)), `Packed notice differs: ${name}/${notice}`);
       assert.ok(fs.statSync(path.join(installed, 'README.md')).size > 0);
       assert.ok(!fs.existsSync(path.join(installed, 'PUBLISHING.md')), 'Maintainer runbook leaked into consumer package');
+    }
+    // The showcase is part of the public package, not a checkout-only screenshot.
+    // Check the installed tarball so npm ignore rules cannot silently drop assets.
+    const showcase = path.join(project, 'node_modules', pkg.name, 'examples', 'kingfisher-workbench');
+    for (const file of ['README.md', 'package.json', 'src/main.mjs', 'src/agent.mjs',
+      'src/args.mjs', 'src/progress.mjs', 'src/safety.mjs', 'src/server.mjs',
+      'src/report.mjs', 'src/sdk.mjs', 'demo/run.mjs', 'demo/mock-provider.mjs',
+      'demo/fixture.mjs', 'demo/fixture/config.env', 'demo/acme-rule.yml',
+      'scripts/checkout.mjs', 'scripts/check.mjs', 'test/report.test.mjs',
+      'screenshots/report-overview.png', 'screenshots/report-revocation.png']) {
+      assert.ok(fs.statSync(path.join(showcase, file)).size > 0, `Missing packed showcase file: ${file}`);
+    }
+    // Relative documentation links must work from the installed package, not
+    // merely from a repository checkout containing the root docs/ directory.
+    const installedSdk = path.join(project, 'node_modules', pkg.name);
+    for (const relative of ['README.md', 'examples/README.md', 'examples/kingfisher-workbench/README.md']) {
+      const readme = path.join(installedSdk, relative);
+      const links = fs.readFileSync(readme, 'utf8').matchAll(/!?\[[^\]]*\]\((?:<([^>]+)>|([^\s)]+))\)/g);
+      for (const [, angled, plain] of links) {
+        const target = angled ?? plain;
+        if (/^(?:[a-z][a-z\d+.-]*:|#)/i.test(target)) continue;
+        const resolved = path.resolve(path.dirname(readme), decodeURIComponent(target.split('#')[0]));
+        const local = path.relative(installedSdk, resolved);
+        assert.ok(!path.isAbsolute(local) && local !== '..' && !local.startsWith(`..${path.sep}`),
+          `Packed README link escapes the package: ${relative} -> ${target}`);
+        assert.ok(fs.existsSync(resolved), `Broken packed README link: ${relative} -> ${target}`);
+      }
+    }
+    const showcasePkg = JSON.parse(fs.readFileSync(path.join(showcase, 'package.json'), 'utf8'));
+    assert.equal(showcasePkg.name, 'kingfisher-workbench-example');
+    assert.equal(showcasePkg.private, true);
+    const input = path.join(directory, 'synthetic scan with spaces');
+    fs.mkdirSync(input);
+    const token = 'ghp_aB3dE6gH9jK2mN5pQ8sT1vW4yZ7cF0iL3oR6';
+    fs.writeFileSync(path.join(input, 'config.env'), `GITHUB_TOKEN=${token}\n`);
+    const html = path.join(directory, 'report.html');
+    const json = path.join(directory, 'report.json');
+    const showcaseEnv = { ...env };
+    delete showcaseEnv.KINGFISHER_WORKBENCH_SDK;
+    execFileSync(process.execPath, [path.join(showcase, 'src', 'main.mjs'), input,
+      '--out', html, '--json', json, '--no-serve', '--no-git-history', '--quiet'], {
+      cwd: project, env: showcaseEnv, stdio: 'pipe', timeout: 120_000,
+    });
+    const report = JSON.parse(fs.readFileSync(json, 'utf8'));
+    const snapshot = fs.readFileSync(html, 'utf8');
+    assert.match(snapshot, /<title>Kingfisher Workbench — /);
+    assert.match(snapshot, /<h1>Kingfisher Workbench<\/h1>/);
+    assert.equal(report.meta.version, pkg.version);
+    assert.equal(report.meta.validate, false, 'Installed showcase detection must stay offline');
+    assert.equal(report.meta.revokeEnabled, false);
+    assert.ok(report.entries.some(entry => entry.finding.ruleId === 'betterleaks.github-pat'));
+    assert.ok(report.entries.every(entry => entry.finding.secret === '[REDACTED]'));
+    for (const output of [html, json]) {
+      const text = fs.readFileSync(output, 'utf8');
+      assert.ok(!text.includes(token), 'Packed showcase exported a raw credential');
+      assert.ok(!text.includes('dedupeKey'), 'Private credential digests must not be exported');
     }
     // The host package is installed explicitly because names for other optional
     // platforms may not exist yet. Root dependencies still use exact registry versions.

@@ -296,7 +296,7 @@ where
     // Discovery may produce no remote URLs (for example, a local-only scan).
     // Create the shared indicator only when a worker actually starts fetching.
     let progress = Arc::new(std::sync::OnceLock::<ProgressBar>::new());
-    let progress_enabled = global_args.use_progress();
+    let progress_enabled = global_args.use_progress() && !crate::scan_progress::enabled();
 
     let network_limits = kingfisher_scanner::validation::limits::NetworkLimits::current();
     let clone_concurrency = std::cmp::max(1, args.num_jobs);
@@ -686,7 +686,7 @@ pub async fn enumerate_github_repos(
                 global_args.ignore_certs,
                 &args.input_specifier_args.github_exclude,
                 args.input_specifier_args.repo_clone_limit,
-                global_args.use_progress(),
+                global_args.use_progress() && !crate::scan_progress::enabled(),
                 args.input_specifier_args.github_repo_type.into(),
                 &mut emit,
             )
@@ -702,7 +702,7 @@ pub async fn enumerate_github_repos(
         }
     }
     if !repo_specifiers.is_empty() {
-        let mut progress = if global_args.use_progress() {
+        let mut progress = if global_args.use_progress() && !crate::scan_progress::enabled() {
             let pb = ProgressBar::new_spinner().with_message("Enumerating GitHub repositories...");
             pb.enable_steady_tick(Duration::from_millis(500));
             pb
@@ -733,7 +733,7 @@ pub async fn enumerate_github_event_targets(
         return Ok(Vec::new());
     }
 
-    let mut progress = if global_args.use_progress() {
+    let mut progress = if global_args.use_progress() && !crate::scan_progress::enabled() {
         let style = ProgressStyle::with_template("{spinner} {msg} {pos}/{len} [{elapsed_precise}]")
             .expect("progress bar style template should compile");
         let pb = ProgressBar::new(users.len() as u64)
@@ -821,7 +821,7 @@ pub async fn enumerate_gitlab_repos(
                 global_args.ignore_certs,
                 &args.input_specifier_args.gitlab_exclude,
                 args.input_specifier_args.repo_clone_limit,
-                global_args.use_progress(),
+                global_args.use_progress() && !crate::scan_progress::enabled(),
                 &mut emit,
             )
             .await
@@ -836,7 +836,7 @@ pub async fn enumerate_gitlab_repos(
         }
     }
     if !repo_specifiers.is_empty() {
-        let progress = if global_args.use_progress() {
+        let progress = if global_args.use_progress() && !crate::scan_progress::enabled() {
             let pb = ProgressBar::new_spinner().with_message("Enumerating GitLab repositories...");
             pb.enable_steady_tick(Duration::from_millis(500));
             pb
@@ -872,7 +872,7 @@ pub async fn enumerate_gitea_repos(
 
     let mut repo_urls = args.input_specifier_args.git_url.clone();
     if !repo_specifiers.is_empty() {
-        let mut progress = if global_args.use_progress() {
+        let mut progress = if global_args.use_progress() && !crate::scan_progress::enabled() {
             let style =
                 ProgressStyle::with_template("{spinner} {msg} {human_len} [{elapsed_precise}]")
                     .expect("progress bar style template should compile");
@@ -935,7 +935,7 @@ pub async fn enumerate_huggingface_repos(
 
     let mut repo_urls = args.input_specifier_args.git_url.clone();
     if !repo_specifiers.is_empty() {
-        let mut progress = if global_args.use_progress() {
+        let mut progress = if global_args.use_progress() && !crate::scan_progress::enabled() {
             let style =
                 ProgressStyle::with_template("{spinner} {msg} {human_len} [{elapsed_precise}]")
                     .expect("progress bar style template should compile");
@@ -1037,7 +1037,7 @@ pub async fn enumerate_huggingface_buckets(
         return Ok(Vec::new());
     }
 
-    let mut progress = if global_args.use_progress() {
+    let mut progress = if global_args.use_progress() && !crate::scan_progress::enabled() {
         let style = ProgressStyle::with_template("{spinner} {msg} [{elapsed_precise}]")
             .expect("progress bar style template should compile");
         let pb = ProgressBar::new_spinner()
@@ -1082,7 +1082,7 @@ pub async fn enumerate_bitbucket_repos(
     };
     let mut repo_urls = args.input_specifier_args.git_url.clone();
     if !repo_specifiers.is_empty() {
-        let mut progress = if global_args.use_progress() {
+        let mut progress = if global_args.use_progress() && !crate::scan_progress::enabled() {
             let style =
                 ProgressStyle::with_template("{spinner} {msg} {human_len} [{elapsed_precise}]")
                     .expect("progress bar style template should compile");
@@ -1150,7 +1150,7 @@ pub async fn enumerate_azure_repos(
 
     let mut repo_urls = args.input_specifier_args.git_url.clone();
     if !repo_specifiers.is_empty() {
-        let mut progress = if global_args.use_progress() {
+        let mut progress = if global_args.use_progress() && !crate::scan_progress::enabled() {
             let style =
                 ProgressStyle::with_template("{spinner} {msg} {human_len} [{elapsed_precise}]")
                     .expect("progress bar style template should compile");
@@ -1482,7 +1482,6 @@ pub async fn fetch_s3_objects(
     matcher_stats: &Mutex<MatcherStats>,
     enable_profiling: bool,
     shared_profiler: Arc<crate::rule_profiling::ConcurrentRuleProfiler>,
-    progress_enabled: bool,
 ) -> Result<()> {
     let Some(bucket) = args.input_specifier_args.s3_bucket.as_deref() else {
         return Ok(());
@@ -1512,19 +1511,7 @@ pub async fn fetch_s3_objects(
     )?
     .with_resource_limits(args.content_filtering_args.resource_limits());
     let mut processor = BlobProcessor { matcher };
-
-    let progress = if progress_enabled {
-        let style =
-            ProgressStyle::with_template("{spinner} {msg} ({pos} objects) [{elapsed_precise}]")
-                .expect("progress bar style template should compile");
-        let pb = ProgressBar::new_spinner().with_style(style).with_message("Fetching S3 objects");
-        pb.enable_steady_tick(Duration::from_millis(500));
-        pb
-    } else {
-        ProgressBar::hidden()
-    };
-
-    let pb = progress.clone();
+    let _scanning_progress = crate::scan_progress::scanning();
 
     let bucket_name = bucket.to_string();
 
@@ -1544,7 +1531,7 @@ pub async fn fetch_s3_objects(
             );
             let blob = crate::blob::Blob::from_bytes(bytes);
 
-            if let Some((origin, blob_md, scored_matches)) = processor.run(
+            if let Some(processed) = processor.run(
                 origin,
                 blob,
                 args.no_dedup,
@@ -1552,6 +1539,8 @@ pub async fn fetch_s3_objects(
                 args.no_base64,
                 args.turbo,
             )? {
+                processed.count_observations();
+                let (origin, blob_md, scored_matches) = processed.into_message();
                 let origin_arc = Arc::new(origin);
                 let blob_arc = Arc::new(blob_md);
 
@@ -1563,14 +1552,10 @@ pub async fn fetch_s3_objects(
                 let added = datastore.lock().unwrap().record(batch, !args.no_dedup);
                 debug!("Added {} new S3 blobs", added);
             }
-            pb.inc(1);
             Ok(())
         },
     )
     .await?;
-
-    let total = progress.position();
-    progress.finish_with_message(format!("Fetched {} S3 objects", total));
 
     Ok(())
 }
@@ -1585,7 +1570,6 @@ pub async fn fetch_huggingface_objects(
     matcher_stats: &Mutex<MatcherStats>,
     enable_profiling: bool,
     shared_profiler: Arc<crate::rule_profiling::ConcurrentRuleProfiler>,
-    progress_enabled: bool,
 ) -> Result<()> {
     if buckets.is_empty() {
         return Ok(());
@@ -1606,20 +1590,8 @@ pub async fn fetch_huggingface_objects(
     )?
     .with_resource_limits(args.content_filtering_args.resource_limits());
     let mut processor = BlobProcessor { matcher };
+    let _scanning_progress = crate::scan_progress::scanning();
 
-    let progress = if progress_enabled {
-        let style =
-            ProgressStyle::with_template("{spinner} {msg} ({pos} objects) [{elapsed_precise}]")
-                .expect("progress bar style template should compile");
-        let pb = ProgressBar::new_spinner()
-            .with_style(style)
-            .with_message("Fetching Hugging Face bucket objects");
-        pb.enable_steady_tick(Duration::from_millis(500));
-        pb
-    } else {
-        ProgressBar::hidden()
-    };
-    let pb = progress.clone();
     let auth = huggingface::AuthConfig::from_env();
 
     huggingface::visit_bucket_objects_selected(
@@ -1631,7 +1603,6 @@ pub async fn fetch_huggingface_objects(
         &args.content_filtering_args.path_selection,
         args.input_specifier_args.object_cache_dir.as_deref(),
         move |bucket, key, bytes| {
-            pb.inc(1);
             if args.content_filtering_args.no_binary && is_binary(&bytes) {
                 debug!("Skipping binary Hugging Face bucket object {}/{}", bucket.bucket_id(), key);
                 return Ok(());
@@ -1645,7 +1616,7 @@ pub async fn fetch_huggingface_objects(
             );
             let blob = crate::blob::Blob::from_bytes(bytes);
 
-            if let Some((origin, blob_md, scored_matches)) = processor.run(
+            if let Some(processed) = processor.run(
                 origin,
                 blob,
                 args.no_dedup,
@@ -1653,6 +1624,8 @@ pub async fn fetch_huggingface_objects(
                 args.no_base64,
                 args.turbo,
             )? {
+                processed.count_observations();
+                let (origin, blob_md, scored_matches) = processed.into_message();
                 let origin_arc = Arc::new(origin);
                 let blob_arc = Arc::new(blob_md);
                 let mut batch = Vec::with_capacity(scored_matches.len());
@@ -1668,8 +1641,6 @@ pub async fn fetch_huggingface_objects(
     )
     .await?;
 
-    let total = progress.position();
-    progress.finish_with_message(format!("Fetched {} Hugging Face bucket objects", total));
     Ok(())
 }
 
@@ -1680,7 +1651,6 @@ pub async fn fetch_gcs_objects(
     matcher_stats: &Mutex<MatcherStats>,
     enable_profiling: bool,
     shared_profiler: Arc<crate::rule_profiling::ConcurrentRuleProfiler>,
-    progress_enabled: bool,
 ) -> Result<()> {
     let Some(bucket) = args.input_specifier_args.gcs_bucket.as_deref() else {
         return Ok(());
@@ -1703,19 +1673,7 @@ pub async fn fetch_gcs_objects(
     )?
     .with_resource_limits(args.content_filtering_args.resource_limits());
     let mut processor = BlobProcessor { matcher };
-
-    let progress = if progress_enabled {
-        let style =
-            ProgressStyle::with_template("{spinner} {msg} ({pos} objects) [{elapsed_precise}]")
-                .expect("progress bar style template should compile");
-        let pb = ProgressBar::new_spinner().with_style(style).with_message("Fetching GCS objects");
-        pb.enable_steady_tick(Duration::from_millis(500));
-        pb
-    } else {
-        ProgressBar::hidden()
-    };
-
-    let pb = progress.clone();
+    let _scanning_progress = crate::scan_progress::scanning();
 
     let bucket_name = bucket.to_string();
 
@@ -1735,7 +1693,7 @@ pub async fn fetch_gcs_objects(
             );
             let blob = crate::blob::Blob::from_bytes(bytes);
 
-            if let Some((origin, blob_md, scored_matches)) = processor.run(
+            if let Some(processed) = processor.run(
                 origin,
                 blob,
                 args.no_dedup,
@@ -1743,6 +1701,8 @@ pub async fn fetch_gcs_objects(
                 args.no_base64,
                 args.turbo,
             )? {
+                processed.count_observations();
+                let (origin, blob_md, scored_matches) = processed.into_message();
                 let origin_arc = Arc::new(origin);
                 let blob_arc = Arc::new(blob_md);
 
@@ -1754,14 +1714,10 @@ pub async fn fetch_gcs_objects(
                 let added = datastore.lock().unwrap().record(batch, !args.no_dedup);
                 debug!("Added {} new GCS blobs", added);
             }
-            pb.inc(1);
             Ok(())
         },
     )
     .await?;
-
-    let total = progress.position();
-    progress.finish_with_message(format!("Fetched {} GCS objects", total));
 
     Ok(())
 }
@@ -1775,7 +1731,6 @@ pub async fn fetch_azure_blobs(
     matcher_stats: &Mutex<MatcherStats>,
     enable_profiling: bool,
     shared_profiler: Arc<crate::rule_profiling::ConcurrentRuleProfiler>,
-    progress_enabled: bool,
 ) -> Result<()> {
     let Some(container) = args.input_specifier_args.azure_blob.as_ref() else {
         return Ok(());
@@ -1796,21 +1751,7 @@ pub async fn fetch_azure_blobs(
     )?
     .with_resource_limits(args.content_filtering_args.resource_limits());
     let mut processor = BlobProcessor { matcher };
-
-    let progress = if progress_enabled {
-        let style =
-            ProgressStyle::with_template("{spinner} {msg} ({pos} objects) [{elapsed_precise}]")
-                .expect("progress bar style template should compile");
-        let pb = ProgressBar::new_spinner()
-            .with_style(style)
-            .with_message("Fetching Azure Blob objects");
-        pb.enable_steady_tick(Duration::from_millis(500));
-        pb
-    } else {
-        ProgressBar::hidden()
-    };
-
-    let pb = progress.clone();
+    let _scanning_progress = crate::scan_progress::scanning();
 
     let container_url = container.clone();
 
@@ -1832,7 +1773,7 @@ pub async fn fetch_azure_blobs(
             );
             let blob = crate::blob::Blob::from_bytes(bytes);
 
-            if let Some((origin, blob_md, scored_matches)) = processor.run(
+            if let Some(processed) = processor.run(
                 origin,
                 blob,
                 args.no_dedup,
@@ -1840,6 +1781,8 @@ pub async fn fetch_azure_blobs(
                 args.no_base64,
                 args.turbo,
             )? {
+                processed.count_observations();
+                let (origin, blob_md, scored_matches) = processed.into_message();
                 let origin_arc = Arc::new(origin);
                 let blob_arc = Arc::new(blob_md);
 
@@ -1851,14 +1794,10 @@ pub async fn fetch_azure_blobs(
                 let added = datastore.lock().unwrap().record(batch, !args.no_dedup);
                 debug!("Added {} new Azure Blob findings", added);
             }
-            pb.inc(1);
             Ok(())
         },
     )
     .await?;
-
-    let total = progress.position();
-    progress.finish_with_message(format!("Fetched {} Azure Blob objects", total));
 
     Ok(())
 }

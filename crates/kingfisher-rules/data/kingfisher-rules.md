@@ -10,8 +10,9 @@ The source [kingfisher-rules.yml](kingfisher-rules.yml) contains five medium-con
 connection-string password detectors. They restore supported pre-2.x connection-string and JDBC
 password coverage lost in the 2.x catalog migration, including
 [issue #558](https://github.com/mongodb/kingfisher/issues/558). The pinned upstream catalog
-lacks equivalent focused password-property detection; broad generic detectors remain deliberately
-omitted for noise and cost. This is a temporary regression-repair exception: replace the definitions
+lacks equivalent focused password-property detection; broad generic password and username detectors
+remain deliberately omitted. The static-low generic API-key rule does not replace these focused
+password-property detectors. This is a temporary regression-repair exception: replace the definitions
 when focused equivalent detectors are available in a reviewed immutable Betterleaks revision.
 The rules can be expressed in Betterleaks TOML; their syntax is not a reason to keep them local.
 
@@ -22,8 +23,9 @@ and these notes are hashed as generator inputs.
 
 The CLI loads these rules by default. Rust callers receive them through
 `kingfisher_rules::get_builtin_rules(None)`; Python callers through `Rules()`.
-Their IDs start with `kingfisher.connection-string.password`. The broad Betterleaks
-`generic-api-key`, `generic-password`, and `generic-username` rules remain excluded.
+Their IDs start with `kingfisher.connection-string.password`. Betterleaks `generic-api-key` is
+bundled at static low confidence, without its confidence-upgrade branch; `generic-password` and
+`generic-username` remain excluded.
 
 The four semicolon-delimited rules require a nonempty `Server`, `Host`, `Data Source`, or
 `DSN` value before `Password` or `Pwd` on the same source line. The unquoted and ODBC-braced

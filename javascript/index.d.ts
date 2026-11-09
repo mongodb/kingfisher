@@ -58,6 +58,13 @@ export interface RulesOptions extends OperationOptions {
   paths?: readonly string[];
   builtins?: boolean;
   confidence?: Confidence;
+  /**
+   * Opt in to retaining declared dependencies below `confidence`, transitively,
+   * before rule compilation. Unrelated below-threshold rules remain excluded.
+   * This affects detection only; use ValidationOptions.candidates to limit checks
+   * and filter reports separately. Default false.
+   */
+  includeDependencies?: boolean;
   cache?: boolean;
   cacheDir?: string;
 }
@@ -180,6 +187,8 @@ export class ScanInput {
   readonly file: string | undefined;
   /** Returns a copy, not the private input snapshot. */
   readonly data: Uint8Array | undefined;
+  /** Byte length of in-memory `data` without copying it; `undefined` for file inputs. */
+  readonly byteLength: number | undefined;
   readonly attributes: Readonly<Record<string, string>>;
   readonly repository: string | undefined;
   readonly commit: string | undefined;
@@ -286,10 +295,32 @@ export interface ValidatorOptions {
   httpFallbacks?: boolean;
   maxPendingOperations?: number;
 }
+export interface ValidationOptions extends OperationOptions {
+  /**
+   * Validate only these unique original objects from `findings`, in this order.
+   * Keep the complete same-input raw batch in `findings` for dependency resolution.
+   * Helpers and other non-candidates are not independently validated. An empty
+   * array performs no checks; omission preserves the default batch behavior.
+   * Reports, redacted copies and findings from another batch cannot replace
+   * the original objects from the supplied batch.
+   *
+   * Candidates are preflighted like `RevocationPlan.validate()`: a candidate with
+   * a missing, ambiguous or unrenderable input is `skipped` before any provider
+   * request, where whole-batch validation may still send the request. These are
+   * original `Finding` objects, not `RevocationPlan.candidates` records.
+   */
+  candidates?: readonly Finding[];
+}
 export class Validator implements AsyncDisposable {
   constructor(options?: ValidatorOptions);
   withVariables(variables: Readonly<Record<string, string>>): Validator;
-  validate(findings: readonly Finding[], options?: OperationOptions): Promise<ValidationResult[]>;
+  /**
+   * Explicit provider work; does not expand candidates to related providers.
+   * @example
+   * const candidates = findings.filter(finding => finding.visible && finding.confidence === 'high');
+   * const results = await validator.validate(findings, { candidates });
+   */
+  validate(findings: readonly Finding[], options?: ValidationOptions): Promise<ValidationResult[]>;
   inspect(findings: readonly Finding[], options?: OperationOptions): Promise<InputDiagnostic[][]>;
   analyze(result: ValidationResult, options?: OperationOptions): Promise<unknown>;
   close(): Promise<void>;

@@ -13,7 +13,6 @@ use anyhow::Result;
 use crossbeam_skiplist::SkipMap;
 use dashmap::DashMap;
 use futures::{FutureExt, StreamExt, stream};
-use indicatif::{ProgressBar, ProgressStyle};
 use kingfisher_core::ValidationOutcome;
 use liquid::Parser;
 use reqwest::StatusCode;
@@ -658,7 +657,7 @@ pub async fn run_secret_validation(
     //  • simple_matches: Vec of Arcs for rules without dependencies
     //  • dependent_blob_ids: just the blob IDs — we re-fetch in Phase 2
     //    so we don't hold two full copies of the match set simultaneously
-    let (simple_matches, dependent_blob_ids) = {
+    let (simple_matches, dependent_blob_ids, reportable_total) = {
         let ds = datastore.lock().unwrap();
         let matches = if let Some(r) = range.clone() {
             ds.get_matches()[r].to_vec()
@@ -666,6 +665,10 @@ pub async fn run_secret_validation(
             ds.get_matches().to_vec()
         };
 
+        let reportable_total = matches
+            .iter()
+            .filter(|message| crate::scan_progress::reportable(message.2.visible))
+            .count() as u64;
         let mut by_blob: FxHashMap<BlobId, Vec<Arc<FindingsStoreMessage>>> = FxHashMap::default();
         for arc_msg in matches {
             by_blob.entry(arc_msg.1.id).or_default().push(arc_msg);
@@ -681,8 +684,9 @@ pub async fn run_secret_validation(
                 simple.extend(blob_matches);
             }
         }
-        (simple, dep_ids)
+        (simple, dep_ids, reportable_total)
     };
+    let validation_progress = crate::scan_progress::validating(reportable_total);
 
     if !simple_matches.is_empty() || !dependent_blob_ids.is_empty() {
         info!("Starting secret validation phase...");
@@ -693,7 +697,7 @@ pub async fn run_secret_validation(
         // Retain one representative per rule, validation input, and capture context
         // so duplicate occurrences do not hold extra Arcs throughout validation.
         let total_simple = simple_matches.len();
-        let mut representatives: FxHashMap<String, Arc<FindingsStoreMessage>> =
+        let mut representatives: FxHashMap<String, (Arc<FindingsStoreMessage>, u64)> =
             FxHashMap::default();
         for arc_msg in simple_matches {
             // Group by the actual validator input: CredentialUri uses the full URI;
@@ -707,8 +711,13 @@ pub async fn run_secret_validation(
                 validation_group_key = %group_key,
                 "Grouping finding for validation"
             );
-            // Only keep the first representative — extra Arcs are dropped immediately
-            representatives.entry(group_key).or_insert(arc_msg);
+            // Validate one representative, but advance all reportable findings resolved
+            // by that check. Hidden helpers still validate without entering the counters.
+            let checked = u64::from(crate::scan_progress::reportable(arc_msg.2.visible));
+            representatives
+                .entry(group_key)
+                .and_modify(|(_, count)| *count += checked)
+                .or_insert((arc_msg, checked));
         }
 
         trace!(
@@ -718,22 +727,6 @@ pub async fn run_secret_validation(
         );
 
         let validation_results = DashMap::<String, CachedResponse>::new();
-
-        crate::scan_progress::phase(
-            "Validating credentials",
-            representatives.len() as u64,
-            crate::scan_progress::PhaseKind::Validation,
-        );
-        let pb = ProgressBar::new(representatives.len() as u64).with_message("Validating secrets…");
-        pb.set_style(
-            ProgressStyle::with_template(
-                "{spinner:.green} {msg} [{bar:40.green/blue}] {pos}/{len} ({percent}%) \
-                 [{elapsed_precise}]",
-            )?
-            .progress_chars("=>-")
-            .tick_chars("|/-\\"),
-        );
-        pb.enable_steady_tick(Duration::from_millis(100));
 
         // Shared empty maps — avoids allocating throwaway DashMaps per task
         let empty_dep_vars: FxHashMap<String, Vec<(String, OffsetSpan)>> = FxHashMap::default();
@@ -745,14 +738,14 @@ pub async fn run_secret_validation(
         stream::iter(
             representatives.into_values(), // consumes map, dropping keys
         )
-        .for_each_concurrent(concurrency, |rep_arc| {
+        .for_each_concurrent(concurrency, |(rep_arc, checked)| {
             let parser = parser.clone();
             let clients = clients.clone();
             let cache_glob = cache.clone();
             let val_res = &validation_results;
             let success = success_count.clone();
             let fail = fail_count.clone();
-            let pb = pb.clone();
+            let progress = &validation_progress;
             let access_map = access_map.clone();
             let rate_limiter = rate_limiter.clone();
             let provider_endpoints = provider_endpoints.clone();
@@ -819,14 +812,11 @@ pub async fn run_secret_validation(
                 };
                 val_res.insert(key, cr);
 
-                pb.inc(1);
-                crate::scan_progress::advance();
+                progress.advance(checked);
             }
             .boxed()
         })
         .await;
-        pb.finish();
-
         // Apply Phase 1 results in-place — avoids cloning every Match
         {
             let mut ds = datastore.lock().unwrap();
@@ -886,23 +876,6 @@ pub async fn run_secret_validation(
             v
         };
 
-        let total = blob_ids.len();
-        crate::scan_progress::phase(
-            "Validating dependent credentials",
-            total as u64,
-            crate::scan_progress::PhaseKind::Validation,
-        );
-        let pb = ProgressBar::new(total as u64).with_message("Validating dependent secrets…");
-        pb.set_style(
-            ProgressStyle::with_template(
-                "{spinner:.yellow} {msg} [{bar:40.yellow/blue}] {pos}/{len} ({percent}%) \
-                 [{elapsed_precise}]",
-            )?
-            .progress_chars("=>-")
-            .tick_chars("|/-\\"),
-        );
-        pb.enable_steady_tick(Duration::from_millis(100));
-
         let val_cache = Arc::new(DashMap::<String, CachedResponse>::new());
         let in_flight = Arc::new(DashMap::<String, Arc<ValidationInFlight>>::new());
 
@@ -941,7 +914,7 @@ pub async fn run_secret_validation(
                     let access_map = access_map.clone();
                     let rate_limiter = rate_limiter.clone();
                     let provider_endpoints = provider_endpoints.clone();
-                    let pb = pb.clone();
+                    let progress = &validation_progress;
                     async move {
                         let owned = matches_for_blob
                             .iter()
@@ -986,6 +959,13 @@ pub async fn run_secret_validation(
                                 let rate_limiter = rate_limiter.clone();
                                 let provider_endpoints = provider_endpoints.clone();
                                 async move {
+                                    let checked = std::iter::once(&rep)
+                                        .chain(dups.iter())
+                                        .filter(|finding| {
+                                            crate::scan_progress::reportable(finding.rule.visible())
+                                        })
+                                        .count()
+                                        as u64;
                                     validate_single(
                                         &mut rep,
                                         &parser,
@@ -1017,6 +997,9 @@ pub async fn run_secret_validation(
                                             rep.ambiguous_dependencies.clone();
                                         d.dependency_candidates = rep.dependency_candidates.clone();
                                     }
+                                    // Advance per resolved reportable group, not per blob or
+                                    // chunk: a blob can contain many slow independent checks.
+                                    progress.advance(checked);
                                     let mut out = vec![rep];
                                     out.extend(dups);
                                     out
@@ -1027,11 +1010,6 @@ pub async fn run_secret_validation(
                             .collect()
                             .await;
 
-                        // Report progress per blob. Dependent validation can
-                        // take long enough that waiting for the whole chunk
-                        // to finish makes an active scan look hung at 0%.
-                        pb.inc(1);
-                        crate::scan_progress::advance();
                         validated.into_iter().flatten().collect::<Vec<_>>()
                     }
                     .boxed()
@@ -1082,7 +1060,6 @@ pub async fn run_secret_validation(
                 }
             }
         }
-        pb.finish();
     }
 
     // Validation intentionally executes once per unique credential, but alert correlation is

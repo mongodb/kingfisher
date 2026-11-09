@@ -85,6 +85,17 @@ whether each rule has validation/revocation. `Rules.detail(exact_id)` returns th
 loaded definition, including the regex, filters, dependencies and configured
 validation/revocation logic. Unknown or unloaded IDs raise `ValueError`.
 
+The shared catalog includes `betterleaks.generic-api-key` at static low confidence, with every
+rejection filter but no confidence-upgrade branch. The default `Rules(confidence="medium")`
+excludes it before native regex compilation; use `Rules(confidence="low")` to include it.
+`betterleaks.generic-credential-uri` stays medium; `generic-password` and `generic-username`
+remain excluded from the catalog.
+
+All rules use their configured confidence; there are no dynamic upgrades, demotions, or runtime
+confidence variants. Existing custom YAML/TOML rules still load without edits. Legacy
+one-string-argument `setConfidence(...)` and `filter.setConfidence(...)` calls are inert string
+passthroughs; rejection filters and association helpers remain active.
+
 ```python
 from kingfisher_sdk import Rules, Scanner
 

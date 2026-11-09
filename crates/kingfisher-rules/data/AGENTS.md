@@ -53,7 +53,15 @@ same generated bundle and readable catalogs as imported rules, without another r
   must go upstream to Betterleaks. Direct first-party inclusion must be rare and have a specific
   documented reason requiring shipping in Kingfisher itself; convenience or an unsubmitted
   upstream change is not sufficient. Replace temporary exceptions when compatible upstream
-  coverage becomes available. Keep the three broad Betterleaks generic-rule exclusions.
+  coverage becomes available. Keep `generic-password` and `generic-username` excluded;
+  import `generic-api-key` at static low confidence without its confidence-upgrade branch.
+  Keep `generic-credential-uri` at medium; do not classify all generic rules as low. Default
+  CLI/Python/Node medium selection excludes `generic-api-key` before native compilation;
+  explicit low selection opts in.
+- All confidence classifications are static. Remove unused confidence-only computations from
+  built-in imports while retaining every rejection predicate and credential-association helper.
+  Legacy custom one-string `setConfidence(...)` and `filter.setConfidence(...)` calls remain
+  inert value passthroughs, never a mechanism to override configured confidence.
 - Do not copy or redefine Betterleaks detectors in the overlay.
 - Do not select or import filename-only/path-only detectors for the built-in catalog. A filename
   alone is not secret evidence; filter these rules during import rather than disabling them at

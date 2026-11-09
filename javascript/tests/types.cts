@@ -14,6 +14,17 @@ const classes: [typeof sdk.Finding, typeof sdk.Rules, typeof sdk.Scanner,
 ];
 void classes;
 
+function selectedValidation(validator: sdk.Validator, findings: readonly sdk.Finding[]) {
+  const options: validation.ValidationOptions = { candidates: Object.freeze([...findings]), timeoutMs: 1000 };
+  const rootOptions: sdk.ValidationOptions = options;
+  void validator.validate(findings, rootOptions);
+  // @ts-expect-error candidate reports cannot stand in for original Finding objects
+  void validator.validate(findings, { candidates: findings.map(finding => finding.toJSON()) });
+  // @ts-expect-error candidate selection is an array, not an arbitrary iterable
+  void validator.validate(findings, { candidates: new Set(findings) });
+}
+void selectedValidation;
+
 const text: inputs.ScanInputOptions = { path: 'config.env', data: 'ordinary configuration' };
 const file: inputs.ScanInputOptions = { path: 'config.env', file: 'config.env' };
 new sdk.ScanInput(text);

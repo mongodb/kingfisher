@@ -34,6 +34,7 @@ try {
   await writeFile(rulesPath, `rules:
   - id: acme.example-token
     name: Acme example token
+    confidence: high
     pattern: '\\b(acme_demo_[A-Za-z0-9]{16})\\b'
     min_entropy: 0
     examples:
@@ -63,7 +64,10 @@ try {
             - type: StatusMatch
               status: [204]
 `, { mode: 0o600 });
-  const rules = await Rules.load({ paths: [rulesPath], builtins: false, cache: false });
+  const rules = await Rules.load({
+    paths: [rulesPath], builtins: false, cache: false,
+    confidence: 'high', includeDependencies: true,
+  });
   scanner = await Scanner.create({ rules });
   // Only for this loopback demo. Leave allowInternalIps:false in real integrations
   // unless access to specific internal credential destinations is explicitly authorized.
@@ -78,7 +82,9 @@ try {
   console.log(JSON.stringify({ phase: 'prepared', plan: plan.toJSON(), diagnostics }));
 
   // validate() may send credentials; here only the synthetic local server receives them.
-  const results = await plan.validate(validator, { timeoutMs: 5000 });
+  // Select only original high-confidence findings; retain the full batch for helpers.
+  const candidates = findings.filter(finding => finding.visible && finding.confidence === 'high');
+  const results = await validator.validate(findings, { candidates, timeoutMs: 5000 });
   assert.equal(results.length, 1);
   assert.equal(results[0].outcome, 'verified_active');
   assert.equal(results[0].revocationReady, true);

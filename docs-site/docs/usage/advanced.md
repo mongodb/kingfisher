@@ -64,10 +64,12 @@ Running the scan again with `--manage-baseline` refreshes the baseline by adding
 
 ## Understanding Confidence Levels
 
-The `--confidence` flag sets a minimum confidence threshold, not an exact match.
+The `--confidence` flag sets a minimum configured rule confidence, not an exact match or a
+per-finding override. Rules below that threshold are excluded before native regex compilation;
+filters cannot upgrade or downgrade findings.
 
-- If you pass `--confidence medium`, findings with **medium and higher** confidence (medium + high) will be included.
-- If you pass `--confidence low`, you'll see **all levels** (low, medium, high).
+- `--confidence medium` (the default) includes rules with **medium and higher** confidence (medium + high).
+- `--confidence low` includes **all levels** (low, medium, high).
 
 ```bash
 # Only show high-confidence findings
@@ -514,10 +516,16 @@ The `betterleaks.` prefix is optional for short selectors such as `--rule github
 loaded through `--rules-path` are additive by default. Use `--load-builtins=false` for a custom-only
 scan, or `--no-builtins` with `validate` and `revoke`.
 
-Kingfisher omits Betterleaks' `generic-api-key`, `generic-password`, and `generic-username` rules
-from the built-in catalog because their broad patterns provide low signal at disproportionate scan
-cost. Use a targeted custom TOML or YAML rule when your organization needs generic credential
-detection for a known naming convention.
+Kingfisher includes Betterleaks' `generic-api-key` at static **low** confidence. Its upstream
+confidence-upgrade branch is removed during built-in import; all rejection filters remain intact.
+The CLI's default minimum confidence of medium excludes this rule before native regex
+compilation; opt in with `--confidence low`. Python and Node defaults do the same.
+`betterleaks.generic-credential-uri` stays medium; `generic-password` and `generic-username`
+remain excluded from the catalog. All rules use their configured confidence only, without dynamic
+upgrades, demotions, or runtime confidence variants. Existing custom TOML/YAML files still load
+without edits. Legacy one-string-argument `setConfidence(...)` and `filter.setConfidence(...)`
+calls are inert string passthroughs; rejection filters and association helpers remain active.
+`--confidence` selects configured confidence levels, not a per-finding override.
 
 Five medium-confidence connection-string rules cover semicolon-delimited passwords and
 PostgreSQL, MySQL, MariaDB, and SQL Server JDBC formats. They load by default in the CLI,
@@ -531,14 +539,14 @@ kingfisher scan ./src --rule kingfisher.connection-string.password \
   --format toon --no-validate --no-update-check
 ```
 
-Kingfisher embeds 502 built-in rules from one prepared compressed bundle. Normal compilation
+Kingfisher embeds 503 built-in rules from one prepared compressed bundle. Normal compilation
 does not download rule sources. Exact upstream inputs, licenses, hashes, source revisions, and
 first-party rule provenance are recorded under `crates/kingfisher-rules/generated/`. Maintainers
 regenerate the bundle with `cargo run --locked -p kingfisher-rule-bundle`; `--refresh` fetches
 pinned upstream sources, and `--check` verifies the prepared artifacts offline. The same tool
 generates all three readable source catalogs. Veles import is not available through `--rules-path`.
 
-Detection regexes, path constraints, confidence changes, component dependencies, and Betterleaks
+Detection regexes, path constraints, configured confidence, component dependencies, and Betterleaks
 validation expressions are translated into Kingfisher's runtime model. The top-level Betterleaks
 `prefilter` is stored once on the compiled rule database, compiled into its own Vectorscan
 database, and evaluated once per source path before content matching. The top-level finding
@@ -674,7 +682,15 @@ kingfisher scan ./repo --no-validate --no-rule-cache --format toon
 
 ## Rule Performance Profiling
 
-Use `--rule-stats` to collect timing information for every rule. After scanning, the summary prints a **Rule Performance Stats** section showing how many matches each rule produced along with its slowest and average match times. Useful when creating rules or debugging rules.
+Use `--rule-stats` to collect **confirmation/filter-stage** timing information. The **Rule Performance
+Stats** section counts matches accepted by this stage, including dependency helpers, before final
+association and report deduplication. Slowest/fastest times describe accepted invocations, which may
+process multiple captures. The average is aggregate stage time (including rejections) divided by
+accepted matches, not per-candidate latency.
+
+These timers include regex confirmation inside the filter invocation, but exclude native scanning,
+callback collection, separately built candidate indexes, enumeration, and validation. Use total scan
+time and memory measurements when assessing engine performance.
 
 ```bash
 kingfisher scan /path/to/repo --rule-stats

@@ -2056,8 +2056,9 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-rules"
-version = "3.1.0"
+version = "3.1.1"
 dependencies = [
+ "aho-corasick",
  "anyhow",
  "aws-lc-rs",
  "base32",
@@ -2075,12 +2076,14 @@ dependencies = [
  "libc",
  "liquid",
  "liquid-core",
+ "memchr",
  "pem",
  "percent-encoding",
  "pkcs1",
  "pkcs8",
  "rand 0.10.3",
  "regex",
+ "regex-automata",
  "regex-syntax",
  "rustc-hash",
  "schemars",
@@ -2104,7 +2107,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-scanner"
-version = "3.0.2"
+version = "3.0.3"
 dependencies = [
  "anyhow",
  "base64 0.23.1",

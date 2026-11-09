@@ -27,6 +27,11 @@ pub enum RuleLoaderError {
 
     #[error("Unknown rule: `{0}`")]
     UnknownRule(String),
+
+    #[error(
+        "Rule selector `{selector}` matches only rules below {minimum} confidence; pass `--confidence {confidence}` to include them"
+    )]
+    BelowMinimumConfidence { selector: String, minimum: Confidence, confidence: Confidence },
 }
 pub struct RuleLoader {
     load_builtins: bool,
@@ -66,11 +71,9 @@ impl RuleLoader {
 
     pub fn enable_rule_ids<S: AsRef<str>, I: IntoIterator<Item = S>>(mut self, ids: I) -> Self {
         let ids: Vec<String> = ids.into_iter().map(|s| s.as_ref().to_string()).collect();
-        if ids.iter().any(|id| id == "all") {
-            self.enabled_rule_ids = None; // Reset to "all rules enabled"
-        } else {
-            self.enabled_rule_ids = Some(ids);
-        }
+        // Preserve explicit selectors alongside `all` so their confidence diagnostics
+        // are not silently discarded when the combined selection is unrestricted.
+        self.enabled_rule_ids = Some(ids);
         self
     }
 
@@ -110,16 +113,12 @@ impl RuleLoader {
             }
         }
 
-        // Borrowing callers still receive the same runtime confidence behavior as the owned scan
-        // path. Mark every helper reachable from a potentially reportable rule; selector-specific
-        // resolution below narrows the compiled set further.
+        // Keep below-threshold helpers available for association, but hide them once before
+        // scanning. Selector-specific resolution below narrows the compiled set further.
         let mut helper_ids = HashSet::new();
         let mut pending: Vec<String> = id_to_rule
             .values()
-            .filter(|rule| {
-                rule.confidence().is_at_least(&confidence)
-                    || rule.betterleaks_filter().is_some_and(expression_can_set_confidence)
-            })
+            .filter(|rule| rule.confidence().is_at_least(&confidence))
             .map(|rule| rule.id().to_string())
             .collect();
         let mut traversed = HashSet::new();
@@ -309,10 +308,7 @@ impl LoadedRules {
         let primary_ids: HashSet<String> = self
             .resolve_selected_rules()?
             .into_iter()
-            .filter(|rule| {
-                rule.confidence().is_at_least(&self.minimum_confidence)
-                    || rule.betterleaks_filter().is_some_and(expression_can_set_confidence)
-            })
+            .filter(|rule| rule.confidence().is_at_least(&self.minimum_confidence))
             .map(|rule| rule.id().to_string())
             .collect();
         let mut selected_ids = primary_ids.clone();
@@ -339,6 +335,7 @@ impl LoadedRules {
     }
 
     fn resolve_selected_rules(&self) -> Result<Vec<&Rule>> {
+        let excluded_ids = self.excluded_rule_ids()?;
         let mut resolved_rules = match &self.enabled_rule_ids {
             // No selectors ⇒ every rule is enabled
             None => {
@@ -346,11 +343,38 @@ impl LoadedRules {
                 self.iter_rules().collect()
             }
 
-            // At least one selector was given
-            Some(selectors) => self.resolve_rule_selectors(selectors)?,
+            // Diagnose each explicit selector before combining it with other rules:
+            // otherwise a below-threshold rule can silently disappear in a mixed selection.
+            Some(selectors) => {
+                let mut selected = Vec::new();
+                let mut seen = HashSet::new();
+                for selector in selectors {
+                    let mut matched =
+                        self.resolve_rule_selectors(std::slice::from_ref(selector))?;
+                    matched.retain(|rule| !excluded_ids.contains(rule.id()));
+                    if matched.is_empty() {
+                        continue; // Explicit exclusions take precedence over selection.
+                    }
+                    if selector != "all"
+                        && !matched.iter().any(|rule| rule.confidence() >= self.minimum_confidence)
+                    {
+                        let confidence = matched
+                            .iter()
+                            .map(|rule| rule.confidence())
+                            .min()
+                            .expect("a resolved selector matches at least one rule");
+                        bail!(RuleLoaderError::BelowMinimumConfidence {
+                            selector: selector.clone(),
+                            minimum: self.minimum_confidence,
+                            confidence,
+                        });
+                    }
+                    selected.extend(matched.into_iter().filter(|rule| seen.insert(rule.id())));
+                }
+                selected
+            }
         };
 
-        let excluded_ids = self.excluded_rule_ids()?;
         resolved_rules.retain(|rule| !excluded_ids.contains(rule.id()));
         Ok(resolved_rules)
     }
@@ -364,56 +388,6 @@ impl LoadedRules {
             .into_iter()
             .map(|rule| rule.id().to_string())
             .collect())
-    }
-}
-
-fn expression_can_set_confidence(expression: &BetterleaksExpr) -> bool {
-    match expression {
-        BetterleaksExpr::Identifier { value } => value == "setConfidence",
-        BetterleaksExpr::Unary { node, .. }
-        | BetterleaksExpr::Chain { node }
-        | BetterleaksExpr::Predicate { node } => expression_can_set_confidence(node),
-        BetterleaksExpr::Binary { left, right, .. } => {
-            expression_can_set_confidence(left) || expression_can_set_confidence(right)
-        }
-        BetterleaksExpr::Member { node, property, .. } => {
-            expression_can_set_confidence(node) || expression_can_set_confidence(property)
-        }
-        BetterleaksExpr::Slice { node, from, to } => {
-            expression_can_set_confidence(node)
-                || expression_can_set_confidence(from)
-                || expression_can_set_confidence(to)
-        }
-        BetterleaksExpr::Call { callee, arguments } => {
-            expression_can_set_confidence(callee)
-                || arguments.iter().any(expression_can_set_confidence)
-        }
-        BetterleaksExpr::Builtin { name, arguments } => {
-            name == "setConfidence" || arguments.iter().any(expression_can_set_confidence)
-        }
-        BetterleaksExpr::Conditional { cond, exp1, exp2 } => {
-            expression_can_set_confidence(cond)
-                || expression_can_set_confidence(exp1)
-                || expression_can_set_confidence(exp2)
-        }
-        BetterleaksExpr::VariableDeclarator { value, expr, .. } => {
-            expression_can_set_confidence(value) || expression_can_set_confidence(expr)
-        }
-        BetterleaksExpr::Sequence { nodes } | BetterleaksExpr::Array { nodes } => {
-            nodes.iter().any(expression_can_set_confidence)
-        }
-        BetterleaksExpr::Map { pairs } => pairs.iter().any(expression_can_set_confidence),
-        BetterleaksExpr::Pair { key, value } => {
-            expression_can_set_confidence(key) || expression_can_set_confidence(value)
-        }
-        BetterleaksExpr::Pointer { name } => name == "setConfidence",
-        BetterleaksExpr::String { value } => {
-            value == "setConfidence" || value == "filter.setConfidence"
-        }
-        BetterleaksExpr::Nil
-        | BetterleaksExpr::Integer { .. }
-        | BetterleaksExpr::Float { .. }
-        | BetterleaksExpr::Bool { .. } => false,
     }
 }
 
@@ -678,12 +652,16 @@ mod tests {
         let rules = loaded.resolve_enabled_rules_owned().unwrap();
         let ids: Vec<_> = rules.iter().map(Rule::id).collect();
         assert_eq!(ids, ["betterleaks.aws-access-token", "betterleaks.aws-secret-access-key"]);
+        let helper =
+            rules.iter().find(|rule| rule.id() == "betterleaks.aws-secret-access-key").unwrap();
+        assert!(helper.is_runtime_dependency_helper());
+        assert!(!helper.visible());
+        assert!(!helper.syntax().visible);
+        let borrowed = loaded.resolve_enabled_rules().unwrap();
         assert!(
-            rules
-                .iter()
-                .find(|rule| rule.id() == "betterleaks.aws-secret-access-key")
-                .unwrap()
-                .is_runtime_dependency_helper()
+            borrowed.iter().any(|rule| {
+                rule.id() == "betterleaks.aws-secret-access-key" && !rule.visible()
+            })
         );
     }
 
@@ -727,6 +705,10 @@ mod tests {
         let resolved = loaded.resolve_enabled_rules_owned().unwrap();
         let ids: Vec<_> = resolved.iter().map(Rule::id).collect();
         assert_eq!(ids, ["custom.helper", "custom.leaf", "custom.primary"]);
+        assert!(resolved.iter().filter(|rule| rule.id() != "custom.primary").all(|rule| {
+            rule.is_runtime_dependency_helper() && !rule.visible() && !rule.syntax().visible
+        }));
+        assert!(resolved.iter().find(|rule| rule.id() == "custom.primary").unwrap().visible());
 
         let excluded = LoadedRules { excluded_rule_ids: vec!["custom.helper".into()], ..loaded };
         let resolved = excluded.resolve_enabled_rules_owned().unwrap();
@@ -735,42 +717,117 @@ mod tests {
     }
 
     #[test]
-    fn dynamically_adjustable_rules_load_below_static_confidence() {
-        let filter = BetterleaksExpr::Call {
+    fn legacy_confidence_calls_do_not_bypass_static_selection() {
+        let filter = |confidence: &str| BetterleaksExpr::Call {
             callee: Box::new(BetterleaksExpr::Member {
                 node: Box::new(BetterleaksExpr::Identifier { value: "filter".into() }),
                 property: Box::new(BetterleaksExpr::String { value: "setConfidence".into() }),
                 optional: false,
                 method: false,
             }),
-            arguments: vec![BetterleaksExpr::String { value: "high".into() }],
+            arguments: vec![BetterleaksExpr::String { value: confidence.into() }],
         };
-        let promoted = test_rule_with("custom.promoted", Confidence::Low, Some(filter), vec![]);
-        let ordinary = test_rule_with("custom.ordinary", Confidence::Low, None, vec![]);
+        let low = test_rule_with("custom.low", Confidence::Low, Some(filter("high")), vec![]);
+        let high = test_rule_with("custom.high", Confidence::High, Some(filter("low")), vec![]);
         let loaded = LoadedRules {
-            id_to_rule: [promoted, ordinary]
-                .into_iter()
-                .map(|rule| (rule.id().to_string(), rule))
-                .collect(),
+            id_to_rule: [low, high].into_iter().map(|rule| (rule.id().to_string(), rule)).collect(),
             betterleaks_prefilter: None,
             minimum_confidence: Confidence::High,
-            enabled_rule_ids: Some(vec!["custom.promoted".into()]),
+            enabled_rule_ids: None,
             excluded_rule_ids: vec![],
         };
 
+        let rules = loaded.resolve_enabled_rules().unwrap();
+        assert_eq!(rules.iter().map(|rule| rule.id()).collect::<Vec<_>>(), ["custom.high"]);
         let rules = loaded.resolve_enabled_rules_owned().unwrap();
-        assert_eq!(rules.iter().map(Rule::id).collect::<Vec<_>>(), ["custom.promoted"]);
+        assert_eq!(rules.iter().map(Rule::id).collect::<Vec<_>>(), ["custom.high"]);
+        assert_eq!(rules[0].confidence(), Confidence::High);
         assert_eq!(rules[0].runtime_minimum_confidence(), Confidence::High);
+
+        let low_only = LoadedRules { enabled_rule_ids: Some(vec!["custom.low".into()]), ..loaded };
+        let error = low_only.resolve_enabled_rules_owned().unwrap_err().to_string();
+        assert!(error.contains("below high confidence"), "{error}");
+        assert!(error.contains("--confidence low"), "{error}");
     }
 
     #[test]
-    fn bundled_generic_rules_are_not_available() {
-        let result = RuleLoader::new()
+    fn bundled_generic_api_key_is_available_only_at_static_low_confidence() {
+        let rules = RuleLoader::new()
             .enable_rule_ids(["betterleaks.generic-api-key"])
             .load_with_confidence(Confidence::Low)
-            .and_then(|loaded| loaded.resolve_enabled_rules_owned());
+            .and_then(|loaded| loaded.resolve_enabled_rules_owned())
+            .unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].confidence(), Confidence::Low);
+        for minimum in [Confidence::Medium, Confidence::High] {
+            let error = RuleLoader::new()
+                .enable_rule_ids(["betterleaks.generic-api-key"])
+                .load_with_confidence(minimum)
+                .and_then(|loaded| loaded.resolve_enabled_rules_owned())
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("betterleaks.generic-api-key"), "{error}");
+            assert!(error.contains(&format!("below {minimum} confidence")), "{error}");
+            assert!(error.contains("--confidence low"), "{error}");
+            let defaults = RuleLoader::new()
+                .load_with_confidence(minimum)
+                .and_then(|loaded| loaded.resolve_enabled_rules_owned())
+                .unwrap();
+            assert!(defaults.iter().all(|rule| rule.id() != "betterleaks.generic-api-key"));
+        }
+        for id in ["betterleaks.generic-password", "betterleaks.generic-username"] {
+            assert!(
+                RuleLoader::new()
+                    .enable_rule_ids([id])
+                    .load_with_confidence(Confidence::Low)
+                    .and_then(|loaded| loaded.resolve_enabled_rules_owned())
+                    .is_err()
+            );
+        }
+    }
 
-        assert!(result.is_err());
+    #[test]
+    fn explicit_below_threshold_selectors_fail_even_in_mixed_selections() {
+        for selectors in [
+            vec!["betterleaks.aws-access-token", "betterleaks.generic-api-key"],
+            vec!["generic-api-key", "aws-access-token"],
+        ] {
+            let error = RuleLoader::new()
+                .enable_rule_ids(selectors)
+                .load_with_confidence(Confidence::Medium)
+                .and_then(|loaded| loaded.resolve_enabled_rules_owned())
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("generic-api-key"), "{error}");
+            assert!(error.contains("--confidence low"), "{error}");
+        }
+    }
+
+    #[test]
+    fn family_selectors_still_filter_by_confidence_and_deduplicate() {
+        let mut loaded = loaded_rules(Some(vec!["custom", "custom.high"]), vec!["custom.low"]);
+        loaded.minimum_confidence = Confidence::High;
+        loaded.id_to_rule = [
+            test_rule_with("custom.low", Confidence::Low, None, vec![]),
+            test_rule_with("custom.high", Confidence::High, None, vec![]),
+        ]
+        .into_iter()
+        .map(|rule| (rule.id().to_owned(), rule))
+        .collect();
+        let rules = loaded.resolve_enabled_rules().unwrap();
+        assert_eq!(rules.iter().map(|rule| rule.id()).collect::<Vec<_>>(), ["custom.high"]);
+
+        loaded.enabled_rule_ids = Some(vec!["custom.low".into()]);
+        assert!(loaded.resolve_enabled_rules().unwrap().is_empty());
+
+        loaded.enabled_rule_ids = Some(vec!["custom.low".into(), "custom.high".into()]);
+        let rules = loaded.resolve_enabled_rules().unwrap();
+        assert_eq!(rules.iter().map(|rule| rule.id()).collect::<Vec<_>>(), ["custom.high"]);
+
+        loaded.enabled_rule_ids = Some(vec!["custom".into()]);
+        loaded.excluded_rule_ids = vec!["custom.high".into()];
+        let error = loaded.resolve_enabled_rules().unwrap_err().to_string();
+        assert!(error.contains("--confidence low"), "{error}");
     }
 
     #[test]

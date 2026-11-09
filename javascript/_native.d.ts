@@ -154,6 +154,7 @@ export interface NativeRulesOptions {
   paths: Array<string>
   builtins: boolean
   confidence: string
+  includeDependencies?: boolean
   cache: boolean
   cacheDir?: string
 }

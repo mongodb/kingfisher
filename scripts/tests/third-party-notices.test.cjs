@@ -27,6 +27,64 @@ test('inventory handles multiline text, duplicate versions and the independent n
   assert.throws(() => notices.inventory(header + block(p) + block(p)), /Duplicate notice/);
 });
 
+test('YAML text aliases deduplicate exact bytes without losing copyright, provenance or non-Cargo notices', () => {
+  const text = 'Copyright Example\r\nPermission "quoted" \\ text.\n'.repeat(100);
+  const changedCopyright = text.replace('Copyright Example', 'Copyright Another Owner');
+  const a = pkg('a'), b = pkg('b'), c = pkg('c');
+  const first = notices.entry({ ...notice(a, [{ license: 'MIT', text, source: 'https://example.test/LICENSE' }]),
+    evidence: [{ source: 'Pinned upstream evidence', text }] });
+  const entries = new Map([['a@1.0.0', first], ['b@1.0.0', block(b, [{ license: 'MIT', text }])],
+    ['c@1.0.0', block(c, [{ license: 'MIT', text: changedCopyright }])]]);
+  const supplementary = `non_cargo_notices:\n- source: "NOTICE"\n  text: ${JSON.stringify(text)}\n`;
+  const original = header + [...entries.values()].join('') + supplementary;
+  const compact = notices.deduplicateTexts(original);
+  const anchor = `text_${notices.sha256(text)}`;
+  assert.ok(Buffer.byteLength(compact) < Buffer.byteLength(original) / 2);
+  assert.equal(compact.split(`&${anchor}`).length - 1, 1);
+  assert.equal(compact.split(`*${anchor}`).length - 1, 3);
+  assert.ok(compact.includes(JSON.stringify(changedCopyright)), 'Distinct copyright notices must never be merged');
+  assert.equal(notices.expandTexts(compact), original);
+  assert.equal(notices.deduplicateTexts(compact), compact);
+  assert.deepEqual(notices.inventory(compact), entries);
+  notices.validate(notices.inventory(compact), expected(a, b, c), {});
+  assert.equal(notices.render(notices.inventory(notices.render(entries, supplementary)), supplementary), notices.render(entries, supplementary));
+  // Pruning the original anchor owner must not leave dangling references.
+  const pruned = notices.inventory(compact);
+  pruned.delete('a@1.0.0');
+  assert.deepEqual(notices.inventory(notices.render(pruned, supplementary)), pruned);
+});
+
+test('text reference expansion rejects dangling, forward, duplicate, malformed and tampered anchors', () => {
+  const quoted = JSON.stringify('Exact license.\n');
+  const anchor = `text_${notices.sha256(JSON.parse(quoted))}`;
+  const definition = `    text: &${anchor} ${quoted}\n`;
+  const alias = `    text: *${anchor}\n`;
+  assert.throws(() => notices.expandTexts(alias), /Unknown notice text alias/);
+  assert.throws(() => notices.expandTexts(alias + definition), /Unknown notice text alias/);
+  assert.throws(() => notices.expandTexts(definition + definition), /Duplicate notice text anchor/);
+  assert.throws(() => notices.expandTexts(`    text: &invalid ${quoted}\n`), /Malformed notice text reference/);
+  assert.throws(() => notices.expandTexts(definition.replace(quoted, '"Altered"')), /Mismatched notice text anchor/);
+  for (const spacing of [' ', '  ', '\t', ' \t ']) {
+    const spaced = value => value.replace('text: ', `text:${spacing}`);
+    assert.throws(() => notices.expandTexts(spaced(alias)), /Unknown notice text alias/);
+    assert.throws(() => notices.expandTexts(spaced(definition + definition)), /Duplicate notice text anchor/);
+    assert.throws(() => notices.expandTexts(spaced(definition.replace(quoted, '"Altered"'))), /Mismatched notice text anchor/);
+    assert.equal(notices.expandTexts(spaced(definition) + alias), spaced(`    text: ${quoted}\n`) + `    text: ${quoted}\n`);
+    const invalid = header + block(pkg('invalid')).replace(/text: "[^\n]*"/, `text:${spacing}*${anchor}`);
+    assert.throws(() => notices.inventory(invalid), /Unknown notice text alias/);
+  }
+});
+
+test('committed notices stay compact and preserve all expanded crate records', () => {
+  const root = path.resolve(__dirname, '../..');
+  const compact = fs.readFileSync(path.join(root, 'THIRD_PARTY_NOTICES'), 'utf8');
+  const expanded = notices.expandTexts(compact);
+  assert.ok(Buffer.byteLength(compact) < Buffer.byteLength(expanded) / 3, 'Regenerate notices rather than shipping repeated license text');
+  assert.deepEqual(notices.inventory(compact), notices.inventory(expanded));
+  assert.equal(notices.deduplicateTexts(expanded), compact);
+  assert.equal(fs.readFileSync(path.join(root, 'javascript/THIRD_PARTY_NOTICES'), 'utf8'), compact);
+});
+
 test('dependency scope follows every workspace member/feature/platform with normal/build and proc-macro edges', () => {
   const member = { ...pkg('kingfisher-tools'), id: 'path+workspace#kingfisher-tools@1.0.0', source: null };
   const main = pkg('runtime');

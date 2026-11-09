@@ -30,4 +30,12 @@ just to enable optional fallback behavior.
   compatible upstream detector becomes available.
 - First-party exceptions feed the same maintainer-generated bundle, readable catalogs,
   provenance, notices, and verification pipeline as imported detectors. Do not add another
-  catalog or runtime loader. Preserve the three broad Betterleaks generic-rule exclusions.
+  catalog or runtime loader. Keep `generic-password` and `generic-username` excluded;
+  import `generic-api-key` at static low confidence without its confidence-upgrade branch.
+  Keep `generic-credential-uri` at medium; do not classify all generic rules as low. Default
+  CLI/Python/Node medium selection excludes `generic-api-key` before native compilation;
+  explicit low selection opts in.
+- Confidence is configured per rule, never changed by a filter or candidate. Keep legacy custom
+  one-string `setConfidence(...)` and `filter.setConfidence(...)` calls loadable as inert value
+  passthroughs. Preserve rejection predicates and credential-association helpers; do not restore
+  upgrade/demotion state, dynamic-confidence selection bypasses, or per-finding confidence variants.

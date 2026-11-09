@@ -33,30 +33,68 @@ Kingfisher is a fast, free, open-source secret scanner and credential response t
 
 > **Defender workflow:** Follow the [end-to-end defender workflow](docs/DEFENDER_WORKFLOW.md) for secret detection, validation, notifications, blast-radius mapping, and revocation.
 
-## Embed Kingfisher in Rust, Python, or JavaScript
+## Embed Kingfisher in Python, Node.js, or Rust
 
-Add Kingfisher's fast secret scanning, live credential validation, and revocation
-to your own applications through Python, Rust, or the native Node SDK preview.
-Everything runs in-process, with no CLI subprocess required.
+Add native secret detection, live credential validation, and explicit revocation
+to your Python, JavaScript/TypeScript (Node.js), or Rust application. The same Rust
+engine and rule catalog run in-process, with no CLI subprocess required.
+Kingfisher is an **embeddable secret scanner** that also runs as a **standalone CLI**.
 
 <p align="center">
   <img src="docs/embeddable.png"
-       alt="Embeddable credential security engine: detection, live validation, and explicit revocation in Python and Rust"
+       alt="Kingfisher embeddable secret scanner: Detect Secrets → Validate → Map Blast Radius → Revoke. Native Python, Node.js/TypeScript and Rust SDK installs, plus CLI installation and HTML report commands."
        width="800" />
 </p>
 
-- **Python:** Install `uv add kingfisher-secret-scanner` and import `kingfisher_sdk`.
-  See the [Python SDK guide](docs/PYPI.md) and [runnable examples](python/examples)
-  for scanning, validation, rule inspection, and explicit revocation.
-- **Rust:** Use `kingfisher-scanner`. See the [library guide](docs/LIBRARY.md) and
-  [runnable examples](crates/kingfisher-scanner/examples) for scanning and validation,
-  plus [revocation via `kingfisher-scanner`](docs/LIBRARY.md#revoke-a-credential).
-- **JavaScript / TypeScript:** The `kingfisher-secret-scanner` npm SDK **0.1.0** is a
-  preview of npm support, wrapping the same Rust crates with napi-rs. See the
+Choose your language and add the SDK to your existing application:
+
+- **Python:**
+
+  ```sh
+  uv add kingfisher-secret-scanner
+  ```
+
+  Import `kingfisher_sdk`. See the [Python SDK guide](docs/PYPI.md) and
+  [runnable examples](python/examples) for scanning, validation, rule inspection,
+  and explicit revocation.
+
+- **Node.js / TypeScript:**
+
+  ```sh
+  npm install kingfisher-secret-scanner
+  ```
+
+  The stable npm SDK **1.0.0** wraps the same Rust crates with napi-rs. See the
   [Node SDK guide](docs/JAVASCRIPT.md) and [source/examples](javascript). It targets
   Node.js, including VS Code workspace extensions, rather than browser/WASM runtimes.
-  Start with the [runnable recipe walkthrough](javascript/examples/README.md);
+  Explore [Kingfisher Workbench](javascript/examples/kingfisher-workbench/README.md), a
+  commented showcase with live progress, Git-history scanning and a redacted HTML
+  report, or start with the [runnable recipe walkthrough](javascript/examples/README.md);
   maintainers can follow the [npm trusted-publishing setup](docs/PUBLISHING.md#npm-publishing-with-github-actions).
+
+- **Rust:**
+
+  ```sh
+  cargo add kingfisher-scanner --features validation
+  ```
+
+  The `validation` feature enables live validation and revocation; omit
+  `--features validation` for detection only. See the [library guide](docs/LIBRARY.md),
+  [runnable examples](crates/kingfisher-scanner/examples), and
+  [revocation guide](docs/LIBRARY.md#revoke-a-credential).
+
+Or install the **CLI**, scan a codebase, and open the interactive HTML report:
+
+```sh
+uv tool install kingfisher-bin
+kingfisher scan /path/to/code --view-report
+```
+
+Replace `/path/to/code` with your source directory. Scans validate credentials by
+default; add `--no-validate` for detection only. Add `--blast-radius` to map supported
+credentials' access when authorized. Revocation remains a separate, explicit action.
+See the [CLI installation guide](docs/INSTALLATION.md#pypi-wheels) and
+[usage guide](docs/USAGE.md) for more options.
 
 ## Scan Targets
 
@@ -334,7 +372,16 @@ always confirm the target and operational impact before containment.
 - **Checksum-aware custom detection**: Kingfisher custom rules can verify token checksums offline before validation ([checksum intelligence](docs/RULES.md#checksum-intelligence))
 - **Report Viewer (local + hosted)**: Visualize and triage Kingfisher, **SARIF, Gitleaks, and TruffleHog** output locally with `kingfisher view ./report.json` or online with the [hosted viewer](https://mongodb.github.io/kingfisher/viewer/). Multiple files, directories, and imported third-party reports are merged and deduplicated. See [docs/USAGE.md](docs/USAGE.md#report-viewer-local-and-hosted).
 - **Audit reporting**: Generate compliance-oriented HTML reports with scan metadata and validation ordering
-- **Embedding**: Scan in-process from [Rust](docs/LIBRARY.md), [Python](docs/PYPI.md), or the [Node SDK preview](docs/JAVASCRIPT.md), with explicit validation and revocation APIs
+- **Embedding**: Scan in-process from [Rust](docs/LIBRARY.md), [Python](docs/PYPI.md), or the [Node SDK](docs/JAVASCRIPT.md), with explicit validation and revocation APIs
+
+The bundled catalog contains **503 rules**. The default medium-confidence CLI, Python, and Node
+loaders select **502** before native regex compilation: `betterleaks.generic-api-key` is bundled
+at static **low** confidence and requires `--confidence low` (or the SDK equivalent).
+`betterleaks.generic-credential-uri` stays medium; generic password/username detectors are not
+bundled. Confidence is configured per rule, with no dynamic upgrades, demotions, or runtime
+confidence variants. Legacy YAML/TOML confidence helpers remain loadable as inert string
+passthroughs; rejection filters and association helpers stay active. See the
+[configured-confidence policy](docs/RULES.md#configured-confidence).
 
 ## Basic Usage Demo
 ```bash

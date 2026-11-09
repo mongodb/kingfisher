@@ -9,4 +9,7 @@ Release CI audits imported ELF symbol versions and shared-library dependencies.
 This is not a musl/Alpine or manylinux/glibc 2.28 build.
 
 See the [SDK guide](https://github.com/mongodb/kingfisher/blob/main/docs/JAVASCRIPT.md).
-All required license and attribution files are included alongside the native addon.
+Published release packages include `LICENSE*`, `NOTICE*`, and
+`THIRD_PARTY_NOTICES` alongside the addon. Release staging copies and verifies
+these canonical SDK notices; the private source-tree platform directories
+are not publishable packages.

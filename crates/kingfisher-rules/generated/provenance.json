@@ -6,13 +6,13 @@
     "crates/kingfisher-rules/data/wordfreq-LICENSE.txt": "28a9529c7d0bb4dc51f4bf5c116a3d16ef247a052f7591466768ddf563fd1cf5",
     "crates/kingfisher-rules/data/wordfreq-NOTICE.md": "d9b104dafe63886af55e7cea7484824e32e12d4e1f57f319923dd643b36d6b15",
     "crates/kingfisher-rules/generated/NOTICES.txt": "9bbb61c4b4525126e1b43afe0fe17f9f8858d28dbc9b41ce22e0555924bec70f",
-    "crates/kingfisher-rules/generated/builtin-rules.gz": "51f695d2a748283566bd29157c9e14d73bc0cc21503541884d031b5958f32da5",
-    "crates/kingfisher-rules/generated/rules/betterleaks.yml": "8177f697e599cde6a22f225ebc2d5776b0621bc831a3a9010320deca6149e2a6",
+    "crates/kingfisher-rules/generated/builtin-rules.gz": "8dce7d1b39294fa72d8dd9a07567585e557e9deb7385facec5291d2de057c9cf",
+    "crates/kingfisher-rules/generated/rules/betterleaks.yml": "069210120f1bd0545468962001e83e2a3aca9dcced699f9e7ad5fbf9e00ad83d",
     "crates/kingfisher-rules/generated/rules/kingfisher.yml": "e75e2210c669aaa7d2d518374f58d0e93444510e6ebf93321ffcc6951e727457",
     "crates/kingfisher-rules/generated/rules/veles.yml": "632fc6d73d9f4caa13eefc2efdd952fe975a288d968c9799e14500fded169756",
     "crates/kingfisher-rules/generated/upstream-sources.json.gz": "f4f881f1680bffd9836767ebefcd8f6937bcf71d19b91b105602cd8bd03c060b",
     "crates/kingfisher-scanner/LICENSE": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
-    "docs-site/docs/rules/builtin-rules.md": "cfa87b254869f17534be3cd91336e25ffaf9120a921a271cfe3580fe9d961e4a"
+    "docs-site/docs/rules/builtin-rules.md": "b36121ed802f02b302d0e0a0825d72321bdf3ae14364e2f1a48022dd47108d57"
   },
   "betterleaks": {
     "license": "MIT",
@@ -21,17 +21,17 @@
   },
   "bundle_format": "gzip / KFRULES v1 / generated YAML",
   "generator_input_sha256": {
-    "Cargo.lock": "29c33ee249631d49e6684347f1327538b41666da01d8a8755083e02489a72df7",
-    "Cargo.toml": "1aa424cd1f41fac055daf81251ce63aa47ec5b17fe1360a3338c03bab104c029",
+    "Cargo.lock": "dec82a751ce89652c3c0e3f80d7256859e141e31849fd0c3ddfe21efcb6158cf",
+    "Cargo.toml": "d195bc5e642df41502fc8cbabb6de958a4015b81cf6de7560b271350196523be",
     "LICENSE": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
-    "crates/kingfisher-rules/Cargo.toml": "0ba5a157e04d0c0fb881fd04fe2e563a146e4ea164728e70a2e27e4ce846f50b",
-    "crates/kingfisher-rules/build_support/betterleaks.rs": "403622abf810d6cd5f9a479a701e8c9b8fb0d4c2894b2f4a8e4b1ebf1f7bb414",
+    "crates/kingfisher-rules/Cargo.toml": "9c2557c75a86d36b69b5a0a0549147d3dd0199a16d0e8299cb30d09652975ce2",
+    "crates/kingfisher-rules/build_support/betterleaks.rs": "5681eba7cf1a30ca7a1ec9bbf30809c909e5844c10ad650e962be33fe7dd1dfb",
     "crates/kingfisher-rules/build_support/builtin_docs.rs": "5fa29639a6443a7aea20db09671baf8c947c0e8ee9a164ba7ab46d6b5f088b25",
     "crates/kingfisher-rules/build_support/imported_capabilities.rs": "c89ee82020d1d98cdd4bb346799c737ed54295409de49c925a9994a1da2bf854",
     "crates/kingfisher-rules/build_support/veles.rs": "d60c5d3da89bdb795f670e6d12c302102f14750e8f2b432db6cd0b6cbc3c5880",
     "crates/kingfisher-rules/data/betterleaks-words.md": "49b96d6d46b80a600a8e7f344400f066be43d2dac952ed21897f67110640f5c1",
-    "crates/kingfisher-rules/data/imported-rules-capabilities.yml": "61c64c25890aadea832ba20338bfc0e60d74663d74c3f7f57164ab392f330bef",
-    "crates/kingfisher-rules/data/kingfisher-rules.md": "1177aa1a4adf71759b2152c80377d786e0cbbf4f58e9dd9f2b463104b4eb31b9",
+    "crates/kingfisher-rules/data/imported-rules-capabilities.yml": "67e89f3c5f94bfd23446cc1d49d3a5aa8191381a687bc4939745d3f211152c61",
+    "crates/kingfisher-rules/data/kingfisher-rules.md": "7ffd8806aeb174278fd14087898f09c09f0f86f789f6cf98b8623bf7f7174110",
     "crates/kingfisher-rules/data/kingfisher-rules.yml": "12a5b53962fdcb8572a22d9b320531d6b7cec604f9c54cdca5239edcd833d192",
     "crates/kingfisher-rules/data/veles-rules.yml": "5d3d57be154c91f2e1fbba01725c2596fea5571b7ebac853c1e08bae9d2aedaf",
     "tools/rule-bundle/Cargo.toml": "a812aa27c21115b5b5c73aa06dc77b86619f20bb5100cacfae583654b956ee9a",
@@ -1411,6 +1411,14 @@
         "https://raw.githubusercontent.com/betterleaks/betterleaks/8f376ff9c31ed5309ac448fe601c5dd21b376155/config/betterleaks.toml"
       ],
       "upstream_rule_id": "gcp-service-account"
+    },
+    "betterleaks.generic-api-key": {
+      "generated_file": "rules/betterleaks.yml",
+      "provider": "betterleaks",
+      "sources": [
+        "https://raw.githubusercontent.com/betterleaks/betterleaks/8f376ff9c31ed5309ac448fe601c5dd21b376155/config/betterleaks.toml"
+      ],
+      "upstream_rule_id": "generic-api-key"
     },
     "betterleaks.generic-credential-uri": {
       "generated_file": "rules/betterleaks.yml",

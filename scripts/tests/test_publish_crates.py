@@ -6,6 +6,7 @@ import shlex
 from pathlib import Path
 import tarfile
 import tempfile
+import tomllib
 import unittest
 from unittest.mock import patch
 import urllib.error
@@ -32,6 +33,16 @@ def crate(name="kingfisher-core", version="1.0.0", **changes):
 
 
 class PublishTests(unittest.TestCase):
+    def test_binary_root_documents_are_anchored_to_avoid_sdk_duplicates(self):
+        manifest = tomllib.loads((publisher.ROOT / "Cargo.toml").read_text(encoding="utf-8"))
+        includes = manifest["package"]["include"]
+        # Cargo treats an unanchored basename as a match at any depth, including
+        # javascript/THIRD_PARTY_NOTICES as well as the canonical root copy.
+        for name in ("LICENSE", "NOTICE", "THIRD_PARTY_NOTICES", "README.md", "Cargo.lock"):
+            with self.subTest(name=name):
+                self.assertIn(f"/{name}", includes)
+                self.assertNotIn(name, includes)
+
     def test_release_preflight_packages_only_registry_release_crates(self):
         workflow = (publisher.ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         commands = [shlex.split(line.strip()) for line in workflow.splitlines()

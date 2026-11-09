@@ -5,7 +5,7 @@ follows semantic versioning; breaking changes require a new major version.
 
 ```toml
 [dependencies]
-kingfisher-scanner = "3.0.2"
+kingfisher-scanner = "3.0.3"
 anyhow = "1"
 ```
 
@@ -100,6 +100,18 @@ assert_eq!(findings[0].secret, "[REDACTED]");
 # Ok::<(), anyhow::Error>(())
 ```
 
+`get_builtin_rules(None)` uses minimum medium confidence, excluding the static-low
+`betterleaks.generic-api-key` before native compilation. Use
+`get_builtin_rules(Some(Confidence::Low))` to opt in. A scanner uses the rules supplied to its
+database; it does not impose an additional confidence threshold.
+`betterleaks.generic-credential-uri` stays medium; `generic-password` and `generic-username`
+remain excluded from the catalog. Generic rules are not all low confidence.
+
+Findings use each rule's configured confidence; filters cannot upgrade or downgrade it,
+and there are no runtime confidence variants. Existing custom YAML/TOML files still load
+without edits. Legacy one-string `setConfidence(...)` and `filter.setConfidence(...)` calls
+are inert value passthroughs; rejection filters and credential-association helpers remain active.
+
 Raw and Base64 matches enforce `pattern_requirements` before component resolution:
 character minimums, ignored substrings and Liquid checksum templates, including
 `luhn_valid` and `iban_valid`. See the [rule guide](../../docs/RULES.md#character-requirements).
@@ -190,7 +202,7 @@ scratch allocation or reentrant borrowing errors; prefer `try_with`.
 Validation is disabled by default. Enable all supported validators and revocation:
 
 ```toml
-kingfisher-scanner = { version = "3.0.2", features = ["validation"] }
+kingfisher-scanner = { version = "3.0.3", features = ["validation"] }
 ```
 
 `validation` enables every supported family and its dependencies. Legacy

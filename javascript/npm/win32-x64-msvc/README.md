@@ -11,4 +11,7 @@ Install or repair the runtime from
 if addon loading reports a missing runtime DLL. No compiler is needed at install time.
 
 See the [SDK guide](https://github.com/mongodb/kingfisher/blob/main/docs/JAVASCRIPT.md).
-All required license and attribution files are included alongside the native addon.
+Published release packages include `LICENSE*`, `NOTICE*`, and
+`THIRD_PARTY_NOTICES` alongside the addon. Release staging copies and verifies
+these canonical SDK notices; the private source-tree platform directories
+are not publishable packages.

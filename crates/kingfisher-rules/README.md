@@ -8,7 +8,7 @@ secrets are detected without changing the Rust API.
 
 ```toml
 [dependencies]
-kingfisher-rules = "3.1.0"
+kingfisher-rules = "3.1.1"
 anyhow = "1"
 ```
 
@@ -90,11 +90,26 @@ writing documentation. Betterleaks takes precedence when its catalog covers a Ve
 The existing importers apply Kingfisher matching, filtering, validation, access-map, and
 revocation behavior to the upstream candidates.
 
-The CLI, `get_builtin_rules(None)`, and Python SDK's `Rules()` load five medium-confidence,
-detection-only `kingfisher.connection-string.password.*` rules by default. They restore
-connection-string and JDBC password coverage lost in 2.x; broad Betterleaks `generic-api-key`,
-`generic-password`, and `generic-username` rules remain excluded. See the
+The CLI, `get_builtin_rules(None)`, Python SDK's `Rules()`, and Node SDK's `Rules.load()`
+load five medium-confidence, detection-only `kingfisher.connection-string.password.*` rules
+by default. They restore connection-string and JDBC password coverage lost in 2.x. See the
 [exception rationale and coverage](data/kingfisher-rules.md).
+
+The complete bundled catalog contains 503 rules. Betterleaks `generic-api-key` is bundled at
+static low confidence, with its rejection filters retained and confidence-only branch removed
+during import. Default minimum medium confidence excludes it before native compilation,
+selecting 502 built-ins. Opt in with `get_builtin_rules(Some(Confidence::Low))`, CLI
+`--confidence low`, Python `Rules(confidence="low")`, or Node
+`Rules.load({ confidence: 'low' })`. `generic-credential-uri` stays medium; `generic-password`
+and `generic-username` remain excluded from the catalog. Generic rules are not all low confidence.
+
+All rules use configured confidence for selection and reporting; filters cannot change it,
+and there are no runtime confidence variants. Custom YAML/TOML files still load without edits.
+Legacy one-string `setConfidence(...)` and `filter.setConfidence(...)` calls are inert value
+passthroughs, preserving rejection expressions and credential-association helpers without
+promoting or demoting findings.
+The published `BetterleaksFilterOutcome::confidence` field is retained for source compatibility
+and is always `None`.
 
 `generated/provenance.json` records upstream revisions, source hashes, generated rule IDs,
 generator input hashes, first-party rule origins, and artifact hashes.

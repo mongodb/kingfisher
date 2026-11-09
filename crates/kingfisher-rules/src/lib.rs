@@ -14,7 +14,13 @@ pub mod defaults;
 mod imported_capabilities;
 pub mod legacy_aliases;
 pub mod liquid_filters;
+mod native_pattern_variants;
 mod private_key;
+#[cfg(feature = "__scanner-internals")]
+#[doc(hidden)]
+pub mod replay_regex;
+#[cfg(feature = "__scanner-internals")]
+mod replay_starts;
 pub mod rule;
 pub mod rules;
 pub mod rules_database;

@@ -12,7 +12,7 @@ When Betterleaks provides equivalent detection and live validation, its detector
 and the redundant Veles detector can be retired after compatibility review. Detection-only
 overlap does not replace Veles validation or operational capabilities.
 
-The current built-in catalog contains **502 rules**, including five first-party connection-string
+The current built-in catalog contains **503 rules**, including five first-party connection-string
 rules, selected Veles rules, and hidden component/helper rules. See the
 [built-in rules listing](../docs-site/docs/rules/builtin-rules.md) for the per-rule catalog and
 capability counts.
@@ -115,12 +115,40 @@ Veles support is built-in-only. `crates/kingfisher-rules/data/veles-rules.yml` p
 OSV-SCALIBR commit and selects upstream Veles plugin IDs that have explicit import adapters;
 `--rules-path` does not accept Veles source or configuration.
 
+## Configured confidence
+
+Rules use their configured `confidence` (`low`, `medium`, or `high`) for selection and reporting.
+The CLI's `--confidence` and SDK confidence options select those static levels before native
+regex compilation. There are no dynamic confidence upgrades, demotions, or runtime confidence
+variants; filters cannot change individual findings' confidence. After `--exclude-rule`
+exclusions, an explicit `--rule` selector whose remaining matches are all below that minimum
+produces an error; lower `--confidence` instead of expecting the selector to override it.
+This also applies when combining an explicit selector with `--rule all`. Rule inspection
+via `rules list` and `rules check` defaults to low confidence (all levels) and accepts
+`--confidence` to narrow inspection.
+Selectors whose matches are all explicitly excluded are ignored.
+
+Existing custom Kingfisher YAML and Betterleaks TOML files still load without edits. Legacy
+one-string-argument `setConfidence(...)` and `filter.setConfidence(...)` calls return that string
+for expression compatibility but do not change confidence. The argument is not interpreted or
+validated as a confidence level, so calls such as `setConfidence("bogus")` remain loadable.
+Rejection filters and association helpers remain active. Built-in imports omit the unused
+confidence-only computations.
+
 ## Connection-string password rules
 
 Five [embedded rules](../crates/kingfisher-rules/data/kingfisher-rules.yml) detect database
 passwords at medium confidence. They load by default in the CLI, Rust's
-`get_builtin_rules(None)`, and Python's `Rules()`. Broad Betterleaks `generic-api-key`,
-`generic-password`, and `generic-username` rules remain excluded.
+`get_builtin_rules(None)`, and Python's `Rules()`.
+
+The catalog also includes `betterleaks.generic-api-key` at static low confidence, without
+its upstream confidence-upgrade computation and with all rejection filters preserved.
+The CLI, Python, and Node default minimum of medium excludes it before native regex
+compilation, selecting 502 of the 503 built-ins. Opt in with `--confidence low`, Python's
+`Rules(confidence="low")`, or Node's `Rules.load({ confidence: "low" })`.
+`betterleaks.generic-credential-uri` stays medium; `generic-password` and `generic-username`
+remain excluded from the catalog. Custom YAML/TOML files remain loadable; the
+[configured-confidence policy](#configured-confidence) applies to them too.
 
 Their IDs use the `kingfisher.connection-string.password.` prefix with suffixes
 `unquoted`, `double-quoted`, `single-quoted`, `odbc-braced`, and `jdbc-query`:

@@ -1,4 +1,4 @@
-"""Built-in connection-string rules cover issue #558 without generic detection."""
+"""Connection-string coverage, static confidence, and legacy filter compatibility."""
 import base64
 import json
 from pathlib import Path
@@ -134,9 +134,89 @@ def test_same_line_passwords(connection_rules, scanner_type, encoded, context,
         assert finding.location["end_offset"] == end
 
 
-def test_example_preserves_default_exclusions_and_redacts():
+@pytest.mark.parametrize("scanner_type", [Scanner, DetectionScanner])
+def test_generic_api_key_uses_static_low(connection_rules, scanner_type):
+    rule_id = "betterleaks.generic-api-key"
+    assert rule_id not in {rule["id"] for rule in connection_rules.metadata()}
+    rules = Rules(confidence="low", cache=False)
+    detail = rules.detail(rule_id)
+    assert detail["confidence"] == "low"
+    assert "setConfidence" not in json.dumps(detail["betterleaks_filter"])
+    uri_detail = rules.detail("betterleaks.generic-credential-uri")
+    assert uri_detail["confidence"] == "medium"
+    assert "setConfidence" not in json.dumps(uri_detail["betterleaks_filter"])
+    scanner = scanner_type(rules)
+    secret = "qZ7mR9vN2xP5kL8sT4wY"
+    source = f'é😊\napi_key = "{secret}"'
+    finding, = (finding for finding in scanner.scan(source)
+                if finding.rule_id == rule_id)
+    assert finding.secret == secret and finding.confidence == "low"
+    start = len(source[:source.index(secret)].encode())
+    assert finding.location["start_offset"] == start
+    assert finding.location["end_offset"] == start + len(secret)
+    assert not any(finding.rule_id == rule_id for finding in
+                   scanner.scan('api_key = "this-is-an-example-api-key"'))
+
+
+@pytest.mark.parametrize("scanner_type", [Scanner, DetectionScanner])
+@pytest.mark.parametrize("file_format", ["yml", "toml"])
+@pytest.mark.parametrize("helper", ["setConfidence", "filter.setConfidence"])
+def test_legacy_confidence_helpers_preserve_static_rules(tmp_path, scanner_type, file_format, helper):
+    definitions = []
+    toml = []
+    tokens = {}
+    rejected = []
+    for configured, requested in (("low", "high"), ("high", "low")):
+        rule_id = f"acme.static-{configured}"
+        token = f"kf_{configured}_a9B2c7D4e1F8g3H6"
+        reject = f"kf_{configured}_REJECTa9B2c7D4e1"
+        tokens[configured] = token
+        rejected.append(reject)
+        callee = {"kind": "identifier", "value": "setConfidence"}
+        if helper.startswith("filter."):
+            callee = {"kind": "member", "node": {"kind": "identifier", "value": "filter"},
+                      "property": {"kind": "string", "value": "setConfidence"}, "method": True}
+        expression = {
+            "kind": "binary", "operator": "||",
+            "left": {"kind": "binary", "operator": "!=",
+                     "left": {"kind": "call", "callee": callee,
+                              "arguments": [{"kind": "string", "value": requested}]},
+                     "right": {"kind": "string", "value": requested}},
+            "right": {"kind": "binary", "operator": "==",
+                      "left": {"kind": "member",
+                               "node": {"kind": "identifier", "value": "finding"},
+                               "property": {"kind": "string", "value": "secret"}},
+                      "right": {"kind": "string", "value": reject}},
+        }
+        pattern = f"(kf_{configured}_[A-Za-z0-9]{{16}})"
+        definitions.append({"id": rule_id, "name": rule_id, "pattern": pattern,
+                            "confidence": configured, "min_entropy": 0,
+                            "betterleaks_filter": expression})
+        filter_source = f'{helper}("{requested}") != "{requested}" || finding["secret"] == "{reject}"'
+        toml.append(f'[[rules]]\nid = "{rule_id}"\ndescription = "{rule_id}"\n'
+                    f"regex = '{pattern}'\nconfidence = \"{configured}\"\n"
+                    f"filter = '{filter_source}'\n")
+    path = tmp_path / f"static-confidence.{file_format}"
+    path.write_text(json.dumps({"rules": definitions}) if file_format == "yml" else "\n".join(toml),
+                    encoding="utf-8")
+    prefix = "custom." if file_format == "toml" else ""
+    for minimum in ("low", "medium", "high"):
+        rules = Rules([path], builtins=False, confidence=minimum, cache=False)
+        expected = {f"{prefix}acme.static-high": "high"}
+        if minimum == "low":
+            expected[f"{prefix}acme.static-low"] = "low"
+        assert {rule["id"] for rule in rules.metadata()} == set(expected)
+        scanner = scanner_type(rules)
+        findings = scanner.scan("\n".join(tokens.values()))
+        assert {finding.rule_id: finding.confidence for finding in findings} == expected
+        assert {finding.secret for finding in findings} == {tokens[level] for level in expected.values()}
+        assert not scanner.scan("\n".join(rejected))
+
+
+def test_example_preserves_catalog_policy_and_redacts():
     ids = {rule["id"] for rule in Rules(confidence="low", cache=False).metadata()}
-    for name in ("generic-api-key", "generic-password", "generic-username"):
+    assert "betterleaks.generic-api-key" in ids
+    for name in ("generic-password", "generic-username"):
         assert f"betterleaks.{name}" not in ids
     assert {f"{RULE_PREFIX}{suffix}" for suffix in
             ("unquoted", "double-quoted", "single-quoted", "odbc-braced", "jdbc-query")} <= ids

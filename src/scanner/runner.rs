@@ -199,7 +199,8 @@ async fn run_async_scan_inner(
     let _validation_cache_lifetime =
         if args.no_validate { None } else { Some(ValidationCacheLifetime::begin().await) };
 
-    let _wizard_progress = crate::scan_progress::start();
+    let progress_enabled = global_args.use_progress();
+    let _progress = crate::scan_progress::start(progress_enabled, args.include_hidden_findings);
 
     // ── Phase 1: Input validation and environment setup ──────────────────
     validate_inputs(args)?;
@@ -216,7 +217,6 @@ async fn run_async_scan_inner(
     )?));
 
     trace!("Args:\n{global_args:#?}\n{args:#?}");
-    let progress_enabled = global_args.use_progress();
     initialize_environment(progress_enabled, args.num_jobs)?;
 
     set_redaction_enabled(args.redact);
@@ -279,7 +279,6 @@ async fn run_async_scan_inner(
         matcher_stats.as_ref(),
         enable_profiling,
         Arc::clone(&shared_profiler),
-        progress_enabled,
     )
     .await?;
 
@@ -291,7 +290,6 @@ async fn run_async_scan_inner(
         matcher_stats.as_ref(),
         enable_profiling,
         Arc::clone(&shared_profiler),
-        progress_enabled,
     )
     .await?;
 
@@ -302,7 +300,6 @@ async fn run_async_scan_inner(
         matcher_stats.as_ref(),
         enable_profiling,
         Arc::clone(&shared_profiler),
-        progress_enabled,
     )
     .await?;
 
@@ -314,7 +311,6 @@ async fn run_async_scan_inner(
         matcher_stats.as_ref(),
         enable_profiling,
         Arc::clone(&shared_profiler),
-        progress_enabled,
     )
     .await?;
 
@@ -947,6 +943,7 @@ async fn run_sequential_scan(
         update_status,
     );
     crate::scan_progress::phase("Writing report", 0, crate::scan_progress::PhaseKind::Other);
+    crate::scan_progress::finish_terminal();
     crate::reporter::run(global_args, Arc::clone(datastore), args, Some(audit_context))
         .context("Failed to run report command")?;
     print_scan_summary(
@@ -1340,24 +1337,20 @@ async fn run_parallel_scan(
                                 )
                                 .context("Failed to run report command")?;
                                 if !buf.is_empty() {
-                                    use std::io::Write;
-                                    let mut stdout = std::io::stdout().lock();
-                                    // Treat a closed downstream pipe (e.g.
-                                    // `kingfisher scan ... | head`) as a normal
-                                    // early exit, matching `summary.rs::safe_println!`.
-                                    // Any other I/O error is a real failure.
-                                    if let Err(err) = stdout.write_all(&buf) {
-                                        if err.kind() == std::io::ErrorKind::BrokenPipe {
-                                            std::process::exit(0);
+                                    crate::scan_progress::suspend(|| -> Result<()> {
+                                        use std::io::Write;
+                                        let mut stdout = std::io::stdout().lock();
+                                        // A closed downstream pipe is a normal early exit.
+                                        if let Err(err) =
+                                            stdout.write_all(&buf).and_then(|_| stdout.flush())
+                                        {
+                                            if err.kind() == std::io::ErrorKind::BrokenPipe {
+                                                std::process::exit(0);
+                                            }
+                                            return Err(err.into());
                                         }
-                                        return Err(err.into());
-                                    }
-                                    if let Err(err) = stdout.flush() {
-                                        if err.kind() == std::io::ErrorKind::BrokenPipe {
-                                            std::process::exit(0);
-                                        }
-                                        return Err(err.into());
-                                    }
+                                        Ok(())
+                                    })?;
                                 }
                             }
 
@@ -1452,9 +1445,11 @@ async fn run_parallel_scan(
             update_status,
         );
         crate::scan_progress::phase("Writing report", 0, crate::scan_progress::PhaseKind::Other);
+        crate::scan_progress::finish_terminal();
         crate::reporter::run(global_args, Arc::clone(datastore), args, Some(audit_context))
             .context("Failed to run report command")?;
     } else if ran_repo_scan.load(Ordering::Relaxed) {
+        crate::scan_progress::finish_terminal();
         let audit_only =
             Arc::new(Mutex::new(FindingsStore::new(datastore.lock().unwrap().clone_root())));
         audit_only.lock().unwrap().set_scan_audit(repository_audit);
@@ -1500,6 +1495,7 @@ async fn run_parallel_scan(
             update_status,
         );
         crate::scan_progress::phase("Writing report", 0, crate::scan_progress::PhaseKind::Other);
+        crate::scan_progress::finish_terminal();
         crate::reporter::run(global_args, Arc::clone(datastore), args, Some(audit_context))
             .context("Failed to run report command")?;
     }
@@ -1602,8 +1598,11 @@ fn maybe_hint_access_map(datastore: &Arc<Mutex<FindingsStore>>, args: &scan::Sca
 }
 
 fn initialize_environment(use_progress: bool, num_jobs: usize) -> Result<()> {
-    let init_progress =
-        if use_progress { ProgressBar::new_spinner() } else { ProgressBar::hidden() };
+    let init_progress = if use_progress && !crate::scan_progress::enabled() {
+        ProgressBar::new_spinner()
+    } else {
+        ProgressBar::hidden()
+    };
     init_progress.set_message("Initializing thread pool...");
     let num_threads = num_jobs.max(1);
     // Attempt to initialize the global thread pool only if it hasn't been
