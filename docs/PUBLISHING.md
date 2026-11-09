@@ -29,7 +29,7 @@ The manifests currently prepare these releases; a Git tag does not override Carg
 
 The Python SDK (`kingfisher-secret-scanner`) is independently versioned at
 `1.6.3` in `crates/kingfisher-python/Cargo.toml`; Python modules share that version.
-The stable npm SDK uses **1.0.0** in `crates/kingfisher-node/Cargo.toml` and
+The stable npm SDK uses **1.0.1** in `crates/kingfisher-node/Cargo.toml` and
 `javascript/package.json`, with six same-version native packages. Its `npm-v*`
 release tags do not publish the CLI or Python SDK.
 
@@ -353,7 +353,7 @@ an authorized maintainer; committing workflow YAML does not configure them.
    2FA**, and confirm write access to all seven packages below. npm trust requires an
    existing package entry. Handle absent names in a separately authorized npm
    ownership/bootstrap setup, not an SDK release. Any dummy bootstrap stages must
-   remain unapproved and must not publish SDK `1.0.0`.
+   remain unapproved and must not publish SDK `1.0.0` or any later SDK release.
    **Never approve the dummy bootstrap stages**; skip names already owned.
 5. For **each package**, open npmjs.com → package → **Settings → Trusted publishing**,
    select **GitHub Actions**, and save these exact values:
@@ -392,10 +392,14 @@ and npm **11.21.1**, and grants `id-token: write` only to that job. Use those
 exact publisher pins for local publishing setup as well; consumer runtime support
 is separate. Self-hosted publishers are unsupported.
 
-For the initial SDK release, use a clean, current, reviewed upstream `main` checkout.
-Confirm `origin` points to `mongodb/kingfisher`, not a private development remote,
-the SDK version is `1.0.0`, and `npm-v1.0.0` does not already exist before explicitly
-authorizing publication:
+For SDK `1.0.1`, use a clean, current, reviewed upstream `main` checkout with the
+version bump and CI fixes merged. Confirm `origin` points to `mongodb/kingfisher`,
+not a private development remote, the SDK version is `1.0.1`, and `npm-v1.0.1`
+does not already exist before explicitly authorizing publication. Keep the earlier
+`npm-v1.0.0` tag unchanged: rerunning that workflow uses its original commit, not
+updated `main`. CI or source fixes require a new SDK version and release tag.
+
+After separate authorization to create and push the new tag, run:
 
 ```sh
 make release npm

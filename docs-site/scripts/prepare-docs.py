@@ -149,7 +149,7 @@ DOC_MAP = {
     "JAVASCRIPT.md": (
         "reference/javascript-bindings.md",
         "JavaScript and TypeScript SDK",
-        "Use Kingfisher's stable Node SDK (1.0.0): native Node-API detection, validation, revocation and VS Code workspace extensions.",
+        "Use Kingfisher's stable Node SDK (1.0.1): native Node-API detection, validation, revocation and VS Code workspace extensions.",
     ),
     "COMPARISON.md": (
         "reference/comparison.md",

@@ -26,7 +26,7 @@
 Git history with the same Rust engine and rule catalog used by Kingfisher's CLI
 and Python SDK—directly inside your Node.js process.
 
-**Stable SDK: 1.0.0.** No CLI subprocess, Python interpreter, or separate Kingfisher
+**Stable SDK: 1.0.1.** No CLI subprocess, Python interpreter, or separate Kingfisher
 installation. ESM, CommonJS and TypeScript declarations are included.
 
 ## Why Kingfisher?

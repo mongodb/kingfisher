@@ -11,9 +11,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class NodeSdkDocsTests(unittest.TestCase):
-    def test_current_npm_sdk_is_documented_as_1_0_stable(self):
+    def test_current_npm_sdk_is_documented_as_1_0_1_stable(self):
+        # The root README ships in the independently versioned CLI crate. SDK-only
+        # releases update the canonical SDK guides without rewriting that package.
         for name in (
-            "README.md", "CONTRIBUTING.md", "javascript/README.md",
+            "CONTRIBUTING.md", "javascript/README.md",
             "docs/JAVASCRIPT.md", "docs/ARCHITECTURE.md",
             "docs/DEPLOYMENT.md", "docs/PROJECT.md",
             "llms.txt", "docs-site/overrides/home.html",
@@ -21,14 +23,22 @@ class NodeSdkDocsTests(unittest.TestCase):
         ):
             with self.subTest(document=name):
                 text = (ROOT / name).read_text(encoding="utf-8")
-                self.assertIn("1.0.0", text)
+                self.assertIn("1.0.1", text)
                 self.assertIn("stable", text.lower())
                 self.assertNotIn("0.1.0", text)
                 self.assertNotRegex(
                     text.lower(), r"unpublished|not[- ](?:yet[- ])?published|not yet on npm"
                 )
         manifest = json.loads((ROOT / "javascript/package.json").read_text())
-        self.assertEqual(manifest["version"], "1.0.0")
+        self.assertEqual(manifest["version"], "1.0.1")
+
+    def test_workbench_dependency_matches_current_sdk_version(self):
+        sdk = json.loads((ROOT / "javascript/package.json").read_text())
+        directory = ROOT / "javascript/examples/kingfisher-workbench"
+        example = json.loads((directory / "package.json").read_text())
+        self.assertEqual(example["dependencies"][sdk["name"]], sdk["version"])
+        self.assertIn(f'"{sdk["name"]}": "{sdk["version"]}"',
+                      (directory / "README.md").read_text(encoding="utf-8"))
 
     def test_v2_17_release_retains_original_npm_preview_history(self):
         # Stable SDK docs must not rewrite the earlier CLI release's preview entry.
@@ -68,7 +78,8 @@ class NodeSdkDocsTests(unittest.TestCase):
         normalized = " ".join(setup.split())
         for required in ("`mongodb`", "`kingfisher`", "`node-sdk.yml`", "`npm`",
                          "Allow npm publish", "48 hours", "id-token: write",
-                         "npm-v1.0.0", "same tested artifact", "disallow tokens",
+                         "npm-v1.0.0", "npm-v1.0.1", "tag unchanged", "original commit",
+                         "same tested artifact", "disallow tokens",
                          "account-level 2FA", "Prevent self-review", "unapproved",
                          "Never approve", "npm audit signatures", "private development remote",
                          "GitHub-hosted runner", "Do not add an npm write-token secret"):

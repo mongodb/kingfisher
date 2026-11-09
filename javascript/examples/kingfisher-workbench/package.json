@@ -17,6 +17,6 @@
     "node": "^22.13.0 || ^24.0.0 || ^26.0.0"
   },
   "dependencies": {
-    "kingfisher-secret-scanner": "1.0.0"
+    "kingfisher-secret-scanner": "1.0.1"
   }
 }
