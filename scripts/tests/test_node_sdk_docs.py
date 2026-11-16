@@ -11,11 +11,17 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class NodeSdkDocsTests(unittest.TestCase):
-    def test_current_npm_sdk_is_documented_as_1_0_1_stable(self):
+    def test_current_npm_sdk_is_documented_as_stable(self):
+        manifest = json.loads((ROOT / "javascript/package.json").read_text(encoding="utf-8"))
+        version = manifest["version"]
+        self.assertRegex(version, r"^\d+\.\d+\.\d+$")
+        self.assertIn(f"independent stable **{version}** release",
+                      (ROOT / "AGENTS.md").read_text(encoding="utf-8"))
         # The root README ships in the independently versioned CLI crate. SDK-only
         # releases update the canonical SDK guides without rewriting that package.
         for name in (
-            "CONTRIBUTING.md", "javascript/README.md",
+            "CONTRIBUTING.md", "javascript/AGENTS.md", "javascript/README.md",
+            "javascript/examples/README.md", "javascript/examples/kingfisher-workbench/README.md",
             "docs/JAVASCRIPT.md", "docs/ARCHITECTURE.md",
             "docs/DEPLOYMENT.md", "docs/PROJECT.md",
             "llms.txt", "docs-site/overrides/home.html",
@@ -23,14 +29,12 @@ class NodeSdkDocsTests(unittest.TestCase):
         ):
             with self.subTest(document=name):
                 text = (ROOT / name).read_text(encoding="utf-8")
-                self.assertIn("1.0.1", text)
+                self.assertIn(version, text)
                 self.assertIn("stable", text.lower())
                 self.assertNotIn("0.1.0", text)
                 self.assertNotRegex(
                     text.lower(), r"unpublished|not[- ](?:yet[- ])?published|not yet on npm"
                 )
-        manifest = json.loads((ROOT / "javascript/package.json").read_text())
-        self.assertEqual(manifest["version"], "1.0.1")
 
     def test_workbench_dependency_matches_current_sdk_version(self):
         sdk = json.loads((ROOT / "javascript/package.json").read_text())
@@ -76,13 +80,20 @@ class NodeSdkDocsTests(unittest.TestCase):
         for name in [manifest["name"], *manifest["optionalDependencies"]]:
             self.assertIn(f"`{name}`", setup)
         normalized = " ".join(setup.split())
-        for required in ("`mongodb`", "`kingfisher`", "`node-sdk.yml`", "`npm`",
+        for required in ("`mongodb`", "`kingfisher`", "`release.yml`", "`node-sdk.yml`", "`npm`",
                          "Allow npm publish", "48 hours", "id-token: write",
-                         "npm-v1.0.0", "npm-v1.0.1", "tag unchanged", "original commit",
-                         "same tested artifact", "disallow tokens",
+                         "npm-v1.0.0", "npm-v1.0.1", "tags unchanged", "original commit",
+                         "same producer artifacts",
                          "account-level 2FA", "Prevent self-review", "unapproved",
                          "Never approve", "npm audit signatures", "private development remote",
-                         "GitHub-hosted runner", "Do not add an npm write-token secret"):
+                         "GitHub-hosted runner", "Do not add an npm write-token secret",
+                         "**An npm release tag is required**", "tag pattern `npm-v*` only",
+                         "No CI job creates or moves tags", "No existing npmjs account",
+                         "original top-level `node-sdk.yml`", "exact returned run ID",
+                         "cross-run by validated artifact ID", "again after its protected approval",
+                         "Failed, cancelled, or timed-out parents reject stale children",
+                         "read-only preflight", "skips upload, but its full native and sealed-tarball",
+                         "test matrix still gates the other coordinated releases"):
             self.assertIn(required, normalized)
         self.assertNotIn("javascript/PUBLISHING.md", guide)
 

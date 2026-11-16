@@ -628,6 +628,23 @@ impl AccessMapCollector {
     }
 }
 
+/// Groups matches that share a validation cache key. Each group yields one
+/// representative to validate, its duplicates, and how many of the group's
+/// occurrences are reportable (visible), which is what the progress counter counts.
+fn group_reportable_for_validation<T>(
+    items: impl IntoIterator<Item = (T, bool)>,
+    key: impl Fn(&T) -> String,
+    reportable: impl Fn(bool) -> bool,
+) -> Vec<(T, Vec<T>, u64)> {
+    let mut by_key: FxHashMap<String, (Vec<T>, u64)> = FxHashMap::default();
+    for (item, visible) in items {
+        let (group, count) = by_key.entry(key(&item)).or_default();
+        group.push(item);
+        *count += u64::from(reportable(visible));
+    }
+    by_key.into_values().map(|(mut group, checked)| (group.remove(0), group, checked)).collect()
+}
+
 #[expect(clippy::too_many_arguments)]
 pub async fn run_secret_validation(
     datastore: Arc<Mutex<FindingsStore>>,
@@ -930,24 +947,17 @@ pub async fn run_secret_validation(
                         let dep_vars = Arc::new(dep_vars);
                         let missing_deps = Arc::new(missing_deps);
 
-                        let mut by_key: FxHashMap<String, (Vec<OwnedBlobMatch>, u64)> =
-                            FxHashMap::default();
-                        for (om, message) in owned.into_iter().zip(matches_for_blob) {
-                            // Baseline suppression changes the stored occurrence's visibility,
-                            // not the rule's. Keep its reportable count through grouping and
-                            // drop the Arc clones before starting validation.
-                            let checked =
-                                u64::from(crate::scan_progress::reportable(message.2.visible));
-                            let (group, count) = by_key
-                                .entry(build_cache_key_with_policy(&om, clients.http_fallbacks))
-                                .or_default();
-                            group.push(om);
-                            *count += checked;
-                        }
-                        let reps: Vec<_> = by_key
-                            .into_values()
-                            .map(|(mut v, checked)| (v.remove(0), v, checked))
-                            .collect();
+                        // Baseline suppression changes the stored occurrence's visibility,
+                        // not the rule's. Keep its reportable count through grouping and
+                        // drop the Arc clones before starting validation.
+                        let visibility: Vec<bool> =
+                            matches_for_blob.iter().map(|message| message.2.visible).collect();
+                        drop(matches_for_blob);
+                        let reps = group_reportable_for_validation(
+                            owned.into_iter().zip(visibility),
+                            |om| build_cache_key_with_policy(om, clients.http_fallbacks),
+                            crate::scan_progress::reportable,
+                        );
 
                         let validated: Vec<_> =
                             stream::iter(reps.into_iter().map(|(mut rep, mut dups, checked)| {
@@ -2846,5 +2856,35 @@ mod tests {
         assert!(cached_body.contains("Validation panicked for rule test.panic"));
         // The cached body must not retain the raw panic payload either.
         assert!(!cached_body.contains("validator blew up"));
+    }
+}
+
+#[cfg(test)]
+mod grouping_tests {
+    use super::group_reportable_for_validation;
+
+    #[test]
+    fn suppressed_duplicates_share_validation_but_do_not_advance_progress() {
+        // Two occurrences of one secret (one baseline-suppressed) and one other secret.
+        let items = [("secret-a", true), ("secret-a", false), ("secret-b", true)];
+        let mut groups =
+            group_reportable_for_validation(items, |item| item.to_string(), |visible| visible);
+        groups.sort_by_key(|(rep, _, _)| *rep);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0], ("secret-a", vec!["secret-a"], 1));
+        assert_eq!(groups[1], ("secret-b", vec![], 1));
+
+        // When hidden findings are reported, the suppressed occurrence counts too.
+        let groups = group_reportable_for_validation(
+            [("secret-a", true), ("secret-a", false)],
+            |item| item.to_string(),
+            |_| true,
+        );
+        assert_eq!(groups, vec![("secret-a", vec!["secret-a"], 2)]);
+
+        // A group made only of suppressed occurrences still validates but adds nothing.
+        let groups =
+            group_reportable_for_validation([("hidden", false)], |item| item.to_string(), |v| v);
+        assert_eq!(groups, vec![("hidden", vec![], 0)]);
     }
 }

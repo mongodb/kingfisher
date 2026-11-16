@@ -373,7 +373,7 @@ jobs:
           export PATH="$python_bin_dir:$PATH"
           make windows-test-${{ matrix.arch }}
 
-      - name: Test Git for Windows from PowerShell
+      - name: Test native Git and Git for Windows oracle from PowerShell
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -382,24 +382,27 @@ jobs:
             "${env:ProgramFiles(x86)}/Git/cmd/git.exe",
             (Get-Command git.exe -CommandType Application -ErrorAction SilentlyContinue).Source
           )
-          $env:KF_GIT_BINARY = $null
+          $gitBinary = $null
           foreach ($candidate in $candidates) {
-            if (Test-Path -LiteralPath $candidate) {
+            if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {
               $version = & $candidate --version
               if ($LASTEXITCODE -eq 0 -and $version -match '\.windows\.') {
-                $env:KF_GIT_BINARY = $candidate
+                $gitBinary = $candidate
                 break
               }
             }
           }
-          if (-not $env:KF_GIT_BINARY) { throw 'Git for Windows was not found' }
-          & $env:KF_GIT_BINARY --version
+          if (-not $gitBinary) { throw 'Git for Windows was not found' }
+          # Native scanning no longer uses KF_GIT_BINARY. The audit tests invoke
+          # literal git as an independent oracle, so select it through PATH.
+          $env:PATH = "$(Split-Path -Parent $gitBinary);$env:PATH"
+          & $gitBinary --version
           if ($LASTEXITCODE -ne 0) { throw 'Git for Windows is unavailable' }
           $triple = if ('${{ matrix.arch }}' -eq 'arm64') { 'aarch64-pc-windows-gnullvm' } else { 'x86_64-pc-windows-gnu' }
           # These paths match the ci-test profile and default target directory used by
           # make windows-test-* above. Keep them in sync if those build settings change.
           $harnesses = Get-ChildItem "target/$triple/ci-test/deps/kingfisher-*.exe" | Sort-Object LastWriteTime -Descending
-          $gitHarnesses = @()
+          $gitHarness = $null
           foreach ($harness in $harnesses) {
             # Cargo also places the regular CLI executable in deps; it rejects --list.
             $previousPreference = $ErrorActionPreference
@@ -411,17 +414,23 @@ jobs:
               $ErrorActionPreference = $previousPreference
             }
             if (-not $listed) { continue }
-            if ($cases -match 'git_binary::tests::git_executable_override_is_literal_and_shared') {
-              & $harness.FullName git_binary:: --skip test_create_fresh_clone --skip test_update_clone
-              if ($LASTEXITCODE -ne 0) { throw 'Git for Windows regressions failed' }
-              $gitHarnesses += $harness
+            $nativeTests = $cases -match '^git_binary::tests::native_options_never_probe_a_git_installation_or_load_global_config: test$'
+            $auditTests = $cases -match '^scan_audit::tests::audit_counts_unique_reachable_commits_and_peels_packed_tags: test$'
+            if ($nativeTests -and $auditTests) {
+              & $harness.FullName git_binary::tests::
+              if ($LASTEXITCODE -ne 0) { throw 'Native Git regressions failed' }
+              & $harness.FullName scan_audit::tests::
+              if ($LASTEXITCODE -ne 0) { throw 'Audit regressions against Git for Windows failed' }
+              $gitHarness = $harness
               break
             }
           }
-          if (-not $gitHarnesses) { throw 'Git regression harness was not found' }
-          $stagedHarnesses = Get-ChildItem "target/$triple/ci-test/deps/smoke_branch-*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if (-not $stagedHarnesses) { throw 'Staged scan regression harness was not found' }
-          foreach ($harness in $stagedHarnesses) {
-            & $harness.FullName
-            if ($LASTEXITCODE -ne 0) { throw 'Branch/staged scans with Git for Windows failed' }
+          if (-not $gitHarness) { throw 'Native Git/audit regression harness was not found' }
+          $stagedHarness = Get-ChildItem "target/$triple/ci-test/deps/smoke_branch-*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $stagedHarness) { throw 'Staged scan regression harness was not found' }
+          $stagedCases = & $stagedHarness.FullName --list
+          if ($LASTEXITCODE -ne 0 -or -not ($stagedCases -match '^staged_scan_does_not_require_a_git_executable: test$')) {
+            throw 'Branch/staged scan regression cases were not found'
           }
+          & $stagedHarness.FullName
+          if ($LASTEXITCODE -ne 0) { throw 'Branch/staged scans with Git for Windows failed' }

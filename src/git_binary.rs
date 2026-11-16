@@ -1,51 +1,37 @@
+//! Native repository acquisition. The module name is retained for API compatibility;
+//! no operation needs a local Git executable or credential helper. SSH uses the
+//! system SSH client; all Git protocol, object and reference work remains native.
 use std::{
-    io::Read,
-    path::Path,
-    process::{Command, ExitStatus, Stdio},
-    time::Duration,
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    thread::JoinHandle,
+    time::{Duration, Instant},
 };
 
-use tracing::{debug, debug_span, warn};
+use anyhow::{Context, Result, ensure};
+use gix::{
+    ObjectId,
+    bstr::{BString, ByteSlice},
+    refs::{
+        Target,
+        transaction::{PreviousValue, RefEdit},
+    },
+    remote::{Direction, fetch::Tags},
+};
+use tracing::debug;
 use url::Url;
-use wait_timeout::ChildExt;
 
-use crate::{bitbucket::is_bitbucket_access_token, git_url::GitUrl};
+use crate::{git_auth::GitAuth, git_url::GitUrl};
 
-#[cfg(windows)]
-mod windows;
+mod http;
+mod local;
+mod ssh;
 
-/// Use the same executable for clone/update and local staged Git operations.
-/// An explicit path also lets Windows users select Git for Windows over MSYS2 Git.
-pub fn git_command() -> Command {
-    let mut command =
-        Command::new(std::env::var_os("KF_GIT_BINARY").unwrap_or_else(|| "git".into()));
-    // Apply to local staged operations as well as clone/update, without changing
-    // any user or repository configuration on disk.
-    if cfg!(windows) {
-        command.args(["-c", "core.longpaths=true"]);
-    }
-    command
-}
-
-/// Identify an explicitly selected executable without logging command arguments
-/// or environment entries, which may contain provider credentials.
-pub(crate) fn git_command_failure_hint(command: &Command) -> String {
-    if std::env::var_os("KF_GIT_BINARY").as_deref() == Some(command.get_program()) {
-        format!("; check KF_GIT_BINARY (selected Git executable: {:?})", command.get_program())
-    } else {
-        String::new()
-    }
-}
-
-/// Default time budget for a fresh `git clone`. Generous so well-formed clones
-/// of large monorepos complete on slow networks, but bounded so a single
-/// unresponsive remote cannot park a clone worker indefinitely. Override per
-/// invocation via `KF_GIT_CLONE_TIMEOUT_SECS`.
 const DEFAULT_GIT_CLONE_TIMEOUT_SECS: u64 = 1200;
-
-/// Default time budget for `git remote update --prune` on an existing clone.
-/// Shorter than clone because the working tree already exists; the operation
-/// is fetching incremental refs. Override via `KF_GIT_UPDATE_TIMEOUT_SECS`.
 const DEFAULT_GIT_UPDATE_TIMEOUT_SECS: u64 = 600;
 
 fn timeout_from_env(var: &str, default_secs: u64) -> Duration {
@@ -56,122 +42,7 @@ fn timeout_from_env(var: &str, default_secs: u64) -> Duration {
         .unwrap_or_else(|| Duration::from_secs(default_secs))
 }
 
-fn git_clone_timeout() -> Duration {
-    timeout_from_env("KF_GIT_CLONE_TIMEOUT_SECS", DEFAULT_GIT_CLONE_TIMEOUT_SECS)
-}
-
-fn git_update_timeout() -> Duration {
-    timeout_from_env("KF_GIT_UPDATE_TIMEOUT_SECS", DEFAULT_GIT_UPDATE_TIMEOUT_SECS)
-}
-
-/// Spawn the child as the leader of its own process group.
-///
-/// `git` routinely spawns helper processes — `git-remote-https`, `ssh`,
-/// credential helpers — and on a clone timeout those are exactly the
-/// processes likely wedged on network I/O. SIGKILL'ing only the immediate
-/// child would orphan them; they'd be reparented to init and keep running,
-/// accumulating across a large scan. Isolating the group lets
-/// [`kill_process_tree`] take down the entire tree at once.
-///
-/// Trade-off: because the child no longer shares Kingfisher's process group,
-/// a terminal `Ctrl-C` (SIGINT to the foreground group) no longer reaches
-/// `git` directly; the wall-clock timeout is what guarantees cleanup.
-///
-/// On Windows, `windows::spawn` instead contains the child in a Job Object.
-#[cfg(unix)]
-fn set_own_process_group(cmd: &mut Command) {
-    use std::os::unix::process::CommandExt;
-    cmd.process_group(0);
-}
-
-#[cfg(not(unix))]
-fn set_own_process_group(_cmd: &mut Command) {}
-
-/// Kill the child and, on Unix, its entire process group, then reap the
-/// direct child to avoid leaving a zombie. Group members are reparented to
-/// init and reaped by it.
-#[cfg(unix)]
-fn kill_process_tree(child: &mut std::process::Child, own_process_group: bool) {
-    // Negative PID targets the whole group, whose pgid equals the child's pid
-    // because we spawned it via `process_group(0)`.
-    let pgid = child.id() as i32;
-    if own_process_group {
-        unsafe {
-            libc::kill(-pgid, libc::SIGKILL);
-        }
-    }
-    // Also handles children that inherit our foreground process group, or a
-    // failed group signal. Never signal the foreground group itself.
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-#[cfg(not(unix))]
-fn kill_process_tree(child: &mut std::process::Child, _own_process_group: bool) {
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-const BITBUCKET_CREDENTIAL_HELPER: &str = r#"!_bbcreds() {
-    if [ -n "$KF_BITBUCKET_OAUTH_TOKEN" ]; then
-        echo username="x-token-auth";
-        echo password="$KF_BITBUCKET_OAUTH_TOKEN";
-        return;
-    fi
-    if [ -n "$KF_BITBUCKET_ACCESS_TOKEN" ]; then
-        echo username="x-token-auth";
-        echo password="$KF_BITBUCKET_ACCESS_TOKEN";
-        return;
-    fi
-    if [ -n "$KF_BITBUCKET_USERNAME" ]; then
-        bb_pass="${KF_BITBUCKET_APP_PASSWORD:-${KF_BITBUCKET_TOKEN:-${KF_BITBUCKET_PASSWORD:-}}}";
-        if [ -n "$bb_pass" ]; then
-            echo username="$KF_BITBUCKET_USERNAME";
-            echo password="$bb_pass";
-            return;
-        fi
-    fi
-}; _bbcreds"#;
-
-const GITEA_CREDENTIAL_HELPER: &str = r#"!_gteacreds() {
-    if [ -n "$KF_GITEA_TOKEN" ]; then
-        user="${KF_GITEA_USERNAME:-gitea}";
-        echo username="$user";
-        echo password="$KF_GITEA_TOKEN";
-    fi
-}; _gteacreds"#;
-
-const AZURE_CREDENTIAL_HELPER: &str = r#"!_azcreds() {
-    token="${KF_AZURE_TOKEN:-${KF_AZURE_PAT:-}}";
-    if [ -n "$token" ]; then
-        user="${KF_AZURE_USERNAME:-pat}";
-        echo username="$user";
-        echo password="$token";
-    fi
-}; _azcreds"#;
-
-const HUGGINGFACE_CREDENTIAL_HELPER: &str = r#"!_hfcreds() {
-    token="$KF_HUGGINGFACE_TOKEN";
-    if [ -n "$token" ]; then
-        user="${KF_HUGGINGFACE_USERNAME:-hf_user}";
-        echo username="$user";
-        echo password="$token";
-    fi
-}; _hfcreds"#;
-
-const GITHUB_CREDENTIAL_HELPER: &str = r#"!_ghcreds() { echo username="x-access-token"; echo password="$KF_GITHUB_TOKEN"; }; _ghcreds"#;
-
-const GITLAB_CREDENTIAL_HELPER: &str =
-    r#"!_glcreds() { echo username="oauth2"; echo password="$KF_GITLAB_TOKEN"; }; _glcreds"#;
-
-/// HTTPS hosts that each provider's credential helper is allowed to target.
-///
-/// Credential helpers echo provider tokens to whatever remote `git` is talking
-/// to. Installing them as unscoped `credential.helper` entries leaks those
-/// tokens to any HTTP(S) remote that issues an auth challenge — including an
-/// attacker-controlled scan target. Each helper is therefore bound to a
-/// `credential.https://<host>.helper` key so `git` only invokes it for the
-/// provider's own host(s).
+/// Exact HTTPS authorities each provider's in-memory credentials may target.
 #[derive(Debug, Clone, Default)]
 pub struct ProviderHosts {
     pub github: Vec<String>,
@@ -183,275 +54,85 @@ pub struct ProviderHosts {
 }
 
 impl ProviderHosts {
-    /// Well-known public SaaS clone hosts for each supported provider.
     pub fn saas_defaults() -> Self {
         Self {
-            github: vec!["github.com".to_string()],
-            gitlab: vec!["gitlab.com".to_string()],
-            gitea: vec!["gitea.com".to_string()],
-            bitbucket: vec!["bitbucket.org".to_string()],
-            azure: vec!["dev.azure.com".to_string()],
-            huggingface: vec!["huggingface.co".to_string()],
+            github: vec!["github.com".into()],
+            gitlab: vec!["gitlab.com".into()],
+            gitea: vec!["gitea.com".into()],
+            bitbucket: vec!["bitbucket.org".into()],
+            azure: vec!["dev.azure.com".into()],
+            huggingface: vec!["huggingface.co".into()],
         }
     }
 
-    /// Add a trusted host to `list`, normalizing case and de-duplicating.
     pub fn add(list: &mut Vec<String>, host: &str) {
         let host = host.trim().to_ascii_lowercase();
-        if !host.is_empty() && !list.iter().any(|existing| existing == &host) {
+        if !host.is_empty() && !list.contains(&host) {
             list.push(host);
         }
     }
 
-    /// Whether a repository URL targets one of the trusted GitHub clone hosts.
     pub fn is_github_url(&self, repo_url: &GitUrl) -> bool {
         let Ok(url) = Url::parse(repo_url.as_str()) else {
             return false;
         };
+        // Provider tokens (including minted GitHub App tokens) are only usable over
+        // HTTP(S); an ssh:// URL must not trigger token setup it can never use.
+        if !matches!(url.scheme(), "https" | "http") {
+            return false;
+        }
         let Some(host) = url.host_str() else {
             return false;
         };
-        let host = match url.port() {
+        let authority = match url.port() {
             Some(port) => format!("{}:{port}", host.to_ascii_lowercase()),
             None => host.to_ascii_lowercase(),
         };
-        self.github.iter().any(|trusted| trusted.eq_ignore_ascii_case(&host))
+        self.github.iter().any(|trusted| trusted.eq_ignore_ascii_case(&authority))
     }
 }
 
-/// Represents errors that can occur when interacting with the `git` CLI.
 #[derive(Debug, thiserror::Error)]
 pub enum GitError {
-    #[error("git execution failed: {0}")]
-    IOError(#[from] std::io::Error),
-
-    #[error(
-        "git execution failed (status: {status}){summary}{executable_hint}",
-        status = format_exit_status(.status),
-        summary = format_git_error_summary(.stdout.as_slice(), .stderr.as_slice())
-    )]
-    GitError { stdout: Vec<u8>, stderr: Vec<u8>, status: ExitStatus, executable_hint: String },
-
-    /// `git` exceeded the configured per-operation time budget and was killed.
-    /// Surfaced to the caller so a single stuck repo doesn't park a clone
-    /// worker forever during large multi-repo scans.
-    #[error("git execution timed out after {secs} seconds{executable_hint}")]
-    Timeout { secs: u64, executable_hint: String },
+    #[error("Git operation failed: {0:#}")]
+    Operation(#[from] anyhow::Error),
+    #[error("Git operation timed out after {secs} seconds")]
+    Timeout { secs: u64 },
 }
 
-fn format_exit_status(status: &ExitStatus) -> String {
-    status.code().map(|code| code.to_string()).unwrap_or_else(|| status.to_string())
-}
-
-fn format_git_error_summary(stdout: &[u8], stderr: &[u8]) -> String {
-    let mut messages = Vec::new();
-    if let Some(line) = summarize_output(stderr) {
-        messages.push(line);
-    }
-    if let Some(line) = summarize_output(stdout) {
-        messages.push(line);
-    }
-    if messages.is_empty() { String::new() } else { format!(": {}", messages.join(" | ")) }
-}
-
-fn summarize_output(output: &[u8]) -> Option<String> {
-    let text = String::from_utf8_lossy(output);
-    text.lines().map(str::trim).find(|line| !line.is_empty()).map(|line| line.to_owned())
-}
-
-/// A helper struct for running `git` commands.
-///
-/// It supports optional GitHub, GitLab, Gitea, and Bitbucket credentials passed via
-/// environment variables and optionally ignores TLS certificate validation if
-/// requested.
+/// Native clone/fetch with noninteractive, authority-scoped authentication.
 pub struct Git {
-    credentials: Vec<String>,
+    auth: GitAuth,
     no_timeouts: bool,
     ignore_certs: bool,
-    github_token: Option<String>,
-    bitbucket_access_token: Option<String>,
-    bitbucket_env: Vec<(String, String)>,
-    bitbucket_basic_auth: Option<(String, String)>,
+}
+
+impl Default for Git {
+    fn default() -> Self {
+        Self::new(false)
+    }
 }
 
 impl Git {
-    /// Create a new `Git` instance that trusts only the public SaaS hosts.
-    ///
-    /// * `ignore_certs`: If `true`, disables SSL certificate verification for `git` operations.
     pub fn new(ignore_certs: bool) -> Self {
         Self::with_provider_hosts(ignore_certs, &ProviderHosts::saas_defaults())
     }
 
-    /// Create a new `Git` instance whose credential helpers are scoped to the
-    /// hosts in `provider_hosts`. Each provider token is offered only to that
-    /// provider's configured HTTPS host(s), never to an arbitrary scan target.
-    ///
-    /// * `ignore_certs`: If `true`, disables SSL certificate verification for `git` operations.
     pub fn with_provider_hosts(ignore_certs: bool, provider_hosts: &ProviderHosts) -> Self {
-        let github_token = std::env::var("KF_GITHUB_TOKEN")
-            .ok()
-            .map(|token| token.trim().to_owned())
-            .filter(|token| !token.is_empty());
-        Self::with_provider_hosts_and_github_token(ignore_certs, provider_hosts, github_token)
+        Self { auth: GitAuth::from_env(provider_hosts), no_timeouts: false, ignore_certs }
     }
 
-    /// Create a Git instance with an explicit GitHub token.
-    ///
-    /// The token is passed to the child process through its environment and is
-    /// never embedded in command arguments. This is used for freshly minted
-    /// GitHub App installation tokens.
+    /// Explicit GitHub App credentials replace, rather than fall back to, the environment token.
     pub fn with_provider_hosts_and_github_token(
         ignore_certs: bool,
         provider_hosts: &ProviderHosts,
         github_token: Option<String>,
     ) -> Self {
-        let mut credentials = Vec::new();
-
-        fn normalized_env_var(name: &str) -> Option<String> {
-            std::env::var(name)
-                .ok()
-                .map(|value| value.trim().to_owned())
-                .filter(|value| !value.is_empty())
-        }
-
-        let bitbucket_username = normalized_env_var("KF_BITBUCKET_USERNAME");
-        let bitbucket_app_password = normalized_env_var("KF_BITBUCKET_APP_PASSWORD");
-        let bitbucket_token = normalized_env_var("KF_BITBUCKET_TOKEN");
-        let bitbucket_password = normalized_env_var("KF_BITBUCKET_PASSWORD");
-        let bitbucket_oauth_token = normalized_env_var("KF_BITBUCKET_OAUTH_TOKEN");
-
-        let mut bitbucket_env = Vec::new();
-        for (key, value) in [
-            ("KF_BITBUCKET_USERNAME", bitbucket_username.as_ref()),
-            ("KF_BITBUCKET_APP_PASSWORD", bitbucket_app_password.as_ref()),
-            ("KF_BITBUCKET_TOKEN", bitbucket_token.as_ref()),
-            ("KF_BITBUCKET_PASSWORD", bitbucket_password.as_ref()),
-            ("KF_BITBUCKET_OAUTH_TOKEN", bitbucket_oauth_token.as_ref()),
-        ] {
-            if let Some(value) = value {
-                bitbucket_env.push((key.to_string(), value.to_string()));
-            }
-        }
-
-        let has_github_token = github_token.is_some();
-        let has_gitlab_token =
-            matches!(std::env::var("KF_GITLAB_TOKEN"), Ok(token) if !token.is_empty());
-        let has_gitea_token =
-            matches!(std::env::var("KF_GITEA_TOKEN"), Ok(token) if !token.is_empty());
-        let bitbucket_access_token =
-            bitbucket_token.as_ref().filter(|token| is_bitbucket_access_token(token)).cloned();
-        let bitbucket_basic_password = bitbucket_app_password
-            .clone()
-            .or(bitbucket_token.clone())
-            .or(bitbucket_password.clone());
-        let bitbucket_basic_auth = if let Some(token) = bitbucket_oauth_token.clone() {
-            Some(("x-token-auth".to_string(), token))
-        } else if let Some(token) = bitbucket_access_token.clone() {
-            Some(("x-token-auth".to_string(), token))
-        } else if let (Some(username), Some(password)) =
-            (bitbucket_username.clone(), bitbucket_basic_password.clone())
-        {
-            Some((username, password))
-        } else {
-            bitbucket_token.clone().map(|token| ("x-token-auth".to_string(), token))
-        };
-        let has_bitbucket_username = bitbucket_username.is_some();
-        let has_bitbucket_password = bitbucket_app_password.is_some()
-            || bitbucket_token.is_some()
-            || bitbucket_password.is_some();
-        let has_bitbucket_oauth_token = bitbucket_oauth_token.is_some();
-        let has_bitbucket_credentials = has_bitbucket_oauth_token
-            || bitbucket_access_token.is_some()
-            || bitbucket_token.is_some()
-            || (has_bitbucket_username && has_bitbucket_password);
-        let has_azure_token = ["KF_AZURE_TOKEN", "KF_AZURE_PAT"]
-            .iter()
-            .any(|key| matches!(std::env::var(key), Ok(value) if !value.is_empty()));
-        let has_huggingface_token =
-            matches!(std::env::var("KF_HUGGINGFACE_TOKEN"), Ok(value) if !value.is_empty());
-
-        // If credentials are provided via environment variables, clear existing helpers first.
-        if has_github_token
-            || has_gitlab_token
-            || has_gitea_token
-            || has_bitbucket_credentials
-            || has_azure_token
-            || has_huggingface_token
-        {
-            credentials.push("-c".into());
-            credentials.push(r#"credential.helper="#.into());
-        }
-
-        // Install each provider's helper scoped to that provider's HTTPS
-        // host(s). `git` consults a `credential.https://<host>.helper` entry
-        // only for remotes matching that host, so a provider token is never
-        // echoed to an unrelated (possibly attacker-controlled) clone target.
-        let mut push_scoped = |hosts: &[String], snippet: &str| {
-            for host in hosts {
-                credentials.push("-c".into());
-                credentials.push(format!("credential.https://{host}.helper={snippet}"));
-            }
-        };
-
-        if has_github_token {
-            push_scoped(&provider_hosts.github, GITHUB_CREDENTIAL_HELPER);
-        }
-        if has_gitlab_token {
-            push_scoped(&provider_hosts.gitlab, GITLAB_CREDENTIAL_HELPER);
-        }
-        if has_gitea_token {
-            push_scoped(&provider_hosts.gitea, GITEA_CREDENTIAL_HELPER);
-        }
-        if has_bitbucket_credentials {
-            push_scoped(&provider_hosts.bitbucket, BITBUCKET_CREDENTIAL_HELPER);
-        }
-        if has_azure_token {
-            push_scoped(&provider_hosts.azure, AZURE_CREDENTIAL_HELPER);
-        }
-        if has_huggingface_token {
-            push_scoped(&provider_hosts.huggingface, HUGGINGFACE_CREDENTIAL_HELPER);
-        }
-
         Self {
-            credentials,
+            auth: GitAuth::with_github_token(provider_hosts, github_token),
             no_timeouts: false,
             ignore_certs,
-            github_token,
-            bitbucket_access_token,
-            bitbucket_env,
-            bitbucket_basic_auth,
         }
-    }
-
-    /// Create a basic `git` `Command` with environment variables set to
-    /// limit config usage and (optionally) ignore certs. Includes credentials
-    /// if GitHub, GitLab, Gitea, or Bitbucket tokens are present.
-    fn git(&self) -> Command {
-        let mut cmd = git_command();
-        cmd.env("GIT_CONFIG_GLOBAL", "/dev/null");
-        cmd.env("GIT_CONFIG_NOSYSTEM", "1");
-        cmd.env("GIT_CONFIG_SYSTEM", "/dev/null");
-        cmd.env("GIT_TERMINAL_PROMPT", "0");
-        if let Ok(backend) = std::env::var("KF_GIT_SSL_BACKEND")
-            && !backend.trim().is_empty()
-        {
-            cmd.arg("-c").arg(format!("http.sslBackend={}", backend.trim()));
-        }
-        if self.ignore_certs {
-            cmd.env("GIT_SSL_NO_VERIFY", "1");
-        }
-        if let Some(token) = &self.github_token {
-            cmd.env("KF_GITHUB_TOKEN", token);
-        }
-        for (key, value) in &self.bitbucket_env {
-            cmd.env(key, value);
-        }
-        if let Some(token) = &self.bitbucket_access_token {
-            cmd.env("KF_BITBUCKET_ACCESS_TOKEN", token);
-        }
-        cmd.args(&self.credentials);
-        cmd.stdin(Stdio::null());
-        cmd
     }
 
     pub fn without_timeouts(mut self, disabled: bool) -> Self {
@@ -459,232 +140,426 @@ impl Git {
         self
     }
 
-    /// Run the constructed `git` command with a hard wall-clock timeout.
-    ///
-    /// Spawns the child, drains stdout/stderr in dedicated reader threads
-    /// (otherwise a child that fills its pipe buffer would block before
-    /// the deadline could fire), and uses `wait-timeout` to wait without a
-    /// per-process polling loop. On timeout the process tree is killed and a
-    /// [`GitError::Timeout`] is returned so callers can surface the stuck
-    /// repo and move on instead of parking a clone worker forever.
-    fn run_cmd(&self, mut cmd: Command, timeout: Duration) -> Result<(), GitError> {
-        // Command's explicit environment can contain freshly minted GitHub
-        // App and Bitbucket credentials, so never debug-format it.
-        debug!("Executing git command");
-        let executable_hint = git_command_failure_hint(&cmd);
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-        // Put `git` in its own process group so that on timeout we can signal
-        // the entire tree, not just the immediate child (see
-        // `set_own_process_group`).
-        // With no deadline, keep the foreground process group so Ctrl-C also
-        // reaches Git and its helpers.
-        let bounded = !self.no_timeouts && !timeout.is_zero();
-        if bounded {
-            set_own_process_group(&mut cmd);
-        }
-        let spawn_error = |error: std::io::Error| {
-            if !executable_hint.is_empty() {
-                std::io::Error::new(error.kind(), format!("{error}{executable_hint}"))
-            } else if error.kind() == std::io::ErrorKind::NotFound {
-                std::io::Error::new(
-                    error.kind(),
-                    format!("{error}; install Git on PATH or set KF_GIT_BINARY to its executable"),
-                )
-            } else {
-                error
-            }
-        };
-        #[cfg(windows)]
-        let (mut child, mut job) = windows::spawn(&mut cmd, bounded).map_err(spawn_error)?;
-        #[cfg(not(windows))]
-        let mut child = cmd.spawn().map_err(spawn_error)?;
-
-        // Drain stdout/stderr off the main thread. Reader threads exit as
-        // soon as the child closes its end of the pipe, so this adds two
-        // short-lived threads per `git` invocation.
-        let mut stdout_pipe = child.stdout.take().expect("stdout was piped");
-        let mut stderr_pipe = child.stderr.take().expect("stderr was piped");
-        let stdout_reader = std::thread::spawn(move || -> std::io::Result<Vec<u8>> {
-            let mut buf = Vec::new();
-            stdout_pipe.read_to_end(&mut buf)?;
-            Ok(buf)
-        });
-        let stderr_reader = std::thread::spawn(move || -> std::io::Result<Vec<u8>> {
-            let mut buf = Vec::new();
-            stderr_pipe.read_to_end(&mut buf)?;
-            Ok(buf)
-        });
-
-        let status =
-            match if bounded { child.wait_timeout(timeout) } else { child.wait().map(Some) } {
-                Ok(Some(status)) => status,
-                Ok(None) => {
-                    // Timeout. Killing the whole process tree closes every
-                    // writer on the stdout/stderr pipes — including helpers like
-                    // `git-remote-https`/`ssh` that may have inherited git's pipe
-                    // ends — which unblocks the reader threads. `kill_process_tree`
-                    // also reaps the direct child so we don't leave a zombie.
-                    let secs = timeout.as_secs();
-                    warn!(
-                        "git command exceeded {secs}s timeout; killing process tree of pid {}",
-                        child.id()
-                    );
-                    #[cfg(windows)]
-                    drop(job.take());
-                    kill_process_tree(&mut child, bounded);
-                    let _ = stdout_reader.join();
-                    let _ = stderr_reader.join();
-                    return Err(GitError::Timeout { secs, executable_hint });
-                }
-                Err(e) => {
-                    // wait_timeout itself failed — kill defensively so we don't
-                    // leak the child (or its helpers), then surface the I/O error.
-                    #[cfg(windows)]
-                    drop(job.take());
-                    kill_process_tree(&mut child, bounded);
-                    let _ = stdout_reader.join();
-                    let _ = stderr_reader.join();
-                    return Err(GitError::IOError(e));
-                }
-            };
-
-        // A helper must not retain our pipe handles after Git exits either.
-        #[cfg(windows)]
-        drop(job.take());
-        let stdout = stdout_reader.join().unwrap_or_else(|_| Ok(Vec::new())).unwrap_or_default();
-        let stderr = stderr_reader.join().unwrap_or_else(|_| Ok(Vec::new())).unwrap_or_default();
-
-        if !status.success() {
-            return Err(GitError::GitError { stdout, stderr, status, executable_hint });
-        }
-        Ok(())
-    }
-
-    /// Update an existing bare or mirror clone by running `git remote update --prune`.
-    ///
-    /// * `repo_url`: The remote repository URL (only used for logging).
-    /// * `output_dir`: The path to the existing bare/mirror clone.
-    pub fn update_clone(&self, repo_url: &GitUrl, output_dir: &Path) -> Result<(), GitError> {
-        let _span = debug_span!("git_update", "{repo_url} {}", output_dir.display()).entered();
-        debug!("Attempting to update clone of {repo_url} at {}", output_dir.display());
-        let mut cmd = self.git();
-        if output_dir.join(".git").is_dir() {
-            cmd.arg("-C");
-            cmd.arg(output_dir);
-        } else {
-            cmd.arg("--git-dir");
-            cmd.arg(output_dir);
-        }
-        cmd.arg("remote");
-        cmd.arg("update");
-        cmd.arg("--prune");
-        self.run_cmd(cmd, git_update_timeout())
-    }
-
-    /// Create a fresh clone of the specified repository in either bare or mirror mode.
-    ///
-    /// * `repo_url`: The remote repository URL.
-    /// * `output_dir`: Where to place the newly created clone.
-    /// * `clone_mode`: Whether to clone as `--bare` or `--mirror`.
     pub fn create_fresh_clone(
         &self,
         repo_url: &GitUrl,
         output_dir: &Path,
         clone_mode: CloneMode,
     ) -> Result<(), GitError> {
-        let _span = debug_span!("git_clone", "{repo_url} {}", output_dir.display()).entered();
-        debug!("Attempting to create fresh clone of {} at {}", repo_url, output_dir.display());
-        let mut cmd = self.git();
-        cmd.arg("clone");
-        if let Some(arg) = clone_mode.arg() {
-            cmd.arg(arg);
-        }
-        cmd.arg("--quiet");
-        cmd.arg("-c");
-        cmd.arg("remote.origin.fetch=+refs/*:refs/remotes/origin/*");
-        cmd.arg(self.repo_arg_for_clone(repo_url));
-        cmd.arg(output_dir);
-        self.run_cmd(cmd, git_clone_timeout())
+        self.clone(repo_url, output_dir, clone_mode, None)
     }
 
-    /// Clone only a selected branch and its complete history. Use a bare clone even
-    /// for snapshot scans: the explicit ref is scanned from its tree, not a checkout.
+    /// Bare, full-history clone of one branch or tag, without automatically following tags.
     pub fn create_branch_clone(
         &self,
         repo_url: &GitUrl,
         output_dir: &Path,
         branch: &str,
     ) -> Result<(), GitError> {
-        let mut cmd = self.git();
-        cmd.args([
-            "clone",
-            "--bare",
-            "--quiet",
-            "--single-branch",
-            "--no-tags",
-            "--no-local",
-            "--branch",
-        ]);
-        cmd.arg(branch);
-        cmd.arg("--");
-        cmd.arg(self.repo_arg_for_clone(repo_url));
-        cmd.arg(output_dir);
-        self.run_cmd(cmd, git_clone_timeout())?;
-
-        // Bare clones do not install a fetch refspec. Keep subsequent updates just
-        // as narrow, and update the local branch that reference resolution prefers.
-        let mut cmd = self.git();
-        cmd.arg("--git-dir").arg(output_dir);
-        cmd.args(["config", "remote.origin.fetch"]);
-        cmd.arg(format!("+refs/heads/{branch}:refs/heads/{branch}"));
-        self.run_cmd(cmd, git_update_timeout())
+        self.clone(repo_url, output_dir, CloneMode::Bare, Some(branch))
     }
 
-    fn repo_arg_for_clone(&self, repo_url: &GitUrl) -> String {
-        if let Some((username, password)) = &self.bitbucket_basic_auth
-            && let Ok(mut url) = Url::parse(repo_url.as_str())
-        {
-            let is_bitbucket = url
-                .host_str()
-                .map(|host| host.eq_ignore_ascii_case("bitbucket.org"))
-                .unwrap_or(false);
-            // Embed credentials only on HTTPS bitbucket.org remotes. The
-            // scoped credential helper is HTTPS-only for the same reason:
-            // putting a token in a plaintext http:// URL would send it over
-            // the wire in the clear.
-            if url.scheme() == "https"
-                && is_bitbucket
-                && url.set_username(username).is_ok()
-                && url.set_password(Some(password)).is_ok()
-            {
-                return url.into();
+    fn clone(
+        &self,
+        repo_url: &GitUrl,
+        output_dir: &Path,
+        mode: CloneMode,
+        branch: Option<&str>,
+    ) -> Result<(), GitError> {
+        let operation = Operation::new(
+            timeout_from_env("KF_GIT_CLONE_TIMEOUT_SECS", DEFAULT_GIT_CLONE_TIMEOUT_SECS),
+            self.no_timeouts,
+        );
+        let mut cleanup = None;
+        let result = (|| -> Result<()> {
+            let kind = if matches!(mode, CloneMode::Checkout) {
+                gix::create::Kind::WithWorktree
+            } else {
+                gix::create::Kind::Bare
+            };
+            let absolute = std::path::absolute(output_dir)?;
+            ensure!(absolute.parent().is_some(), "Cannot clone into a filesystem root");
+            if let Ok(metadata) = std::fs::symlink_metadata(&absolute) {
+                ensure!(
+                    !metadata.file_type().is_symlink(),
+                    "Clone destination must not be a symlink"
+                );
+                ensure!(
+                    absolute.canonicalize()?.parent().is_some(),
+                    "Cannot clone into a filesystem root"
+                );
             }
+            operation.check()?;
+            std::fs::create_dir_all(absolute.parent().context("Clone destination has no parent")?)
+                .context("Failed to create clone parent directories")?;
+            operation.check()?;
+            let mut repo = gix::ThreadSafeRepository::init_opts(
+                &absolute,
+                kind,
+                gix::create::Options {
+                    destination_must_be_empty: Some(true),
+                    ..Default::default()
+                },
+                open_options(),
+            )?
+            .to_thread_local();
+            // Only arm cleanup after init has verified an empty destination. Resolve
+            // the actual target once; never delete a caller's preexisting repository.
+            cleanup = Some(CloneDestination::new(&absolute)?);
+            let mut specs = vec!["+refs/*:refs/remotes/origin/*".to_owned()];
+            if let Some(branch) = branch {
+                let name = format!("refs/heads/{branch}");
+                let _: gix::refs::FullName = name.as_str().try_into()?;
+                specs = vec![format!("+{name}:{name}")];
+            } else if matches!(mode, CloneMode::Mirror) {
+                specs.push("+refs/*:refs/*".into());
+            } else if matches!(mode, CloneMode::Checkout) {
+                specs.push("+refs/heads/*:refs/remotes/origin/*".into());
+            }
+            let mut remote = repo
+                .remote_at(repo_url.as_str())?
+                .with_refspecs(specs.iter().map(String::as_str), Direction::Fetch)?;
+            if branch.is_some() {
+                remote = remote.with_fetch_tags(Tags::None);
+            }
+            let mut config = repo.config_file_mut(repo.common_dir().join("config"))?;
+            remote.save_as_to("origin", &mut config)?;
+            if matches!(mode, CloneMode::Mirror) {
+                config.set_raw_value("remote.origin.mirror", "true")?;
+            }
+            config.commit()?;
+            repo.reload()?;
+            // Network fetch writes reflogs for worktree clones. Unlike Git,
+            // gix requires an explicit identity; install a memory-only fallback
+            // without changing the user's configured name or repository config.
+            repo.committer_or_set_fallback("Kingfisher", "kingfisher@localhost")?;
+
+            let remote = repo.find_remote("origin")?;
+            let mut extra = Vec::new();
+            if branch.is_none() {
+                if matches!(mode, CloneMode::Bare) {
+                    extra.push(parse_refspec("+refs/heads/*:refs/heads/*")?);
+                }
+                if !matches!(mode, CloneMode::Mirror) {
+                    extra.push(parse_refspec("refs/tags/*:refs/tags/*")?);
+                }
+            }
+            let head = self.fetch(&repo, &remote, &extra, &operation, true)?;
+            operation.check()?;
+            let head = if let Some(branch) = branch {
+                let name = format!("refs/heads/{branch}");
+                if let Some(reference) = repo.try_find_reference(name.as_str())? {
+                    RemoteHead { target: Some(name.into()), id: Some(reference.id().detach()) }
+                } else {
+                    let id = repo
+                        .find_reference(format!("refs/tags/{branch}").as_str())
+                        .with_context(|| format!("Remote branch or tag '{branch}' was not found"))?
+                        .peel_to_commit()?
+                        .id;
+                    RemoteHead { target: None, id: Some(id) }
+                }
+            } else {
+                head
+            };
+            set_initial_head(&repo, &head, mode)?;
+            if matches!(mode, CloneMode::Checkout) {
+                checkout(&repo, &operation.interrupt)?;
+            }
+            operation.check()?;
+            Ok(())
+        })();
+        let result = operation.finish(result);
+        if result.is_ok()
+            && let Some(cleanup) = cleanup.as_mut()
+        {
+            cleanup.keep = true;
         }
+        result
+    }
 
-        repo_url.as_str().to_string()
+    /// Fetch and prune every configured remote; leave the user's HEAD and worktree untouched.
+    pub fn update_clone(&self, _repo_url: &GitUrl, output_dir: &Path) -> Result<(), GitError> {
+        let operation = Operation::new(
+            timeout_from_env("KF_GIT_UPDATE_TIMEOUT_SECS", DEFAULT_GIT_UPDATE_TIMEOUT_SECS),
+            self.no_timeouts,
+        );
+        let result = (|| -> Result<()> {
+            let mut repo = gix::open_opts(output_dir, open_options())
+                .context("Failed to open clone for update")?;
+            scrub_legacy_remote_credentials(&mut repo)?;
+            repo.committer_or_set_fallback("Kingfisher", "kingfisher@localhost")?;
+            let names = repo.remote_names();
+            for name in names {
+                operation.check()?;
+                let skip = gix::config::KeyRef {
+                    section_name: "remote",
+                    subsection_name: Some(name.as_bstr()),
+                    value_name: "skipDefaultUpdate",
+                };
+                if repo.config_snapshot().boolean(skip) == Some(true) {
+                    continue;
+                }
+                let remote = repo.find_remote(name.as_bstr())?;
+                self.fetch(&repo, &remote, &[], &operation, false)
+                    .with_context(|| format!("Failed to fetch remote {name}"))?;
+            }
+            operation.check()
+        })();
+        operation.finish(result)
+    }
+
+    fn fetch(
+        &self,
+        repo: &gix::Repository,
+        remote: &gix::Remote<'_>,
+        extra: &[gix::refspec::RefSpec],
+        operation: &Operation,
+        initial: bool,
+    ) -> Result<RemoteHead> {
+        operation.check()?;
+        let (mut url, version) = remote.sanitized_url_and_version(Direction::Fetch)?;
+        // HTTP credentials never enter URLs, including URL rewrites. An SSH
+        // username is routing information and must be retained (e.g. git@host).
+        if matches!(url.scheme, gix::url::Scheme::Http | gix::url::Scheme::Https) {
+            url.set_user(None);
+            url.set_password(None);
+        }
+        if url.scheme == gix::url::Scheme::Ssh {
+            let (transport, process) = ssh::connect(
+                repo,
+                url,
+                version,
+                operation.deadline,
+                Arc::clone(&operation.interrupt),
+            )?;
+            return self
+                .receive(repo, remote, transport, extra, initial, operation)
+                .map_err(|error| process.explain(error));
+        }
+        if url.scheme == gix::url::Scheme::File {
+            let path = gix::path::from_bstr(url.path.as_bstr())?;
+            let source = gix::open_opts(path.as_ref(), open_options())
+                .context("Failed to open local clone source")?;
+            let selected = narrow_clone_ref(remote, initial);
+            if let Some(name) = selected
+                && let Some(short) = name.strip_prefix(b"refs/heads/")
+                && source.try_find_reference(name)?.is_none()
+            {
+                let mut tag = BString::from("refs/tags/");
+                tag.extend_from_slice(short);
+                ensure!(
+                    source.try_find_reference(tag.as_bstr())?.is_some(),
+                    "Remote branch or tag '{short}' was not found",
+                    short = short.as_bstr(),
+                );
+                drop(source);
+                return self.fetch_tag_clone(repo, remote, tag.as_bstr(), extra, operation);
+            }
+            let source_head = source.head()?;
+            let head = RemoteHead {
+                target: source_head.referent_name().map(|name| name.as_bstr().to_owned()),
+                id: source_head.id().map(|id| id.detach()),
+            };
+            let mut specs = remote.refspecs(Direction::Fetch).to_vec();
+            specs.extend_from_slice(extra);
+            if initial && selected.is_none() && head.id.is_some() {
+                specs.push(parse_refspec("HEAD")?);
+            }
+            // Follow only new reachable tags on update. Existing local tags must
+            // not be rewritten merely because a remote moved one.
+            if remote.fetch_tags() != Tags::None {
+                specs.extend(local::auto_follow_tag_specs(
+                    &source,
+                    repo,
+                    &specs,
+                    remote.fetch_tags() == Tags::All,
+                    &operation.interrupt,
+                )?);
+            }
+            drop(source_head);
+            drop(source);
+            local::fetch(path.as_ref(), repo, &specs, &operation.interrupt)?;
+            return Ok(head);
+        }
+        ensure!(
+            matches!(url.scheme, gix::url::Scheme::Http | gix::url::Scheme::Https),
+            "Only HTTP(S), SSH and filesystem Git transports are supported"
+        );
+        let backend = http::Http::new(repo, remote, self.ignore_certs, operation.deadline)?;
+        let transport = gix::protocol::transport::client::blocking_io::http::Transport::new_http(
+            backend, url, version, false,
+        );
+        self.receive(repo, remote, transport, extra, initial, operation)
+    }
+
+    fn fetch_tag_clone(
+        &self,
+        repo: &gix::Repository,
+        remote: &gix::Remote<'_>,
+        tag: &gix::bstr::BStr,
+        extra: &[gix::refspec::RefSpec],
+        operation: &Operation,
+    ) -> Result<RemoteHead> {
+        let mut spec = BString::from("+");
+        spec.extend_from_slice(tag);
+        spec.push(b':');
+        spec.extend_from_slice(tag);
+        let mut remote = remote.clone();
+        remote.replace_refspecs([spec], Direction::Fetch)?;
+        let head = self.fetch(repo, &remote, extra, operation, true)?;
+        // Updates stay just as narrow as branch clones, retaining the selected
+        // tag instead of the nonexistent branch previously written by Git's wrapper.
+        let mut config = repo.config_file_mut(repo.common_dir().join("config"))?;
+        remote.save_as_to("origin", &mut config)?;
+        config.commit()?;
+        Ok(head)
+    }
+
+    fn receive<T: gix::protocol::transport::client::blocking_io::Transport>(
+        &self,
+        repo: &gix::Repository,
+        remote: &gix::Remote<'_>,
+        transport: T,
+        extra: &[gix::refspec::RefSpec],
+        initial: bool,
+        operation: &Operation,
+    ) -> Result<RemoteHead> {
+        let auth = self.auth.clone();
+        let connection = remote
+            .to_connection_with_transport(transport)
+            .with_credentials(move |action| auth.credentials(action))
+            // Suppress gix's default option resolution, which could install proxy helpers.
+            .with_transport_options(Box::new(()));
+        let selected = narrow_clone_ref(remote, initial);
+        let mut fetch_extra = extra.to_vec();
+        if initial && selected.is_none() {
+            fetch_extra.push(parse_refspec("HEAD")?);
+        }
+        let prepared = connection.prepare_fetch(
+            gix::progress::Discard,
+            gix::remote::ref_map::Options {
+                prefix_from_spec_as_filter_on_remote: false,
+                extra_refspecs: fetch_extra,
+                ..Default::default()
+            },
+        )?;
+        if let Some(name) = selected
+            && let Some(short) = name.strip_prefix(b"refs/heads/")
+            && !prepared.ref_map().remote_refs.iter().any(|reference| reference.unpack().0 == name)
+        {
+            let mut tag = BString::from("refs/tags/");
+            tag.extend_from_slice(short);
+            ensure!(
+                prepared.ref_map().remote_refs.iter().any(|reference| reference.unpack().0 == tag),
+                "Remote branch or tag '{short}' was not found",
+                short = short.as_bstr(),
+            );
+            // Preparation only advertises refs. Reconnect with the exact tag
+            // selection before importing any objects or updating references.
+            drop(prepared);
+            return self.fetch_tag_clone(repo, remote, tag.as_bstr(), extra, operation);
+        }
+        // Like Git's and gix's clone implementations, store the initial refs in one
+        // packed-refs transaction instead of thousands of loose files. Fetches into
+        // existing repositories keep the normal loose-ref/reflog behavior.
+        let outcome = prepared
+            .with_write_packed_refs_only(initial)
+            .receive(gix::progress::Discard, &operation.interrupt)?;
+        operation.check()?;
+        check_fetch_updates(&outcome, remote)?;
+        let names = outcome
+            .ref_map
+            .remote_refs
+            .iter()
+            .map(|reference| reference.unpack().0.to_owned())
+            .collect::<Vec<_>>();
+        local::prune(repo, remote.refspecs(Direction::Fetch), &names)?;
+        let mut head = RemoteHead::default();
+        for reference in outcome.ref_map.remote_refs {
+            use gix::protocol::handshake::Ref;
+            if reference.unpack().0 != "HEAD" {
+                continue;
+            }
+            head = match reference {
+                Ref::Symbolic { target, object, .. } => {
+                    RemoteHead { target: Some(target), id: Some(object) }
+                }
+                Ref::Unborn { target, .. } => RemoteHead { target: Some(target), id: None },
+                Ref::Direct { object, .. } | Ref::Peeled { object, .. } => {
+                    RemoteHead { target: None, id: Some(object) }
+                }
+            };
+        }
+        Ok(head)
     }
 }
 
-impl Default for Git {
-    /// Equivalent to `Git::new(false)`
-    fn default() -> Self {
-        Self::new(false)
+/// Only initial single-ref clones use an exact source-to-itself mapping. Tags
+/// also count after branch-name resolution, so neither selection fetches HEAD.
+fn narrow_clone_ref<'a>(remote: &'a gix::Remote<'_>, initial: bool) -> Option<&'a gix::bstr::BStr> {
+    if !initial {
+        return None;
+    }
+    let [spec] = remote.refspecs(Direction::Fetch) else {
+        return None;
+    };
+    use gix::refspec::{Instruction, instruction::Fetch};
+    match spec.to_ref().instruction() {
+        Instruction::Fetch(Fetch::AndUpdate { src, dst, .. })
+            if src == dst
+                && !src.contains(&b'*')
+                && (src.starts_with(b"refs/heads/") || src.starts_with(b"refs/tags/")) =>
+        {
+            Some(src)
+        }
+        _ => None,
     }
 }
 
-/// Represents how a repository is cloned.
+fn check_fetch_updates(
+    outcome: &gix::remote::fetch::Outcome,
+    remote: &gix::Remote<'_>,
+) -> Result<()> {
+    use gix::remote::fetch::{Status, refs::update::Mode};
+    let updates = match &outcome.status {
+        Status::NoPackReceived { update_refs, .. } | Status::Change { update_refs, .. } => {
+            update_refs
+        }
+    };
+    for (update, mapping, spec, _) in updates.iter_mapping_updates(
+        &outcome.ref_map.mappings,
+        &outcome.ref_map.refspecs,
+        &outcome.ref_map.extra_refspecs,
+    ) {
+        match &update.mode {
+            Mode::NoChangeNeeded
+            | Mode::FastForward
+            | Mode::Forced
+            | Mode::New
+            | Mode::ImplicitTagNotSentByRemote => {}
+            // Like Git's auto-follow, retain existing local tags even if the
+            // advertised tag moved. Explicit --tags/refspec updates still fail.
+            Mode::RejectedTagUpdate
+                if remote.fetch_tags() == Tags::Included
+                    && mapping.spec_index.implicit_index().is_some()
+                    && spec
+                        .is_some_and(|spec| Some(spec.to_ref()) == Tags::Included.to_refspec()) => {
+            }
+            mode => anyhow::bail!("Git fetch rejected reference update: {mode}"),
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum CloneMode {
-    /// Equivalent to `git clone --bare`
     Bare,
-    /// Equivalent to `git clone --mirror`
     Mirror,
-    /// Standard clone with a working tree
     Checkout,
 }
 
 impl CloneMode {
-    /// Return the CLI argument for this clone mode.
+    /// Historical command-line spelling, retained for callers describing clone modes.
     pub fn arg(&self) -> Option<&str> {
         match self {
             Self::Bare => Some("--bare"),
@@ -694,682 +569,314 @@ impl CloneMode {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::net::ToSocketAddrs;
+fn open_options() -> gix::open::Options {
+    gix::open::Options::default().permissions(open_permissions())
+}
 
-    use tempfile::TempDir;
+fn open_permissions() -> gix::open::Permissions {
+    let mut permissions = gix::open::Permissions::default();
+    permissions.config =
+        gix::open::permissions::Config { env: true, ..gix::open::permissions::Config::isolated() };
+    permissions.attributes = gix::open::permissions::Attributes::isolated();
+    // Ignore repository-local GIT_WORK_TREE/GIT_INDEX_FILE/object-store
+    // overrides while acquiring repositories; explicit config rewrites still work.
+    permissions.env.git_prefix = gix::sec::Permission::Deny;
+    permissions.env.objects = gix::sec::Permission::Deny;
+    permissions.env.ssh_prefix = gix::sec::Permission::Deny;
+    permissions
+}
 
-    use super::*;
+fn parse_refspec(spec: &str) -> Result<gix::refspec::RefSpec> {
+    Ok(gix::refspec::parse(spec.as_bytes().as_bstr(), gix::refspec::parse::Operation::Fetch)?
+        .to_owned())
+}
 
-    #[test]
-    fn git_executable_override_is_literal_and_shared() {
-        if let Some(expected) = std::env::var_os("KF_TEST_EXPECT_GIT_BINARY") {
-            assert_eq!(git_command().get_program(), expected);
-            assert_eq!(Git::default().git().get_program(), expected);
-            return;
+#[derive(Default)]
+struct RemoteHead {
+    target: Option<BString>,
+    id: Option<ObjectId>,
+}
+
+fn set_initial_head(repo: &gix::Repository, head: &RemoteHead, mode: CloneMode) -> Result<()> {
+    let Some(target) = head.target.as_ref() else {
+        if let Some(id) = head.id {
+            edit_refs(
+                repo,
+                vec![RefEdit::update(
+                    "HEAD".try_into()?,
+                    Target::Object(id),
+                    PreviousValue::Any,
+                    "clone: detached HEAD",
+                )],
+            )?;
         }
-        // Keep executable selection out of this test process's global environment:
-        // other tests may be cloning concurrently.
-        let path = Path::new("tools with spaces").join("git-custom.exe");
-        for override_path in [Some(path.as_os_str()), None] {
-            let mut command = Command::new(std::env::current_exe().unwrap());
-            command
-                .args([
-                    "--exact",
-                    "git_binary::tests::git_executable_override_is_literal_and_shared",
-                ])
-                .env(
-                    "KF_TEST_EXPECT_GIT_BINARY",
-                    override_path.unwrap_or(std::ffi::OsStr::new("git")),
-                )
-                .env_remove("KF_GIT_BINARY");
-            if let Some(path) = override_path {
-                command.env("KF_GIT_BINARY", path);
+        return Ok(());
+    };
+    let target: gix::refs::FullName = target.as_bstr().try_into()?;
+    let mut edits = Vec::new();
+    if let Some(id) = head.id {
+        edits.push(RefEdit::update(
+            target.clone(),
+            Target::Object(id),
+            PreviousValue::Any,
+            "clone: remote HEAD",
+        ));
+    }
+    edits.push(RefEdit::update(
+        "HEAD".try_into()?,
+        Target::Symbolic(target.clone()),
+        PreviousValue::Any,
+        "clone: remote HEAD",
+    ));
+    if matches!(mode, CloneMode::Checkout) && head.id.is_some() {
+        let short = target
+            .as_bstr()
+            .strip_prefix(b"refs/heads/")
+            .context("Remote HEAD is not a branch")?
+            .as_bstr();
+        let tracking: gix::refs::FullName =
+            BString::from(format!("refs/remotes/origin/{short}")).try_into()?;
+        edits.push(RefEdit::update(
+            "refs/remotes/origin/HEAD".try_into()?,
+            Target::Symbolic(tracking),
+            PreviousValue::Any,
+            "clone: remote HEAD",
+        ));
+        let mut config = repo.config_file_mut(repo.common_dir().join("config"))?;
+        config.set_raw_value(&format!("branch.{short}.remote"), "origin")?;
+        config.set_raw_value(&format!("branch.{short}.merge"), target.as_bstr())?;
+        config.commit()?;
+    }
+    edit_refs(repo, edits)
+}
+
+fn edit_refs(repo: &gix::Repository, edits: Vec<RefEdit>) -> Result<()> {
+    let identity = gix::actor::Signature {
+        name: "Kingfisher".into(),
+        email: "kingfisher@localhost".into(),
+        time: gix::date::Time::now_local_or_utc(),
+    };
+    repo.edit_references_as(
+        edits,
+        Some(identity.to_ref(&mut gix::date::parse::TimeBuf::default())),
+    )?;
+    Ok(())
+}
+
+fn checkout(repo: &gix::Repository, interrupt: &AtomicBool) -> Result<()> {
+    let Some(id) = repo.head()?.try_peel_to_id()? else {
+        return Ok(());
+    };
+    let tree = id.object()?.peel_to_tree()?.id;
+    let mut index = repo.index_from_tree(&tree)?;
+    let mut options =
+        repo.checkout_options(gix::worktree::stack::state::attributes::Source::IdMapping)?;
+    options.destination_is_initially_empty = true;
+    // Repository attributes may name external smudge/process drivers. Native
+    // checkout keeps built-in conversions without executing arbitrary helpers.
+    options.filters.options_mut().drivers.clear();
+    let outcome = gix::worktree::state::checkout(
+        &mut index,
+        repo.workdir().context("Clone has no working tree")?,
+        repo.objects.clone().into_arc()?,
+        &gix::progress::Discard,
+        &gix::progress::Discard,
+        interrupt,
+        options,
+    )?;
+    ensure!(
+        outcome.errors.is_empty(),
+        "Git checkout did not complete: {} errors",
+        outcome.errors.len()
+    );
+    // Like `git clone`, keep the checkout when paths differ only by case on a
+    // case-insensitive filesystem; one of the colliding paths is still scanned.
+    if !outcome.collisions.is_empty() {
+        debug!(
+            "Git checkout skipped {} path(s) colliding on this filesystem",
+            outcome.collisions.len()
+        );
+    }
+    ensure!(!interrupt.load(Ordering::Relaxed), "Git checkout interrupted");
+    index.write(Default::default())?;
+    Ok(())
+}
+
+/// Remove credentials embedded by older Bitbucket clones before opening any remote.
+fn scrub_legacy_remote_credentials(repo: &mut gix::Repository) -> Result<()> {
+    let mut config = repo.config_file_mut(repo.common_dir().join("config"))?;
+    let ids = config
+        .sections_and_ids_by_name("remote")
+        .map(|sections| sections.map(|(_, id)| id).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let mut changed = false;
+    for id in ids {
+        let mut section = config.section_mut_by_id(id).expect("existing remote section");
+        for key in ["url", "pushurl"] {
+            let values =
+                section.values(key).into_iter().map(|value| value.to_owned()).collect::<Vec<_>>();
+            let mut clean = Vec::new();
+            let mut scrubbed = false;
+            for value in values {
+                let mut value = value.to_vec();
+                if let Ok(text) = std::str::from_utf8(&value)
+                    && let Ok(mut url) = Url::parse(text)
+                    && matches!(url.scheme(), "http" | "https")
+                    && (!url.username().is_empty() || url.password().is_some())
+                {
+                    url.set_password(None).ok();
+                    url.set_username("").ok();
+                    value = url.to_string().into_bytes();
+                    scrubbed = true;
+                }
+                clean.push(value);
             }
-            let output = command.output().unwrap();
-            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            if scrubbed {
+                while section.remove(key).is_some() {}
+                for value in clean {
+                    section.push(key, value.as_bstr())?;
+                }
+                changed = true;
+            }
         }
     }
+    if changed {
+        config.commit()?;
+        repo.reload()?;
+    }
+    Ok(())
+}
 
-    #[test]
-    fn failed_git_override_retains_exit_diagnostics() {
-        if std::env::var_os("KF_TEST_GIT_FAILURE_CHILD").is_some() {
-            // The test executable rejects Git arguments on every platform. This
-            // exercises a real nonzero child exit, rather than depending on how
-            // a missing executable is reported by the OS or an emulator.
-            let mut command = git_command();
-            command.arg("--kingfisher-unsupported-git-option");
-            let error = Git::default().run_cmd(command, Duration::ZERO).unwrap_err();
-            let message = error.to_string();
-            let GitError::GitError { stderr, status, .. } = error else {
-                panic!("expected a child exit failure, got {message}");
-            };
-            assert!(!status.success());
-            assert!(!stderr.is_empty(), "child stderr must remain available");
-            assert!(message.contains(&format!("status: {}", format_exit_status(&status))));
-            assert!(message.contains("check KF_GIT_BINARY"), "{message}");
-            assert!(message.contains(&format!("{:?}", std::env::current_exe().unwrap())));
-            return;
-        }
-        // Do not mutate executable selection while other tests run concurrently.
-        let executable = std::env::current_exe().unwrap();
-        let output = Command::new(&executable)
-            .args(["--exact", "git_binary::tests::failed_git_override_retains_exit_diagnostics"])
-            .env("KF_TEST_GIT_FAILURE_CHILD", "1")
-            .env("KF_GIT_BINARY", &executable)
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+/// Cancellation is per operation, not global. Dropping the operation wakes and
+/// joins its deadline thread, including after successful fast clones.
+struct Operation {
+    interrupt: Arc<AtomicBool>,
+    deadline: Option<Instant>,
+    secs: u64,
+    cancel: Option<mpsc::Sender<()>>,
+    timer: Option<JoinHandle<()>>,
+}
+
+impl Operation {
+    fn new(timeout: Duration, disabled: bool) -> Self {
+        let interrupt = Arc::new(AtomicBool::new(false));
+        let deadline = (!disabled && !timeout.is_zero())
+            .then(|| Instant::now().checked_add(timeout))
+            .flatten();
+        let (cancel, timer) = if deadline.is_some() {
+            let (sender, receiver) = mpsc::channel();
+            let interrupt = Arc::clone(&interrupt);
+            let timer = std::thread::spawn(move || {
+                if matches!(receiver.recv_timeout(timeout), Err(mpsc::RecvTimeoutError::Timeout)) {
+                    interrupt.store(true, Ordering::Relaxed);
+                }
+            });
+            (Some(sender), Some(timer))
+        } else {
+            (None, None)
+        };
+        Self { interrupt, deadline, secs: timeout.as_secs(), cancel, timer }
     }
 
-    #[test]
-    fn git_tls_backend_can_be_selected_without_loading_user_config() {
-        if std::env::var_os("KF_TEST_GIT_TLS_CHILD").is_some() {
-            let command = Git::default().git();
-            assert!(command.get_args().any(|arg| arg == "http.sslBackend=schannel"));
-            assert!(command.get_envs().any(|(key, value)| {
-                key == "GIT_CONFIG_NOSYSTEM" && value == Some(std::ffi::OsStr::new("1"))
-            }));
-            return;
-        }
-        let output = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "git_binary::tests::git_tls_backend_can_be_selected_without_loading_user_config",
-            ])
-            .env("KF_TEST_GIT_TLS_CHILD", "1")
-            .env("KF_GIT_SSL_BACKEND", " schannel ")
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    fn expired(&self) -> bool {
+        self.interrupt.load(Ordering::Relaxed)
+            || self.deadline.is_some_and(|deadline| Instant::now() >= deadline)
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn checkout_supports_long_paths_with_git_for_windows() -> anyhow::Result<()> {
-        let temp = TempDir::new()?;
-        let source = git2::Repository::init_bare(temp.path().join("source"))?;
-        let blob = source.blob(b"long path fixture")?;
-        let mut builder = source.treebuilder(None)?;
-        builder.insert("fixture.txt", blob, 0o100644)?;
-        let mut tree = builder.write()?;
-        let segment = "nested".repeat(15);
-        for _ in 0..3 {
-            let mut builder = source.treebuilder(None)?;
-            builder.insert(&segment, tree, 0o040000)?;
-            tree = builder.write()?;
-        }
-        let signature = git2::Signature::now("tester", "tester@example.com")?;
-        source.commit(
-            Some("refs/heads/main"),
-            &signature,
-            &signature,
-            "fixture",
-            &source.find_tree(tree)?,
-            &[],
-        )?;
-        source.set_head("refs/heads/main")?;
-        let url: GitUrl = "https://example.invalid/long-path-fixture.git".parse().unwrap();
-        let local = source.path().to_string_lossy().replace('\\', "/");
-        let mut git = Git::default();
-        git.credentials.extend(["-c".into(), format!("url.{local}.insteadOf={url}")]);
-        let destination = temp.path().join("checkout with spaces");
-        git.create_fresh_clone(&url, &destination, CloneMode::Checkout)?;
-        let file = destination.join(&segment).join(&segment).join(&segment).join("fixture.txt");
-        assert!(file.as_os_str().len() > 260);
-        assert_eq!(std::fs::read(file)?, b"long path fixture");
+    fn check(&self) -> Result<()> {
+        ensure!(!self.expired(), "Git operation deadline exceeded");
         Ok(())
     }
 
-    #[test]
-    fn github_shell_helper_executes_and_does_not_offer_tokens_to_other_hosts() {
-        use std::io::Write;
-
-        let token = "kingfisher-credential-helper-fixture";
-        let git = Git::with_provider_hosts_and_github_token(
-            false,
-            &ProviderHosts::saas_defaults(),
-            Some(token.into()),
-        );
-        for (host, succeeds) in [("github.com", true), ("example.invalid", false)] {
-            let mut command = git.git();
-            command
-                .args(["credential", "fill"])
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
-            let mut child = command.spawn().unwrap();
-            writeln!(child.stdin.take().unwrap(), "protocol=https\nhost={host}\n").unwrap();
-            let output = child.wait_with_output().unwrap();
-            assert_eq!(
-                output.status.success(),
-                succeeds,
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if succeeds {
-                assert!(stdout.contains("username=x-access-token"));
-                assert!(stdout.contains(&format!("password={token}")));
-            } else {
-                assert!(!stdout.contains(token));
-            }
+    fn finish(&self, result: Result<()>) -> Result<(), GitError> {
+        if self.expired() {
+            Err(GitError::Timeout { secs: self.secs })
+        } else {
+            result.map_err(GitError::Operation)
         }
     }
+}
 
-    fn github_is_reachable() -> bool {
-        ("github.com", 443).to_socket_addrs().is_ok()
+impl Drop for Operation {
+    fn drop(&mut self) {
+        if let Some(sender) = self.cancel.take() {
+            let _ = sender.send(());
+        }
+        if let Some(timer) = self.timer.take() {
+            let _ = timer.join();
+        }
     }
+}
 
-    #[test]
-    fn test_git_new() {
-        temp_env::with_vars(
-            [
-                ("KF_GITHUB_TOKEN", None::<&str>),
-                ("KF_BITBUCKET_OAUTH_TOKEN", None::<&str>),
-                ("KF_BITBUCKET_ACCESS_TOKEN", None::<&str>),
-                ("KF_BITBUCKET_USERNAME", None::<&str>),
-                ("KF_BITBUCKET_APP_PASSWORD", None::<&str>),
-            ],
-            || {
-                let git = Git::new(false);
-                assert!(!git.ignore_certs);
-                assert!(git.credentials.is_empty());
-                assert!(git.bitbucket_access_token.is_none());
-            },
-        );
-
-        temp_env::with_var("KF_GITHUB_TOKEN", Some("test_token"), || {
-            let git = Git::new(false);
-            assert_eq!(git.credentials.len(), 4);
-        });
+struct CloneDestination {
+    path: PathBuf,
+    keep: bool,
+}
+impl CloneDestination {
+    fn new(path: &Path) -> Result<Self> {
+        let path = path.canonicalize()?;
+        ensure!(path.is_absolute() && path.parent().is_some(), "Unsafe clone cleanup path");
+        Ok(Self { path, keep: false })
     }
-
-    #[test]
-    fn test_git_new_bitbucket_oauth() {
-        temp_env::with_var("KF_BITBUCKET_OAUTH_TOKEN", Some("oauth"), || {
-            let git = Git::new(false);
-            assert_eq!(git.credentials.len(), 4);
-            assert!(git.credentials.iter().any(|value| value
-                == &format!(
-                    "credential.https://bitbucket.org.helper={BITBUCKET_CREDENTIAL_HELPER}"
-                )));
-            assert!(git.bitbucket_access_token.is_none());
-        });
-    }
-
-    #[test]
-    fn test_git_new_bitbucket_basic_auth() {
-        temp_env::with_vars(
-            [
-                ("KF_BITBUCKET_USERNAME", Some("user")),
-                ("KF_BITBUCKET_APP_PASSWORD", Some("password")),
-            ],
-            || {
-                let git = Git::new(false);
-                assert_eq!(git.credentials.len(), 4);
-                assert!(git.credentials.iter().any(|value| value
-                    == &format!(
-                        "credential.https://bitbucket.org.helper={BITBUCKET_CREDENTIAL_HELPER}"
-                    )));
-                assert!(git.bitbucket_access_token.is_none());
-            },
-        );
-    }
-
-    #[test]
-    fn test_repo_arg_for_clone_includes_bitbucket_app_password() {
-        let url =
-            GitUrl::try_from(url::Url::parse("https://bitbucket.org/workspace/demo.git").unwrap())
-                .unwrap();
-
-        temp_env::with_vars(
-            [
-                ("KF_BITBUCKET_USERNAME", Some("user")),
-                ("KF_BITBUCKET_APP_PASSWORD", Some("secret")),
-            ],
-            || {
-                let git = Git::new(false);
-                assert_eq!(
-                    git.repo_arg_for_clone(&url),
-                    "https://user:secret@bitbucket.org/workspace/demo.git"
-                );
-            },
-        );
-    }
-
-    #[test]
-    fn test_repo_arg_for_clone_uses_token_auth_when_available() {
-        let url =
-            GitUrl::try_from(url::Url::parse("https://bitbucket.org/workspace/demo.git").unwrap())
-                .unwrap();
-
-        temp_env::with_vars([("KF_BITBUCKET_OAUTH_TOKEN", Some("token123"))], || {
-            let git = Git::new(false);
-            assert_eq!(
-                git.repo_arg_for_clone(&url),
-                "https://x-token-auth:token123@bitbucket.org/workspace/demo.git"
-            );
-        });
-    }
-
-    #[test]
-    fn test_repo_arg_for_clone_uses_token_only_auth() {
-        let url =
-            GitUrl::try_from(url::Url::parse("https://bitbucket.org/workspace/demo.git").unwrap())
-                .unwrap();
-
-        temp_env::with_vars([("KF_BITBUCKET_TOKEN", Some("token123"))], || {
-            let git = Git::new(false);
-            assert_eq!(
-                git.repo_arg_for_clone(&url),
-                "https://x-token-auth:token123@bitbucket.org/workspace/demo.git"
-            );
-        });
-    }
-
-    #[test]
-    fn test_repo_arg_for_clone_skips_plaintext_http_bitbucket() {
-        // A plaintext http:// bitbucket.org remote must NOT receive embedded
-        // credentials — that would leak the token over the wire and bypass the
-        // HTTPS-only credential-helper scoping.
-        let url =
-            GitUrl::try_from(url::Url::parse("http://bitbucket.org/workspace/demo.git").unwrap())
-                .unwrap();
-
-        temp_env::with_vars([("KF_BITBUCKET_OAUTH_TOKEN", Some("token123"))], || {
-            let git = Git::new(false);
-            assert_eq!(git.repo_arg_for_clone(&url), url.as_str());
-        });
-    }
-
-    #[test]
-    fn test_repo_arg_for_clone_leaves_non_bitbucket_urls_untouched() {
-        let url = GitUrl::try_from(
-            url::Url::parse("https://github.com/octocat/Hello-World.git").unwrap(),
-        )
-        .unwrap();
-
-        temp_env::with_vars(
-            [
-                ("KF_BITBUCKET_USERNAME", Some("user")),
-                ("KF_BITBUCKET_APP_PASSWORD", Some("secret")),
-            ],
-            || {
-                let git = Git::new(false);
-                assert_eq!(git.repo_arg_for_clone(&url), url.as_str());
-            },
-        );
-    }
-
-    #[test]
-    fn test_git_new_bitbucket_access_token() {
-        let token = "AT1234567890_ACCESS_TOKEN_EXAMPLE_WITH_UNDERSCORE";
-        temp_env::with_var("KF_BITBUCKET_TOKEN", Some(token), || {
-            let git = Git::new(false);
-            assert_eq!(git.credentials.len(), 4);
-            assert!(git.credentials.iter().any(|value| value
-                == &format!(
-                    "credential.https://bitbucket.org.helper={BITBUCKET_CREDENTIAL_HELPER}"
-                )));
-            assert_eq!(git.bitbucket_access_token.as_deref(), Some(token));
-        });
-    }
-
-    #[test]
-    fn test_git_new_bitbucket_token_without_username() {
-        temp_env::with_var("KF_BITBUCKET_TOKEN", Some("token123"), || {
-            let git = Git::new(false);
-            assert_eq!(git.credentials.len(), 4);
-            assert!(git.credentials.iter().any(|value| value
-                == &format!(
-                    "credential.https://bitbucket.org.helper={BITBUCKET_CREDENTIAL_HELPER}"
-                )));
-            assert_eq!(git.bitbucket_access_token.as_deref(), None);
-            assert_eq!(
-                git.bitbucket_basic_auth,
-                Some(("x-token-auth".to_string(), "token123".to_string()))
-            );
-        });
-    }
-
-    #[test]
-    fn test_git_new_bitbucket_trims_whitespace() {
-        let trimmed_token = "AT1234567890_ACCESS_TOKEN_EXAMPLE_WITH_UNDERSCORE";
-        let token = format!("  {trimmed_token}  \n");
-
-        temp_env::with_vars(
-            [("KF_BITBUCKET_USERNAME", Some("  user\n")), ("KF_BITBUCKET_TOKEN", Some(&token))],
-            || {
-                let git = Git::new(false);
-
-                assert_eq!(
-                    git.bitbucket_env,
-                    vec![
-                        ("KF_BITBUCKET_USERNAME".to_string(), "user".to_string()),
-                        ("KF_BITBUCKET_TOKEN".to_string(), trimmed_token.to_string(),),
-                    ],
-                );
-                assert_eq!(git.credentials.len(), 4);
-                assert!(git.credentials.iter().any(|value| value
-                    == &format!(
-                        "credential.https://bitbucket.org.helper={BITBUCKET_CREDENTIAL_HELPER}"
-                    )));
-                assert_eq!(git.bitbucket_access_token.as_deref(), Some(trimmed_token));
-            },
-        );
-    }
-
-    #[test]
-    fn test_clone_mode_arg() {
-        assert_eq!(CloneMode::Bare.arg(), Some("--bare"));
-        assert_eq!(CloneMode::Mirror.arg(), Some("--mirror"));
-        assert_eq!(CloneMode::Checkout.arg(), None);
-    }
-
-    #[test]
-    fn branch_clone_and_update_fetch_only_selected_history() -> anyhow::Result<()> {
-        let temp = TempDir::new()?;
-        let source = git2::Repository::init_bare(temp.path().join("source"))?;
-        let signature = git2::Signature::now("tester", "tester@example.com")?;
-        let commit = |branch: &str,
-                      contents: &[u8],
-                      parent: Option<git2::Oid>|
-         -> anyhow::Result<git2::Oid> {
-            let blob = source.blob(contents)?;
-            let mut builder = source.treebuilder(None)?;
-            builder.insert("secret.txt", blob, 0o100644)?;
-            let tree = source.find_tree(builder.write()?)?;
-            let parent = parent.map(|id| source.find_commit(id)).transpose()?;
-            let parents: Vec<_> = parent.iter().collect();
-            Ok(source.commit(Some(branch), &signature, &signature, "fixture", &tree, &parents)?)
-        };
-        let root = commit("refs/heads/main", b"shared history", None)?;
-        let tip = commit("refs/heads/feature/narrow", b"selected branch", Some(root))?;
-        let other = commit("refs/heads/unrelated", b"unrelated secret", None)?;
-        source.set_head("refs/heads/main")?;
-        source.tag(
-            "unrelated-tag",
-            source.find_commit(other)?.as_object(),
-            &signature,
-            "tag",
-            false,
-        )?;
-        let url: GitUrl = "https://example.invalid/branch-fixture.git".parse().unwrap();
-        // Canonicalization adds a Windows verbatim prefix (`//?/C:/...`) that
-        // Git for Windows interprets as a remote path in an insteadOf rewrite.
-        let local = std::path::absolute(source.path())?.to_string_lossy().replace('\\', "/");
-        let mut git = Git::default();
-        git.credentials.extend(["-c".into(), format!("url.{local}.insteadOf={url}")]);
-        let destination = temp.path().join("cache").join("selected");
-        git.create_branch_clone(&url, &destination, "feature/narrow")?;
+}
+impl Drop for CloneDestination {
+    fn drop(&mut self) {
+        if !self.keep
+            && let Err(error) = std::fs::remove_dir_all(&self.path)
         {
-            let clone = git2::Repository::open_bare(&destination)?;
-            assert_eq!(clone.head()?.target(), Some(tip));
-            assert!(clone.find_commit(root).is_ok(), "keep the branch's complete history");
-            assert!(clone.find_commit(other).is_err(), "do not transfer unrelated objects");
-            assert!(clone.find_reference("refs/heads/main").is_err());
-            assert!(clone.find_reference("refs/heads/unrelated").is_err());
-            assert!(clone.find_reference("refs/tags/unrelated-tag").is_err());
+            debug!("Failed to clean incomplete clone {}: {error}", self.path.display());
         }
-        let updated = commit("refs/heads/feature/narrow", b"updated branch", Some(tip))?;
-        let other_updated = commit("refs/heads/unrelated", b"new unrelated secret", Some(other))?;
-        git.update_clone(&url, &destination)?;
-        let clone = git2::Repository::open_bare(&destination)?;
-        assert_eq!(clone.head()?.target(), Some(updated));
-        assert!(clone.find_commit(other_updated).is_err());
-        assert!(clone.find_reference("refs/heads/unrelated").is_err());
-        assert!(!destination.join("shallow").exists());
-        Ok(())
-    }
-
-    #[test]
-    fn test_create_fresh_clone() -> Result<(), GitError> {
-        if !github_is_reachable() {
-            return Ok(());
-        }
-        let temp_dir = TempDir::new()?;
-        let git = Git::default();
-        let url = GitUrl::try_from(
-            url::Url::parse("https://github.com/octocat/Hello-World.git").unwrap(),
-        )
-        .unwrap();
-        git.create_fresh_clone(&url, temp_dir.path(), CloneMode::Bare)?;
-        assert!(temp_dir.path().join("HEAD").exists());
-        Ok(())
-    }
-
-    #[test]
-    fn test_update_clone() -> Result<(), GitError> {
-        if !github_is_reachable() {
-            return Ok(());
-        }
-        let temp_dir = TempDir::new()?;
-        let git = Git::default();
-        let url = GitUrl::try_from(
-            url::Url::parse("https://github.com/octocat/Hello-World.git").unwrap(),
-        )
-        .unwrap();
-        git.create_fresh_clone(&url, temp_dir.path(), CloneMode::Bare)?;
-        git.update_clone(&url, temp_dir.path())?;
-        Ok(())
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_run_cmd_kills_on_timeout() {
-        // Use `sleep` as a controlled long-running stand-in for a stuck `git`.
-        // The point is to verify that the timeout path kills the child and
-        // surfaces GitError::Timeout instead of hanging the caller.
-        let git = Git::default();
-        let mut cmd = std::process::Command::new("sleep");
-        cmd.arg("30");
-        let start = std::time::Instant::now();
-        let err = git.run_cmd(cmd, Duration::from_millis(200)).unwrap_err();
-        let elapsed = start.elapsed();
-
-        assert!(matches!(err, GitError::Timeout { secs: 0, .. }), "expected Timeout, got {err:?}");
-        // Allow generous slack for slow CI but make sure we didn't actually
-        // wait the full 30s.
-        assert!(elapsed < Duration::from_secs(5), "should have killed promptly, took {elapsed:?}");
-    }
-
-    #[test]
-    fn test_timeout_from_env_parses_and_falls_back() {
-        // Fallback when unset.
-        temp_env::with_var("KF_GIT_FAKE_TIMEOUT", None::<&str>, || {
-            assert_eq!(timeout_from_env("KF_GIT_FAKE_TIMEOUT", 42).as_secs(), 42);
-        });
-        // Parses a valid value.
-        temp_env::with_var("KF_GIT_FAKE_TIMEOUT", Some("7"), || {
-            assert_eq!(timeout_from_env("KF_GIT_FAKE_TIMEOUT", 42).as_secs(), 7);
-        });
-        temp_env::with_var("KF_GIT_FAKE_TIMEOUT", Some("0"), || {
-            assert!(timeout_from_env("KF_GIT_FAKE_TIMEOUT", 42).is_zero());
-        });
-        // Garbage falls back to default rather than blowing up.
-        temp_env::with_var("KF_GIT_FAKE_TIMEOUT", Some("not a number"), || {
-            assert_eq!(timeout_from_env("KF_GIT_FAKE_TIMEOUT", 42).as_secs(), 42);
-        });
-    }
-
-    #[test]
-    fn test_git_error() {
-        let temp_dir = TempDir::new().unwrap();
-        let git = Git::default();
-        let invalid_url =
-            GitUrl::try_from(url::Url::parse("https://invalid.git").unwrap()).unwrap();
-        let err =
-            git.create_fresh_clone(&invalid_url, temp_dir.path(), CloneMode::Bare).unwrap_err();
-        assert!(matches!(err, GitError::GitError { .. }));
-    }
-
-    #[test]
-    fn github_helper_is_scoped_to_provider_host_only() {
-        temp_env::with_var("KF_GITHUB_TOKEN", Some("test_token"), || {
-            let git = Git::new(false);
-
-            // The only bare `credential.helper=` entry is the empty reset that
-            // clears inherited helpers. The token-bearing helper must never be
-            // installed unscoped — an unscoped helper is what leaked provider
-            // tokens to any remote that issued an auth challenge.
-            let unscoped: Vec<&String> = git
-                .credentials
-                .iter()
-                .filter(|value| value.starts_with("credential.helper="))
-                .collect();
-            assert_eq!(unscoped, vec![&"credential.helper=".to_string()]);
-
-            // The GitHub helper is bound to https://github.com.
-            assert!(git.credentials.iter().any(|value| value
-                == &format!("credential.https://github.com.helper={GITHUB_CREDENTIAL_HELPER}")));
-
-            // No credential entry targets an unrelated/attacker host.
-            assert!(!git.credentials.iter().any(|value| value.contains("127.0.0.1")));
-        });
-    }
-
-    #[test]
-    fn provider_helper_scoped_to_each_configured_host() {
-        let hosts = ProviderHosts {
-            github: vec!["github.com".to_string(), "ghe.corp.example.com".to_string()],
-            ..ProviderHosts::default()
-        };
-        temp_env::with_var("KF_GITHUB_TOKEN", Some("test_token"), || {
-            let git = Git::with_provider_hosts(false, &hosts);
-            assert!(git.credentials.iter().any(|value| value
-                == &format!("credential.https://github.com.helper={GITHUB_CREDENTIAL_HELPER}")));
-            assert!(git.credentials.iter().any(|value| value
-                == &format!(
-                    "credential.https://ghe.corp.example.com.helper={GITHUB_CREDENTIAL_HELPER}"
-                )));
-        });
-    }
-
-    #[test]
-    fn explicit_github_token_is_scoped_and_passed_to_child() {
-        let hosts = ProviderHosts::saas_defaults();
-        temp_env::with_var("KF_GITHUB_TOKEN", None::<&str>, || {
-            let git = Git::with_provider_hosts_and_github_token(
-                false,
-                &hosts,
-                Some("fresh-installation-token".to_string()),
-            );
-
-            assert!(git.credentials.iter().any(|value| value
-                == &format!("credential.https://github.com.helper={GITHUB_CREDENTIAL_HELPER}")));
-            let command = git.git();
-            let token = command
-                .get_envs()
-                .find_map(|(name, value)| {
-                    (name == "KF_GITHUB_TOKEN").then(|| value.and_then(|value| value.to_str()))
-                })
-                .flatten();
-            assert_eq!(token, Some("fresh-installation-token"));
-        });
-    }
-
-    #[test]
-    fn github_url_matches_only_trusted_clone_hosts() {
-        let hosts = ProviderHosts {
-            github: vec!["github.com".to_string(), "ghe.example.com:8443".to_string()],
-            ..ProviderHosts::default()
-        };
-        let github =
-            GitUrl::try_from(Url::parse("https://github.com/org/repo.git").unwrap()).unwrap();
-        let enterprise =
-            GitUrl::try_from(Url::parse("https://ghe.example.com:8443/org/repo.git").unwrap())
-                .unwrap();
-        let untrusted =
-            GitUrl::try_from(Url::parse("https://github.attacker.test/org/repo.git").unwrap())
-                .unwrap();
-
-        assert!(hosts.is_github_url(&github));
-        assert!(hosts.is_github_url(&enterprise));
-        assert!(!hosts.is_github_url(&untrusted));
-    }
-
-    #[test]
-    fn no_helper_installed_for_provider_without_trusted_host() {
-        // An empty host list means the token has nowhere safe to go: no helper
-        // is installed, so the token cannot leak even to its own SaaS host.
-        let hosts = ProviderHosts { github: Vec::new(), ..ProviderHosts::default() };
-        temp_env::with_var("KF_GITHUB_TOKEN", Some("test_token"), || {
-            let git = Git::with_provider_hosts(false, &hosts);
-            assert!(!git.credentials.iter().any(|value| value.contains("_ghcreds")));
-        });
     }
 }
 
 #[cfg(test)]
-mod unlimited_tests {
+mod tests {
     use super::*;
 
     #[test]
-    fn inherited_pipe_child() {
-        let Ok(role) = std::env::var("KF_TEST_PIPE_CHILD") else { return };
-        let marker = std::env::var_os("KF_TEST_PIPE_MARKER").unwrap();
-        if role == "parent" {
-            let mut helper = Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", "git_binary::unlimited_tests::inherited_pipe_child"])
-                .env("KF_TEST_PIPE_CHILD", "helper")
-                .spawn()
-                .unwrap();
-            helper.wait().unwrap();
-        } else {
-            std::fs::write(marker, "ready").unwrap();
-            std::thread::sleep(Duration::from_secs(30));
+    fn provider_hosts_are_normalized_and_github_matching_is_exact() {
+        let mut hosts = ProviderHosts::default();
+        ProviderHosts::add(&mut hosts.github, " GITHUB.EXAMPLE:8443 ");
+        ProviderHosts::add(&mut hosts.github, "github.example:8443");
+        assert_eq!(hosts.github, ["github.example:8443"]);
+        assert!(hosts.is_github_url(&"https://github.example:8443/org/repo".parse().unwrap()));
+        for url in ["https://github.example/org/repo", "https://github.example.evil:8443/org/repo"]
+        {
+            assert!(!hosts.is_github_url(&url.parse().unwrap()));
+        }
+        // Tokens cannot authenticate SSH, so ssh:// never triggers GitHub token setup.
+        let ssh: GitUrl = "ssh://git@github.example:8443/org/repo".parse().unwrap();
+        assert!(!hosts.is_github_url(&ssh));
+    }
+
+    #[test]
+    fn native_options_never_probe_a_git_installation_or_load_global_config() {
+        let permissions = open_permissions();
+        assert!(!permissions.config.git_binary);
+        assert!(!permissions.attributes.git_binary);
+        assert!(!permissions.config.system);
+        assert!(!permissions.config.user);
+        assert!(!permissions.config.git);
+        assert!(permissions.config.env);
+        assert!(!permissions.env.git_prefix.is_allowed());
+        assert!(!permissions.env.objects.is_allowed());
+    }
+
+    #[test]
+    fn zero_and_disabled_deadlines_do_not_start_timer_threads() {
+        let zero = Operation::new(Duration::ZERO, false);
+        let disabled = Operation::new(Duration::from_secs(1), true);
+        for operation in [zero, disabled] {
+            assert!(operation.timer.is_none());
+            assert!(operation.deadline.is_none());
+            operation.check().unwrap();
         }
     }
 
     #[test]
-    fn timeout_kills_helpers_holding_output_pipes() {
-        let temp = tempfile::tempdir().unwrap();
-        let marker = temp.path().join("helper-ready");
-        let mut command = Command::new(std::env::current_exe().unwrap());
-        command
-            .args(["--exact", "git_binary::unlimited_tests::inherited_pipe_child"])
-            .env("KF_TEST_PIPE_CHILD", "parent")
-            .env("KF_TEST_PIPE_MARKER", &marker);
-        let start = std::time::Instant::now();
-        let error = Git::default().run_cmd(command, Duration::from_secs(5)).unwrap_err();
-        assert!(marker.exists(), "helper must start before the timeout");
-        assert!(matches!(error, GitError::Timeout { .. }));
-        assert!(start.elapsed() < Duration::from_secs(12), "inherited pipes delayed cleanup");
-    }
-
-    #[test]
-    fn delayed_child() {
-        if let Ok(delay) = std::env::var("KF_TEST_UNLIMITED_WAIT_CHILD") {
-            std::thread::sleep(Duration::from_millis(delay.parse().unwrap()));
-        }
-    }
-
-    #[test]
-    fn cleanup_kills_a_child_without_a_separate_process_group() {
-        let mut command = Command::new(std::env::current_exe().unwrap());
-        command
-            .args(["--exact", "git_binary::unlimited_tests::delayed_child"])
-            .env("KF_TEST_UNLIMITED_WAIT_CHILD", "10000");
-        let mut child = command.spawn().unwrap();
-        kill_process_tree(&mut child, false);
-        assert!(!child.try_wait().unwrap().unwrap().success());
-    }
-
-    #[test]
-    fn unlimited_wait_ignores_deadline() {
-        let command = || {
-            let mut cmd = Command::new(std::env::current_exe().unwrap());
-            cmd.args(["--exact", "git_binary::unlimited_tests::delayed_child"])
-                .env("KF_TEST_UNLIMITED_WAIT_CHILD", "50");
-            cmd
-        };
-        assert!(matches!(
-            Git::default().run_cmd(command(), Duration::from_millis(1)),
-            Err(GitError::Timeout { .. })
-        ));
-        Git::default().without_timeouts(true).run_cmd(command(), Duration::from_millis(1)).unwrap();
-        Git::default().run_cmd(command(), Duration::ZERO).unwrap();
+    fn dropping_successful_operation_cancels_and_joins_timer_immediately() {
+        let start = Instant::now();
+        drop(Operation::new(Duration::from_secs(600), false));
+        assert!(start.elapsed() < Duration::from_secs(2));
     }
 }

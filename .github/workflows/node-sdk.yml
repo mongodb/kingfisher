@@ -1,13 +1,47 @@
 name: Node SDK
 
 on:
+  workflow_call:
+    inputs:
+      phase:
+        description: Build/test only; npm publication retains this workflow's standalone identity
+        type: string
+        default: build
+    outputs:
+      publish:
+        value: ${{ jobs.source.outputs.publish }}
+      version:
+        value: ${{ jobs.source.outputs.version }}
+      artifact_id:
+        value: ${{ jobs.package.outputs.artifact_id }}
   push:
     branches: [main, development]
     tags: ['npm-v*']
-    paths: ['javascript/**', 'crates/**', 'Cargo.toml', 'Cargo.lock', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES', 'third-party/kingfisher-vectorscan/**', 'scripts/third-party-notices.cjs', 'scripts/tests/third-party-notices.test.cjs', 'scripts/license-overrides/**', 'Makefile', '.gitattributes', 'docs/JAVASCRIPT.md', 'scripts/tests/test_node_sdk*.py', '.github/actions/setup-node/**', '.github/actions/vectorscan-prebuilt/**', 'scripts/fetch-vectorscan.py', 'scripts/tests/test_fetch_vectorscan.py', '.github/workflows/node-sdk.yml']
+    paths: ['javascript/**', 'crates/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', 'rust-toolchain*', '.npmrc', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES', 'third-party/kingfisher-vectorscan/**', 'scripts/third-party-notices.cjs', 'scripts/tests/third-party-notices.test.cjs', 'scripts/license-overrides/**', 'Makefile', '.gitattributes', 'docs/JAVASCRIPT.md', 'scripts/check-node-sdk-release.py', 'scripts/check-node-sdk-cohort.py', 'scripts/dispatch-node-sdk.py', 'scripts/check-release-source.py', 'scripts/check-sdk-release.py', 'scripts/release-packages.py', 'scripts/tests/test_node_sdk*.py', '.github/actions/setup-node/**', '.github/actions/vectorscan-prebuilt/**', 'scripts/fetch-vectorscan.py', 'scripts/tests/test_fetch_vectorscan.py', '.github/workflows/node-sdk.yml']
   pull_request:
-    paths: ['javascript/**', 'crates/**', 'Cargo.toml', 'Cargo.lock', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES', 'third-party/kingfisher-vectorscan/**', 'scripts/third-party-notices.cjs', 'scripts/tests/third-party-notices.test.cjs', 'scripts/license-overrides/**', 'Makefile', '.gitattributes', 'docs/JAVASCRIPT.md', 'scripts/tests/test_node_sdk*.py', '.github/actions/setup-node/**', '.github/actions/vectorscan-prebuilt/**', 'scripts/fetch-vectorscan.py', 'scripts/tests/test_fetch_vectorscan.py', '.github/workflows/node-sdk.yml']
+    paths: ['javascript/**', 'crates/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', 'rust-toolchain*', '.npmrc', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES', 'third-party/kingfisher-vectorscan/**', 'scripts/third-party-notices.cjs', 'scripts/tests/third-party-notices.test.cjs', 'scripts/license-overrides/**', 'Makefile', '.gitattributes', 'docs/JAVASCRIPT.md', 'scripts/check-node-sdk-release.py', 'scripts/check-node-sdk-cohort.py', 'scripts/dispatch-node-sdk.py', 'scripts/check-release-source.py', 'scripts/check-sdk-release.py', 'scripts/release-packages.py', 'scripts/tests/test_node_sdk*.py', '.github/actions/setup-node/**', '.github/actions/vectorscan-prebuilt/**', 'scripts/fetch-vectorscan.py', 'scripts/tests/test_fetch_vectorscan.py', '.github/workflows/node-sdk.yml']
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Internal post-gate handoff; ordinary manual runs only build/test
+        type: boolean
+        default: false
+      release_run_id:
+        description: Authorizing release coordinator run
+        type: string
+        default: ''
+      release_run_attempt:
+        description: Authorizing coordinator attempt
+        type: string
+        default: ''
+      expected_sha:
+        description: Exact tested commit, also selected by the existing npm tag
+        type: string
+        default: ''
+      artifact_id:
+        description: Immutable tested archive artifact from that coordinator run
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -19,34 +53,25 @@ env:
 jobs:
   source:
     name: Check SDK version and release source
+    if: inputs.phase != 'publish' && inputs.release_run_id == ''
     runs-on: ubuntu-24.04
+    outputs:
+      build: ${{ steps.release.outputs.build }}
+      publish: ${{ steps.release.outputs.publish }}
+      version: ${{ steps.release.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24.22.2'
           package-manager-cache: false
-      - name: Check source manifests before native builds
-        shell: bash
-        run: |
-          node - <<'NODE'
-          const assert = require('node:assert/strict');
-          const fs = require('node:fs');
-          const sdk = require('./javascript/package.json');
-          const rust = fs.readFileSync('crates/kingfisher-node/Cargo.toml', 'utf8');
-          assert.equal(sdk.version, /^version\s*=\s*"([^"]+)"/m.exec(rust)?.[1]);
-          assert.equal(sdk.private, true, 'Development manifests must not be published');
-          if (process.env.GITHUB_REF_TYPE === 'tag') {
-            assert.equal(process.env.GITHUB_REPOSITORY, 'mongodb/kingfisher');
-            assert.equal(process.env.GITHUB_REF_NAME, `npm-v${sdk.version}`);
-          }
-          NODE
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            git merge-base --is-ancestor HEAD origin/main
-          fi
+      - name: Check source manifests and npm before native builds (read-only)
+        id: release
+        run: python3 scripts/check-node-sdk-release.py --github-event
       - name: Check public Node-only TypeScript consumers before native builds
         working-directory: javascript
         run: |
@@ -64,6 +89,8 @@ jobs:
   build:
     name: Native (${{ matrix.target }})
     needs: source
+    # A coordinated release tests every target even for an unchanged registry version.
+    if: needs.source.outputs.build == 'true' || inputs.phase == 'build'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
@@ -187,8 +214,10 @@ jobs:
 
   package:
     name: Validate all target packages (no publication)
-    needs: build
+    needs: [source, build]
     runs-on: ubuntu-22.04
+    outputs:
+      artifact_id: ${{ steps.staging.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
@@ -210,7 +239,12 @@ jobs:
           npm run check:release
           npm run pack:release
           npm run test:package
+      - name: Plan all npm uploads before the shared release gate (read-only)
+        if: needs.source.outputs.publish == 'true'
+        working-directory: javascript
+        run: node scripts/publish-packages.cjs --json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: staging
         with:
           name: node-sdk-registry-staging
           path: javascript/release/
@@ -259,21 +293,50 @@ jobs:
       - name: Clean offline Node 26 consumer of the same archives
         run: npm run test:package
 
+  cohort:
+    name: Verify the authorizing release cohort (read-only)
+    if: github.repository == 'mongodb/kingfisher' && github.event_name == 'workflow_dispatch' && inputs.publish && inputs.release_run_id != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      run_id: ${{ steps.cohort.outputs.run_id }}
+      artifact_id: ${{ steps.cohort.outputs.artifact_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify same-SHA coordinator gates and exact staging artifact
+        id: cohort
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/check-node-sdk-cohort.py
+
   publish:
     name: Publish validated npm packages with OIDC
-    if: github.repository == 'mongodb/kingfisher' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/npm-v')
-    needs: [package, verify]
+    # A standalone npm-tag dispatch retains the existing node-sdk.yml / npm trust.
+    # Ordinary pushes and manual build-only runs cannot bypass the shared gate.
+    needs: cohort
+    if: github.repository == 'mongodb/kingfisher' && github.event_name == 'workflow_dispatch' && inputs.publish && inputs.release_run_id != ''
     runs-on: ubuntu-24.04
     environment: npm
     permissions:
       contents: read
+      actions: read
       id-token: write
     concurrency:
-      group: npm-sdk-publish-${{ github.repository }}
+      # Serialize all versions so a slower old release cannot downgrade latest.
+      # Keep pending releases instead of replacing the previously queued job.
+      group: npm-sdk-publish
+      queue: max
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -283,14 +346,23 @@ jobs:
           package-manager-cache: false
       - name: Install pinned OIDC-capable npm CLI
         run: npm install --global npm@11.21.1
+      - name: Recheck cohort authorization after npm environment approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/check-node-sdk-cohort.py
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: node-sdk-registry-staging
+          artifact-ids: ${{ needs.cohort.outputs.artifact_id }}
+          run-id: ${{ needs.cohort.outputs.run_id }}
+          github-token: ${{ github.token }}
+          merge-multiple: true
           path: javascript/release
-      - name: Check released manifests and upstream ancestry
-        run: |
-          git merge-base --is-ancestor HEAD origin/main
-          node javascript/scripts/check-release.cjs
+      - name: Check released manifests
+        run: node javascript/scripts/check-release.cjs
       - name: Publish exact tested archives, platforms first
         working-directory: javascript
+        env:
+          KINGFISHER_RELEASE_EXPECTED_SHA: ${{ inputs.expected_sha }}
+          KINGFISHER_RELEASE_PUBLISH: ${{ inputs.publish }}
+          KINGFISHER_RELEASE_COHORT: 'true'
         run: npm run publish:registry

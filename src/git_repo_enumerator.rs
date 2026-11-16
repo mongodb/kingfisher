@@ -289,10 +289,12 @@ impl<'a> GitRepoEnumerator<'a> {
 
 #[cfg(test)]
 mod tests {
+    use crate::git_test_fixture as fixture;
+
     use std::collections::BTreeMap;
 
     use base64::{Engine, engine::general_purpose::STANDARD};
-    use git2::{Oid, Repository as Git2Repository, Signature};
+    use gix::ObjectId;
     use kingfisher_vectorscan::{BlockDatabase, Flag, Pattern};
     use tempfile::tempdir;
 
@@ -300,26 +302,24 @@ mod tests {
     use crate::{limits::ResourceLimits, scanner_pool::ScannerPool};
 
     fn commit(
-        repo: &Git2Repository,
-        entries: &[(&str, Oid)],
-        parents: &[Oid],
+        repo: &gix::Repository,
+        entries: &[(&str, ObjectId)],
+        parents: &[ObjectId],
         message: &str,
-    ) -> Result<Oid> {
-        let mut builder = repo.treebuilder(None)?;
+    ) -> Result<ObjectId> {
+        let mut builder = repo.empty_tree().edit()?;
         for &(path, oid) in entries {
-            let mode = if repo.find_object(oid, None)?.kind() == Some(git2::ObjectType::Tree) {
+            let mode = if repo.find_object(oid)?.kind == gix::objs::Kind::Tree {
                 0o040000
             } else {
                 0o100644
             };
-            builder.insert(path, oid, mode)?;
+            fixture::insert(&mut builder, path, oid, mode)?;
         }
-        let tree = repo.find_tree(builder.write()?)?;
-        let parents: Vec<_> =
-            parents.iter().map(|oid| repo.find_commit(*oid)).collect::<Result<_, _>>()?;
+        let tree = builder.write()?.detach();
         let parents: Vec<_> = parents.iter().collect();
-        let signature = Signature::now("history tester", "history@example.com")?;
-        Ok(repo.commit(None, &signature, &signature, message, &tree, &parents)?)
+        let signature = fixture::signature("history tester", "history@example.com");
+        fixture::commit(repo, None, &signature, &signature, message, &tree, &parents)
     }
 
     fn appearances(result: GitRepoResult) -> BTreeMap<String, serde_json::Value> {
@@ -332,6 +332,85 @@ mod tests {
                 (blob.blob_oid.to_string(), serde_json::to_value(&blob.first_seen).unwrap())
             })
             .collect()
+    }
+
+    #[test]
+    fn gix_fixture_preserves_commit_identities_dates_parents_and_refs() -> Result<()> {
+        let temp = tempdir()?;
+        let repo = gix::init_bare(temp.path())?;
+        let tree = repo.empty_tree().edit()?.write()?.detach();
+        let author = gix::actor::Signature {
+            time: gix::date::Time::new(1_700_000_000, -3600),
+            ..fixture::signature("fixture author", "author@example.invalid")
+        };
+        let committer = gix::actor::Signature {
+            time: gix::date::Time::new(1_700_003_600, 7200),
+            ..fixture::signature("fixture committer", "committer@example.invalid")
+        };
+        let first = fixture::commit(&repo, None, &author, &committer, "first", &tree, &[])?;
+        let second = fixture::commit(&repo, None, &author, &committer, "second", &tree, &[])?;
+        fixture::set_head(&repo, "refs/heads/fixture")?;
+        let merge = fixture::commit(
+            &repo,
+            Some("HEAD"),
+            &author,
+            &committer,
+            "merge",
+            &tree,
+            &[&second, &first],
+        )?;
+        let object = repo.find_commit(merge)?;
+        assert_eq!(object.author()?.to_owned()?, author);
+        assert_eq!(object.committer()?.to_owned()?, committer);
+        assert_eq!(object.tree_id()?.detach(), tree);
+        assert_eq!(object.parent_ids().map(gix::Id::detach).collect::<Vec<_>>(), [second, first]);
+        assert_eq!(repo.head_id()?.detach(), merge);
+        assert_eq!(repo.head_name()?.unwrap().as_bstr(), "refs/heads/fixture");
+        let tag = fixture::tag(&repo, "fixture", merge, &committer, "annotated fixture")?;
+        assert_eq!(repo.find_tag(tag)?.target_id()?.detach(), merge);
+        fixture::detach_head(&repo, first)?;
+        assert_eq!(repo.head_id()?.detach(), first);
+        assert!(repo.head_name()?.is_none());
+        assert_eq!(repo.find_reference("refs/heads/fixture")?.id().detach(), merge);
+        Ok(())
+    }
+
+    #[test]
+    fn gix_fixture_preserves_index_staging_and_origin_replacement() -> Result<()> {
+        let temp = tempdir()?;
+        let repo = gix::init(temp.path())?;
+        let path = Path::new("nested/fixture ü.txt");
+        std::fs::create_dir_all(temp.path().join("nested"))?;
+        std::fs::write(temp.path().join(path), b"first contents")?;
+        let mut index = fixture::index(&repo)?;
+        fixture::stage(&repo, &mut index, path)?;
+        let first = fixture::write_tree(&repo, &index)?;
+        index.write(Default::default())?;
+        assert!(repo.index_path().is_file());
+        assert_eq!(fixture::write_tree(&repo, &*fixture::index(&repo)?)?, first);
+        std::fs::write(temp.path().join(path), b"second contents")?;
+        fixture::stage(&repo, &mut index, path)?;
+        assert_eq!(index.entries().len(), 1, "restaging replaces, rather than duplicates, a path");
+        assert_ne!(fixture::write_tree(&repo, &index)?, first);
+        assert_eq!(
+            fixture::write_tree(&repo, &*fixture::index(&repo)?)?,
+            first,
+            "unstored changes do not alter the on-disk index"
+        );
+        fixture::unstage(&mut index, path)?;
+        assert!(index.entries().is_empty());
+        fixture::origin(&repo, "https://first.example.invalid/repo.git")?;
+        fixture::origin(&repo, "https://second.example.invalid/repo.git")?;
+        let reopened = gix::open(temp.path())?;
+        assert_eq!(
+            reopened.config_snapshot().string("remote.origin.url").unwrap().to_string(),
+            "https://second.example.invalid/repo.git"
+        );
+        assert_eq!(
+            reopened.config_snapshot().string("remote.origin.fetch").unwrap().to_string(),
+            "+refs/heads/*:refs/remotes/origin/*"
+        );
+        Ok(())
     }
 
     fn content_filter() -> Result<GitContentFilter> {
@@ -351,19 +430,25 @@ mod tests {
     #[test]
     fn content_prepass_respects_blob_size_limits_without_counting_skipped_bytes() -> Result<()> {
         let temp = tempdir()?;
-        let repo = Git2Repository::init_bare(temp.path())?;
+        let repo = gix::init_bare(temp.path())?;
         let secret = b"candidate_secret_0123456789abcdef";
-        let small = repo.blob(secret)?;
-        let large = repo.blob(&secret.repeat(10))?;
-        let clean = repo.blob(&vec![b'x'; secret.len() + 1])?;
+        let small = repo.write_blob(secret).map(gix::Id::detach)?;
+        let large = repo.write_blob(secret.repeat(10)).map(gix::Id::detach)?;
+        let clean = repo.write_blob(vec![b'x'; secret.len() + 1]).map(gix::Id::detach)?;
         let head = commit(
             &repo,
             &[("small.txt", small), ("large.txt", large), ("clean.txt", clean)],
             &[],
             "size limit fixture",
         )?;
-        repo.reference("refs/heads/main", head, true, "test")?;
-        repo.set_head("refs/heads/main")?;
+        fixture::reference(
+            &repo,
+            "refs/heads/main",
+            head,
+            gix::refs::transaction::PreviousValue::Any,
+            "test",
+        )?;
+        fixture::set_head(&repo, "refs/heads/main")?;
 
         for limit in [Some(secret.len() as u64), None] {
             let filter = content_filter()?.with_max_blob_size(limit);
@@ -390,18 +475,23 @@ mod tests {
     #[test]
     fn sparse_metadata_preserves_branch_introductions_duplicates_and_orphans() -> Result<()> {
         let temp = tempdir()?;
-        let repo = Git2Repository::init_bare(temp.path())?;
-        let clean = repo.blob(b"ordinary source text without matching credentials")?;
+        let repo = gix::init_bare(temp.path())?;
+        let clean = repo
+            .write_blob(b"ordinary source text without matching credentials")
+            .map(gix::Id::detach)?;
         let secret = b"candidate_secret_0123456789abcdef";
-        let candidate = repo.blob(secret)?;
-        let encoded = repo.blob(STANDARD.encode(secret).as_bytes())?;
+        let candidate = repo.write_blob(secret).map(gix::Id::detach)?;
+        let encoded = repo.write_blob(STANDARD.encode(secret).as_bytes()).map(gix::Id::detach)?;
         let unicode: Vec<_> = std::iter::once(0xfeff)
             .chain(std::str::from_utf8(secret)?.encode_utf16())
             .flat_map(u16::to_le_bytes)
             .collect();
-        let unicode = repo.blob(&unicode)?;
-        let archive = repo.blob(b"PK\x03\x04 possible archive content long enough")?;
-        let orphan = repo.blob(b"orphan candidate_secret_fedcba9876543210")?;
+        let unicode = repo.write_blob(&unicode).map(gix::Id::detach)?;
+        let archive = repo
+            .write_blob(b"PK\x03\x04 possible archive content long enough")
+            .map(gix::Id::detach)?;
+        let orphan =
+            repo.write_blob(b"orphan candidate_secret_fedcba9876543210").map(gix::Id::detach)?;
         let root = commit(&repo, &[("clean.txt", clean)], &[], "root")?;
         let left = commit(
             &repo,
@@ -421,8 +511,14 @@ mod tests {
             &[left, right],
             "merge",
         )?;
-        repo.reference("refs/heads/main", merged, true, "test")?;
-        repo.set_head("refs/heads/main")?;
+        fixture::reference(
+            &repo,
+            "refs/heads/main",
+            merged,
+            gix::refs::transaction::PreviousValue::Any,
+            "test",
+        )?;
+        fixture::set_head(&repo, "refs/heads/main")?;
 
         let filter = content_filter()?;
         let open =
@@ -472,15 +568,18 @@ mod tests {
     fn candidate_tree_pruning_preserves_shared_subtree_paths_and_clean_commit_ancestry()
     -> Result<()> {
         let temp = tempdir()?;
-        let repo = Git2Repository::init_bare(temp.path())?;
-        let candidate = repo.blob(b"candidate_secret_0123456789abcdef")?;
-        let clean = repo.blob(b"ordinary source file with no possible matching token")?;
-        let mut builder = repo.treebuilder(None)?;
-        builder.insert("secret.txt", candidate, 0o100644)?;
-        let shared = builder.write()?;
-        let mut builder = repo.treebuilder(None)?;
-        builder.insert("clean.txt", clean, 0o100644)?;
-        let clean_subtree = builder.write()?;
+        let repo = gix::init_bare(temp.path())?;
+        let candidate =
+            repo.write_blob(b"candidate_secret_0123456789abcdef").map(gix::Id::detach)?;
+        let clean = repo
+            .write_blob(b"ordinary source file with no possible matching token")
+            .map(gix::Id::detach)?;
+        let mut builder = repo.empty_tree().edit()?;
+        fixture::insert(&mut builder, "secret.txt", candidate, 0o100644)?;
+        let shared = builder.write()?.detach();
+        let mut builder = repo.empty_tree().edit()?;
+        fixture::insert(&mut builder, "clean.txt", clean, 0o100644)?;
+        let clean_subtree = builder.write()?.detach();
         let first = commit(
             &repo,
             &[("alpha", shared), ("beta", shared), ("clean", clean_subtree)],
@@ -490,8 +589,14 @@ mod tests {
         // An irrelevant intervening snapshot must still transmit ancestor state.
         let middle = commit(&repo, &[("clean", clean_subtree)], &[first], "remove candidate")?;
         let last = commit(&repo, &[("reintroduced", shared)], &[middle], "reintroduce")?;
-        repo.reference("refs/heads/main", last, true, "test")?;
-        repo.set_head("refs/heads/main")?;
+        fixture::reference(
+            &repo,
+            "refs/heads/main",
+            last,
+            gix::refs::transaction::PreviousValue::Any,
+            "test",
+        )?;
+        fixture::set_head(&repo, "refs/heads/main")?;
         let open =
             || -> Result<_> { Ok(gix::open_opts(temp.path(), gix::open::Options::isolated())?) };
         for excluded in [None, Some("beta/**")] {

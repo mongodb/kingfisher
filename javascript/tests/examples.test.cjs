@@ -180,8 +180,11 @@ test('Git recipes scan all four scopes without changing the caller repository', 
     git(['init']);
     git(['config', 'user.name', 'SDK example test']);
     git(['config', 'user.email', 'sdk-example@example.invalid']);
-    // Synthetic commits must not inherit a user's signing-key requirements.
+    // Synthetic commits must not inherit a user's signing keys or commit hooks.
     git(['config', 'commit.gpgsign', 'false']);
+    const hooks = path.join(directory, 'empty-hooks');
+    fs.mkdirSync(hooks);
+    git(['config', 'core.hooksPath', hooks]);
     const file = path.join(repository, 'config.env');
     fs.writeFileSync(file, 'ordinary configuration\n');
     git(['add', 'config.env']);

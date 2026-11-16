@@ -250,7 +250,6 @@ pub fn find_closest_variable(
 mod tests {
     use super::*;
     use crate::matcher::{SerializableCapture, SerializableCaptures};
-    use pretty_assertions::assert_eq;
     use reqwest::Url;
     use smallvec::smallvec;
 

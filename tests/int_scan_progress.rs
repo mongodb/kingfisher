@@ -1,8 +1,8 @@
-//! Progress counts reportable observations before report deduplication, not writer batches.
+//! Scan/report invariants and terminal progress remain independent of retired sidechannels.
 use std::{
     fs,
     path::PathBuf,
-    process::{Command, Output, Stdio},
+    process::{Command, Output},
     time::Duration,
 };
 
@@ -94,18 +94,8 @@ impl Fixture {
                 "--jobs=2",
                 "--allow-internal-ips",
             ])
-            .env("NO_COLOR", "1")
-            .env("KINGFISHER_PROGRESS_FILE", &self.progress);
+            .env("NO_COLOR", "1");
         command
-    }
-
-    fn snapshot(&self) -> Value {
-        let bytes = fs::read(&self.progress).unwrap();
-        let text = std::str::from_utf8(&bytes).unwrap();
-        for secret in ["secret_1234", "secret_5678", "helper_1234"] {
-            assert!(!text.contains(secret), "progress must not include credential material");
-        }
-        serde_json::from_slice(&bytes).unwrap()
     }
 }
 
@@ -128,7 +118,36 @@ fn report(output: &Output) -> Value {
 }
 
 #[test]
-fn occurrences_are_independent_of_final_dedup_and_hidden_helpers() {
+fn retired_progress_environment_does_not_create_a_sidechannel_file() {
+    let fixture = Fixture::new("http://127.0.0.1:9", &["secret_1234\n"], false);
+    let output = fixture
+        .command()
+        .args(["--no-validate", "--quiet"])
+        .env("KINGFISHER_PROGRESS_FILE", &fixture.progress)
+        .output()
+        .unwrap();
+    assert_eq!(report(&output)["findings"].as_array().unwrap().len(), 1);
+    serde_json::from_slice::<Value>(&output.stdout).unwrap();
+    assert!(!fixture.progress.exists(), "retired progress environment must not create files");
+}
+
+#[test]
+fn retired_progress_environment_does_not_overwrite_existing_files() {
+    let fixture = Fixture::new("http://127.0.0.1:9", &["secret_1234\n"], false);
+    let contents = b"keep this existing file unchanged\n";
+    fs::write(&fixture.progress, contents).unwrap();
+    let output = fixture
+        .command()
+        .args(["--no-validate", "--quiet"])
+        .env("KINGFISHER_PROGRESS_FILE", &fixture.progress)
+        .output()
+        .unwrap();
+    assert_eq!(report(&output)["findings"].as_array().unwrap().len(), 1);
+    assert_eq!(fs::read(&fixture.progress).unwrap(), contents);
+}
+
+#[test]
+fn reports_respect_deduplication_and_hidden_helpers() {
     // Distinct blobs containing the same secret exercise storage dedup, not blob reuse.
     let fixture = Fixture::new(
         "http://127.0.0.1:9",
@@ -138,8 +157,8 @@ fn occurrences_are_independent_of_final_dedup_and_hidden_helpers() {
         ],
         true,
     );
-    for (no_dedup, include_hidden, occurrences, reported) in
-        [(false, false, 2, 1), (true, false, 2, 2), (false, true, 4, 3)]
+    for (no_dedup, include_hidden, reported) in
+        [(false, false, 1), (true, false, 2), (false, true, 3)]
     {
         let mut command = fixture.command();
         command.args(["--no-validate", "--quiet"]);
@@ -152,13 +171,6 @@ fn occurrences_are_independent_of_final_dedup_and_hidden_helpers() {
         let output = command.output().unwrap();
         let report = report(&output);
         assert_eq!(report["findings"].as_array().unwrap().len(), reported);
-        let progress = fixture.snapshot();
-        assert_eq!(progress["findings"], occurrences);
-        assert_eq!(progress["blobs"], 2);
-        assert_eq!(progress["completed"], 0);
-        // The scan-wide guard must stay alive through reporting, not just matching.
-        assert_eq!(progress["phase"], "Writing report");
-        assert_eq!(progress["kind"], "other");
         // Quiet machine-readable stdout remains one complete JSON document.
         serde_json::from_slice::<Value>(&output.stdout).unwrap();
     }
@@ -179,9 +191,6 @@ fn identical_blobs_still_contribute_reportable_observations() {
         }
         let output = command.output().unwrap();
         assert_eq!(report(&output)["findings"].as_array().unwrap().len(), reported);
-        let snapshot = fixture.snapshot();
-        assert_eq!(snapshot["findings"], 2);
-        assert_eq!(snapshot["blobs"], 2);
     }
 }
 
@@ -218,12 +227,11 @@ fn pdf_raw_and_extracted_representations_do_not_inflate_occurrences() {
         }
         let output = command.output().unwrap();
         assert_eq!(report(&output)["findings"].as_array().unwrap().len(), reported);
-        assert_eq!(fixture.snapshot()["findings"], 6);
     }
 }
 
 #[test]
-fn duplicate_pdf_pages_do_not_change_reports_when_progress_is_enabled() {
+fn retired_progress_environment_does_not_change_duplicate_pdf_reports() {
     // Duplicate page observations must not consume raw storage suppression counts.
     let token = "demo_abcd1234efgh5678";
     let mut objects = vec![
@@ -260,19 +268,21 @@ fn duplicate_pdf_pages_do_not_change_reports_when_progress_is_enabled() {
     )
     .unwrap();
     fs::write(fixture.inputs.join("duplicate-pages.pdf"), pdf).unwrap();
-    let scan = |progress: bool| {
+    let scan = |retired_environment: bool| {
         let mut command = fixture.command();
         command.arg("--no-validate");
-        if !progress {
+        if retired_environment {
+            command.env("KINGFISHER_PROGRESS_FILE", &fixture.progress);
+        } else {
             command.env_remove("KINGFISHER_PROGRESS_FILE");
         }
         report(&command.output().unwrap())
     };
-    let without_progress = scan(false);
-    let with_progress = scan(true);
-    assert!(!with_progress["findings"].as_array().unwrap().is_empty());
-    assert_eq!(with_progress["findings"], without_progress["findings"]);
-    assert_eq!(fixture.snapshot()["blobs"], 4, "raw PDF and all three pages were observed");
+    let without_retired_environment = scan(false);
+    let with_retired_environment = scan(true);
+    assert!(!with_retired_environment["findings"].as_array().unwrap().is_empty());
+    assert_eq!(with_retired_environment["findings"], without_retired_environment["findings"]);
+    assert!(!fixture.progress.exists());
 }
 
 #[cfg(unix)]
@@ -316,7 +326,6 @@ async fn terminal_progress_does_not_interleave_with_stdout_json_reports() {
     let mut command = fixture.command();
     command
         .env("TERM", "xterm-256color")
-        .env_remove("KINGFISHER_PROGRESS_FILE")
         .arg("--no-dedup")
         .stdin(Stdio::null())
         .stdout(slave.try_clone().unwrap())
@@ -356,7 +365,7 @@ async fn terminal_progress_does_not_interleave_with_stdout_json_reports() {
 }
 
 #[tokio::test]
-async fn dependent_validation_advances_findings_before_the_blob_finishes() {
+async fn dependent_validation_preserves_all_reportable_findings() {
     let server = MockServer::start().await;
     for (token, delay) in [("secret_1234", 50), ("secret_5678", 2000)] {
         Mock::given(method("GET"))
@@ -373,38 +382,20 @@ async fn dependent_validation_advances_findings_before_the_blob_finishes() {
         true,
     );
     let mut command = tokio::process::Command::from(fixture.command());
-    command.kill_on_drop(true).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let child = command.spawn().unwrap();
-    // The delayed second check keeps one blob in flight long enough for a live
-    // snapshot. Hidden helpers and filtered candidates must not enter either total.
-    tokio::time::timeout(Duration::from_secs(20), async {
-        loop {
-            if let Ok(bytes) = fs::read(&fixture.progress)
-                && let Ok(snapshot) = serde_json::from_slice::<Value>(&bytes)
-                && snapshot["kind"] == "validation"
-                && snapshot["completed"] == 1
-            {
-                assert_eq!(snapshot["total"], 2);
-                assert_eq!(snapshot["findings"], 2);
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("no live per-finding validation snapshot");
-    let output = child.wait_with_output().await.unwrap();
-    assert_eq!(report(&output)["findings"].as_array().unwrap().len(), 2);
-    let progress = fixture.snapshot();
-    assert_eq!(progress["completed"], 2);
-    assert_eq!(progress["total"], 2);
-    assert_eq!(progress["findings"], 2);
-    assert_eq!(progress["phase"], "Writing report");
-    assert_eq!(progress["kind"], "other");
+    command.kill_on_drop(true);
+    let output = command.output().await.unwrap();
+    let report = report(&output);
+    let findings = report["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 2);
+    assert!(
+        findings
+            .iter()
+            .all(|finding| { finding["finding"]["validation"]["status"] == "Active Credential" })
+    );
 }
 
 #[tokio::test]
-async fn baseline_suppression_preserves_reportable_validation_counts() {
+async fn baseline_suppression_preserves_validated_reportable_occurrences() {
     for dependent in [false, true] {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -449,11 +440,9 @@ async fn baseline_suppression_preserves_reportable_validation_counts() {
                 );
                 let expected = if include_hidden { 3 } else { 2 - suppressed };
                 let report: Value = serde_json::from_slice(&output.stdout).unwrap();
-                assert_eq!(report["findings"].as_array().unwrap().len(), expected);
-                let progress = fixture.snapshot();
-                assert_eq!(progress["total"], expected);
                 assert_eq!(
-                    progress["completed"], expected,
+                    report["findings"].as_array().unwrap().len(),
+                    expected,
                     "dependent={dependent}, suppressed={suppressed}, include_hidden={include_hidden}"
                 );
             }
@@ -462,7 +451,7 @@ async fn baseline_suppression_preserves_reportable_validation_counts() {
 }
 
 #[tokio::test]
-async fn simple_validation_groups_advance_all_reportable_occurrences() {
+async fn shared_validation_groups_report_every_requested_occurrence() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .respond_with(ResponseTemplate::new(200))
@@ -477,9 +466,12 @@ async fn simple_validation_groups_advance_all_reportable_occurrences() {
     let mut command = tokio::process::Command::from(fixture.command());
     command.args(["--no-dedup", "--quiet"]);
     let output = command.output().await.unwrap();
-    assert_eq!(report(&output)["findings"].as_array().unwrap().len(), 2);
-    let progress = fixture.snapshot();
-    assert_eq!(progress["findings"], 2);
-    assert_eq!(progress["completed"], 2);
-    assert_eq!(progress["total"], 2);
+    let report = report(&output);
+    let findings = report["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 2);
+    assert!(
+        findings
+            .iter()
+            .all(|finding| { finding["finding"]["validation"]["status"] == "Active Credential" })
+    );
 }

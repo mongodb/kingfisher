@@ -1,8 +1,10 @@
+#[path = "../src/git_test_fixture.rs"]
+mod fixture;
+
 use std::{fs, io::Write, path::Path};
 
 use anyhow::Result;
 use assert_cmd::Command;
-use git2::{Repository, Signature};
 
 fn pdf() -> Vec<u8> {
     let text: String =
@@ -104,14 +106,15 @@ fn pdf_git_history_keeps_extracted_findings_and_commit_provenance() -> Result<()
     let root = tempfile::tempdir()?;
     let rules = rules(root.path())?;
     let path = root.path().join("repository.git");
-    let repo = Repository::init_bare(&path)?;
-    repo.remote("origin", "https://github.com/example/pdf-fixture")?;
-    let blob = repo.blob(&pdf())?;
-    let mut builder = repo.treebuilder(None)?;
-    builder.insert("document.pdf", blob, 0o100644)?;
-    let tree = repo.find_tree(builder.write()?)?;
-    let signature = Signature::now("PDF Test", "pdf@example.invalid")?;
-    let commit = repo.commit(Some("HEAD"), &signature, &signature, "PDF fixture", &tree, &[])?;
+    let repo = gix::init_bare(&path)?;
+    fixture::origin(&repo, "https://github.com/example/pdf-fixture")?;
+    let blob = repo.write_blob(pdf()).map(gix::Id::detach)?;
+    let mut builder = repo.empty_tree().edit()?;
+    fixture::insert(&mut builder, "document.pdf", blob, 0o100644)?;
+    let tree = builder.write()?.detach();
+    let signature = fixture::signature("PDF Test", "pdf@example.invalid");
+    let commit =
+        fixture::commit(&repo, Some("HEAD"), &signature, &signature, "PDF fixture", &tree, &[])?;
     let records =
         findings(scan(&path, &rules).args(["--git-history=full", "--file-extension=pdf"]));
     assert_eq!(records.len(), 2);
@@ -220,13 +223,13 @@ fn pdf_raw_bytes_are_scanned_alongside_extracted_pages() -> Result<()> {
     assert_eq!(findings(&mut scan(&renamed, &rules)).len(), 3);
 
     let repository = root.path().join("repository.git");
-    let repo = Repository::init_bare(&repository)?;
-    let blob = repo.blob(&bytes)?;
-    let mut builder = repo.treebuilder(None)?;
-    builder.insert("document.pdf", blob, 0o100644)?;
-    let tree = repo.find_tree(builder.write()?)?;
-    let signature = Signature::now("PDF Test", "pdf@example.invalid")?;
-    repo.commit(Some("HEAD"), &signature, &signature, "PDF raw fixture", &tree, &[])?;
+    let repo = gix::init_bare(&repository)?;
+    let blob = repo.write_blob(&bytes).map(gix::Id::detach)?;
+    let mut builder = repo.empty_tree().edit()?;
+    fixture::insert(&mut builder, "document.pdf", blob, 0o100644)?;
+    let tree = builder.write()?.detach();
+    let signature = fixture::signature("PDF Test", "pdf@example.invalid");
+    fixture::commit(&repo, Some("HEAD"), &signature, &signature, "PDF raw fixture", &tree, &[])?;
     assert_eq!(findings(scan(&repository, &rules).arg("--git-history=full")).len(), 3);
     Ok(())
 }
@@ -244,12 +247,17 @@ fn pdf_raw_and_page_overlap_has_one_stable_location_even_without_dedup() -> Resu
     zip.write_all(&bytes)?;
     drop(zip.finish()?);
     let repository = root.path().join("repository.git");
-    let repo = Repository::init_bare(&repository)?;
-    let mut builder = repo.treebuilder(None)?;
-    builder.insert("document.pdf", repo.blob(&bytes)?, 0o100644)?;
-    let tree = repo.find_tree(builder.write()?)?;
-    let signature = Signature::now("PDF Test", "pdf@example.invalid")?;
-    repo.commit(Some("HEAD"), &signature, &signature, "PDF overlap", &tree, &[])?;
+    let repo = gix::init_bare(&repository)?;
+    let mut builder = repo.empty_tree().edit()?;
+    fixture::insert(
+        &mut builder,
+        "document.pdf",
+        repo.write_blob(&bytes).map(gix::Id::detach)?,
+        0o100644,
+    )?;
+    let tree = builder.write()?.detach();
+    let signature = fixture::signature("PDF Test", "pdf@example.invalid");
+    fixture::commit(&repo, Some("HEAD"), &signature, &signature, "PDF overlap", &tree, &[])?;
 
     for path in [&file, &archive, &repository] {
         let mut previous = None;

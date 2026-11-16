@@ -14,6 +14,7 @@ const root = path.resolve(__dirname, '..');
 const generatorVersion = '4.2.0';
 const nonCargoSources = [
   'NOTICE',
+  'crates/kingfisher-core/data/tokei-LICENSE-MIT',
   'crates/kingfisher-rules/generated/NOTICES.txt',
   'third-party/kingfisher-vectorscan/NOTICE',
   'third-party/kingfisher-vectorscan/LICENSE-VECTORSCAN',
@@ -87,7 +88,7 @@ function dependencies(run = cargo) {
     packages.set(key, pkg);
   }
   // --workspace includes tools and future members; --all-features includes opt-in
-  // validators/GUI/allocators. --target all is a union, not a cross-compilation.
+  // validators/allocators. --target all is a union, not a cross-compilation.
   const tree = run(['tree', '--locked', '--offline', '--workspace', '--all-features', '--target', 'all',
     '--edges', 'normal,build', '--prefix', 'none', '--format', '{p}']);
   const expected = new Map();
@@ -196,6 +197,8 @@ function validate(entries, expected, overrides = loadOverrides()) {
   const stale = [...entries.keys()].filter(key => !expected.has(key));
   assert.deepEqual(missing, [], `Missing third-party notices: ${missing.join(', ')}`);
   assert.deepEqual(stale, [], `Stale/first-party notices must be pruned: ${stale.join(', ')}`);
+  const staleOverrides = Object.keys(overrides).filter(key => !expected.has(key));
+  assert.deepEqual(staleOverrides, [], `Stale license overrides must be pruned: ${staleOverrides.join(', ')}`);
   for (const [key, pkg] of expected) {
     assert.ok(complete(entries.get(key), pkg), `Incomplete/mismatched license text: ${key}; refresh licenses or add a reviewed pinned override (NOT FOUND is never waived)`);
     if (overrides[key]) assert.equal(entries.get(key), overrideEntry(pkg, overrides[key]), `Stale pinned license/provenance: ${key}`);

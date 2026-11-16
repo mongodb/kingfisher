@@ -1,3 +1,6 @@
+#[path = "../src/git_test_fixture.rs"]
+mod fixture;
+
 use clap::Parser;
 use kingfisher::{
     bitbucket,
@@ -441,24 +444,23 @@ async fn bitbucket_rejects_cross_origin_and_repeated_pagination_links() {
 
 async fn scan_deleted_secret(provider: &str) -> anyhow::Result<()> {
     use assert_cmd::prelude::*;
-    use git2::{Repository, Signature};
     use predicates::str::contains;
     use std::{fs, path::Path, process::Command};
 
     let temp = tempfile::tempdir()?;
     let repo_dir = temp.path().join("snippet");
-    let repo = Repository::init(&repo_dir)?;
-    let sig = Signature::now("tester", "tester@example.com")?;
+    let repo = gix::init(&repo_dir)?;
+    let sig = fixture::signature("tester", "tester@example.com");
     let secret = "test_snippet_deleted_secret";
     fs::write(repo_dir.join("secret.txt"), secret)?;
-    let mut index = repo.index()?;
-    index.add_path(Path::new("secret.txt"))?;
-    let tree = repo.find_tree(index.write_tree()?)?;
-    let first = repo.commit(Some("HEAD"), &sig, &sig, "add secret", &tree, &[])?;
+    let mut index = fixture::index(&repo)?;
+    fixture::stage(&repo, &mut index, Path::new("secret.txt"))?;
+    let tree = fixture::write_tree(&repo, &index)?;
+    let first = fixture::commit(&repo, Some("HEAD"), &sig, &sig, "add secret", &tree, &[])?;
     fs::remove_file(repo_dir.join("secret.txt"))?;
-    index.remove_path(Path::new("secret.txt"))?;
-    let tree = repo.find_tree(index.write_tree()?)?;
-    repo.commit(Some("HEAD"), &sig, &sig, "remove secret", &tree, &[&repo.find_commit(first)?])?;
+    fixture::unstage(&mut index, Path::new("secret.txt"))?;
+    let tree = fixture::write_tree(&repo, &index)?;
+    fixture::commit(&repo, Some("HEAD"), &sig, &sig, "remove secret", &tree, &[&first])?;
     let rules = temp.path().join("rules.yml");
     fs::write(
         &rules,
@@ -513,17 +515,12 @@ async fn scan_deleted_secret(provider: &str) -> anyhow::Result<()> {
         .assert()
         .success()
         .stdout(format!("{clone_url}\n"));
-    // Use a local path: MSYS2 Git interprets file:///C:/... as the invalid path /C:/....
+    // An absolute filesystem rewrite exercises native imports without an upload-pack process.
     let local_repo = repo_dir.to_string_lossy();
     #[cfg(windows)]
     let local_repo = local_repo.replace('\\', "/");
     let rewrite = format!("url.{local_repo}.insteadOf");
-    // Bitbucket's clone layer embeds its configured OAuth credentials in the URL.
-    let clone_argument = if provider == "bitbucket" {
-        clone_url.replace("https://", "https://x-token-auth:snippet-test-token@")
-    } else {
-        clone_url.to_string()
-    };
+    // Credentials stay in the native transport callback, never in clone URLs.
     for (enabled, code) in [(true, 200), (false, 3)] {
         let mut command = make_command();
         command
@@ -532,7 +529,7 @@ async fn scan_deleted_secret(provider: &str) -> anyhow::Result<()> {
             .args(["--format", "json", "--jobs", "2"])
             .env("GIT_CONFIG_COUNT", "1")
             .env("GIT_CONFIG_KEY_0", &rewrite)
-            .env("GIT_CONFIG_VALUE_0", &clone_argument);
+            .env("GIT_CONFIG_VALUE_0", clone_url);
         if enabled {
             command.arg("--include-snippets");
         }

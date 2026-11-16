@@ -1,0 +1,1227 @@
+{
+  "schema_version": 1,
+  "measured_on": "2026-11-14",
+  "repository_url": "https://github.com/mongodb/mongo.git",
+  "environment": {
+    "os": "macOS 27.2",
+    "architecture": "arm64",
+    "cpu": "Apple M4 Max",
+    "logical_cpus": 16,
+    "memory_bytes": 51539607552,
+    "git": "2.56.0",
+    "gix": "0.90.0",
+    "rustc": "1.99.0 (b940084d7 2026-09-28)",
+    "kingfisher": "2.19.0"
+  },
+  "method": {
+    "scope": "Full-history mirrors of all advertised refs; no shallow/filter/alternates/checkout/local hardlinks",
+    "native_git_command": "git -c credential.helper= -c gc.auto=0 clone --mirror --quiet URL DESTINATION",
+    "thread_settings": "Both engines use their defaults",
+    "gix_allocator": "mimalloc (production default)",
+    "gix_path": "empty; invalid KF_GIT_BINARY override; no Git fallback",
+    "git_configuration": "Global/system config and credential helpers disabled; prompts disabled",
+    "cache_state": "OS caches not flushed; replay payload warm",
+    "timed_concurrency": "No other benchmarks, builds, inventories, tests, or fsck from this task",
+    "wan_followup": "One extra paired round after two highly variable gix samples; all three retained; no further rounds",
+    "limitations": [
+      "Small local samples, not statistical/cross-machine proof",
+      "WAN and upstream refs may change",
+      "Windows x64 executes under Prism on ARM64, not native x64 hardware; guest benchmarks use loopback replay, not GitHub WAN"
+    ]
+  },
+  "dataset": {
+    "head": "525eca950da83a9beba9c4e3cf8f060799e37e98",
+    "object_counts": {
+      "blob": 915033,
+      "commit": 162732,
+      "tag": 1330,
+      "tree": 911086
+    },
+    "total_objects": 1990181,
+    "all_objects_sha256": "9d04520ab82e37695e46d72ce6e23dfe158cc25f3b40f56340c2bedf51cfd188",
+    "reachable_objects": 1990181,
+    "reachable_objects_sha256": "f8e59d58a8647863eefddb93c7507d987c4b683daa68291de8265709f4185077",
+    "head_files": 56155,
+    "head_tree_sha256": "8292efd0e56d5be17881a90df19821956058729c5510837edfaaf216df396c5b"
+  },
+  "canonical_ref_count": 4799,
+  "frozen_replay": {
+    "pack_sha1": "68bde6663be030d32ab65910540f7ade0fd6b7b2",
+    "pack_bytes": 1499492635,
+    "pack_objects": 1990181,
+    "advertised_ref_lines": 6130,
+    "head": "525eca950da83a9beba9c4e3cf8f060799e37e98",
+    "response_bytes": 1499607087,
+    "response_sha256": "4453d7d52ce1820f6371034a4e35e160555d7ee9f412f3d13eb9dd038e348060",
+    "protocol": "smart HTTP v0, side-band-64k"
+  },
+  "build_provenance": {
+    "baseline": {
+      "src/git_binary.rs": "84f03b7c55862e1b6c396ebd11ddd14c30714ca336004c8e92f1304cc14bc8d3",
+      "src/git_binary/http.rs": "debc9569bba416b5ed1e6076862a2e026edd46af50e46629d0583b9f0ce389b7",
+      "Cargo.toml": "40d2a5e60430d3d2d4d2cb23cb41b4e2c10c3ed249b7498620425312ac989adc",
+      "Cargo.lock": "771be0d653f623a00f1712ac986339213466487e3fa27eb040f688c507afc1c7",
+      "executable_sha256": "3952879e2eb30aa27bc3f4e1becd642d4abf804e3b5481b0971ae43c9a1cd831"
+    },
+    "optimized": {
+      "src/git_binary.rs": "7cdafafec188e549d6e6016a5b16acdd9d0672f9bb397e7b8c24c6e8870f49c2",
+      "src/git_binary/http.rs": "debc9569bba416b5ed1e6076862a2e026edd46af50e46629d0583b9f0ce389b7",
+      "Cargo.toml": "0b6aba8aac9c11251443d35df4c338058a3c4b6b6c85b2d5e0dfc6c9f44f3c92",
+      "Cargo.lock": "771be0d653f623a00f1712ac986339213466487e3fa27eb040f688c507afc1c7",
+      "examples/git_clone.rs": "cecb59b08f6bff2bb76baf22997b4338861f846c7745c9b2550b4f497b99d8b8",
+      "executable_sha256": "729132eb06085ec1df53eb45a7ccefc0f0805720caae57c9ad101f5d4dd5f413"
+    }
+  },
+  "measurements": [
+    {
+      "stage": "baseline_https",
+      "samples_per_engine": 2,
+      "started_at_utc": [
+        "2026-11-14T15:55:45.702302+00:00"
+      ],
+      "medians_seconds": {
+        "git": 64.61544943746412,
+        "gix": 50.560433895967435
+      },
+      "gix_elapsed_time_reduction_percent": 21.75178794523337,
+      "gix_speedup_factor": 1.2779844724120866,
+      "runs": [
+        {
+          "engine": "git",
+          "round": 1,
+          "wall_seconds": 69.03189120802563,
+          "user_seconds": 69.419838,
+          "system_seconds": 16.075668,
+          "exit_code": 0
+        },
+        {
+          "engine": "gix",
+          "round": 1,
+          "wall_seconds": 53.02284129196778,
+          "user_seconds": 41.196635,
+          "system_seconds": 8.716553000000001,
+          "exit_code": 0
+        },
+        {
+          "engine": "gix",
+          "round": 2,
+          "wall_seconds": 48.09802649996709,
+          "user_seconds": 37.78790199999999,
+          "system_seconds": 8.417958000000002,
+          "exit_code": 0
+        },
+        {
+          "engine": "git",
+          "round": 2,
+          "wall_seconds": 60.19900766690262,
+          "user_seconds": 69.17878000000002,
+          "system_seconds": 15.641053999999997,
+          "exit_code": 0
+        }
+      ]
+    },
+    {
+      "stage": "optimized_https",
+      "samples_per_engine": 3,
+      "started_at_utc": [
+        "2026-11-14T16:23:31.218736+00:00",
+        "2026-11-14T16:45:06.557367+00:00"
+      ],
+      "medians_seconds": {
+        "git": 62.916466083028354,
+        "gix": 55.837702707969584
+      },
+      "gix_elapsed_time_reduction_percent": 11.251050505152671,
+      "gix_speedup_factor": 1.1267739006398707,
+      "runs": [
+        {
+          "engine": "git",
+          "round": 1,
+          "wall_seconds": 62.916466083028354,
+          "user_seconds": 69.71815000000001,
+          "system_seconds": 15.99817,
+          "exit_code": 0
+        },
+        {
+          "engine": "gix",
+          "round": 1,
+          "wall_seconds": 102.96550483303145,
+          "user_seconds": 45.02210699999999,
+          "system_seconds": 10.710097999999999,
+          "exit_code": 0
+        },
+        {
+          "engine": "gix",
+          "round": 2,
+          "wall_seconds": 55.837702707969584,
+          "user_seconds": 40.92988199999999,
+          "system_seconds": 8.816296000000001,
+          "exit_code": 0
+        },
+        {
+          "engine": "git",
+          "round": 2,
+          "wall_seconds": 60.22981837496627,
+          "user_seconds": 68.55208100000002,
+          "system_seconds": 15.286752,
+          "exit_code": 0
+        },
+        {
+          "engine": "git",
+          "round": 3,
+          "wall_seconds": 65.26323808298912,
+          "user_seconds": 69.900791,
+          "system_seconds": 15.775792,
+          "exit_code": 0
+        },
+        {
+          "engine": "gix",
+          "round": 3,
+          "wall_seconds": 51.19246666703839,
+          "user_seconds": 41.158894000000004,
+          "system_seconds": 8.783459000000002,
+          "exit_code": 0
+        }
+      ]
+    },
+    {
+      "stage": "baseline_replay",
+      "samples_per_engine": 2,
+      "started_at_utc": [
+        "2026-11-14T16:06:37.297764+00:00"
+      ],
+      "medians_seconds": {
+        "git": 24.63627939549042,
+        "gix": 16.712151708023157
+      },
+      "gix_elapsed_time_reduction_percent": 32.164465909238494,
+      "gix_speedup_factor": 1.474153647352486,
+      "runs": [
+        {
+          "engine": "git",
+          "round": 1,
+          "wall_seconds": 24.379654958029278,
+          "user_seconds": 63.57314,
+          "system_seconds": 12.862331000000001,
+          "exit_code": 0
+        },
+        {
+          "engine": "gix",
+          "round": 1,
+          "wall_seconds": 16.411415833048522,
+          "user_seconds": 34.880120999999995,
+          "system_seconds": 6.152307,
+          "exit_code": 0
+        },
+        {
+          "engine": "gix",
+          "round": 2,
+          "wall_seconds": 17.01288758299779,
+          "user_seconds": 35.33761200000001,
+          "system_seconds": 6.509543000000001,
+          "exit_code": 0
+        },
+        {
+          "engine": "git",
+          "round": 2,
+          "wall_seconds": 24.89290383295156,
+          "user_seconds": 63.92941299999998,
+          "system_seconds": 13.307123,
+          "exit_code": 0
+        }
+      ]
+    },
+    {
+      "stage": "optimized_replay",
+      "samples_per_engine": 2,
+      "started_at_utc": [
+        "2026-11-14T16:28:13.284387+00:00"
+      ],
+      "medians_seconds": {
+        "git": 24.517547687515616,
+        "gix": 16.325449708558153
+      },
+      "gix_elapsed_time_reduction_percent": 33.41320299798538,
+      "gix_speedup_factor": 1.5017992230047414,
+      "runs": [
+        {
+          "engine": "git",
+          "round": 1,
+          "wall_seconds": 24.295327833038755,
+          "user_seconds": 63.596139,
+          "system_seconds": 13.096746,
+          "exit_code": 0
+        },
+        {
+          "engine": "gix",
+          "round": 1,
+          "wall_seconds": 16.21000883402303,
+          "user_seconds": 34.520331,
+          "system_seconds": 6.459975999999999,
+          "exit_code": 0
+        },
+        {
+          "engine": "gix",
+          "round": 2,
+          "wall_seconds": 16.440890583093278,
+          "user_seconds": 34.832755000000006,
+          "system_seconds": 6.452857999999999,
+          "exit_code": 0
+        },
+        {
+          "engine": "git",
+          "round": 2,
+          "wall_seconds": 24.739767541992478,
+          "user_seconds": 64.16095199999998,
+          "system_seconds": 13.262295000000002,
+          "exit_code": 0
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "parity": true,
+    "distinct_repositories_including_source": 19,
+    "timed_clones": 18,
+    "full_fsck_repositories": [
+      "wan-optimized-git",
+      "wan-optimized-gix",
+      "replay-optimized-git",
+      "replay-optimized-gix"
+    ],
+    "fsck_scope": "First optimized native/gix clone for both HTTPS and replay; not every repeated clone",
+    "repositories": [
+      {
+        "name": "source",
+        "extra_origin_aliases": 0,
+        "pack_bytes": 1499492635,
+        "index_bytes": 55726140
+      },
+      {
+        "name": "wan-baseline-git-r1",
+        "extra_origin_aliases": 0,
+        "pack_bytes": 1511002718,
+        "index_bytes": 55726140
+      },
+      {
+        "name": "wan-baseline-git-r2",
+        "extra_origin_aliases": 0,
+        "pack_bytes": 1499492635,
+        "index_bytes": 55726140
+      },
+      {
+        "name": "wan-baseline-gix-r1",
+        "extra_origin_aliases": 4799,
+        "pack_bytes": 1511002718,
+        "index_bytes": 55726140
+      },
+      {
+        "name": "wan-baseline-gix-r2",
+        "extra_origin_aliases": 4799,
+        "pack_bytes": 1511002718,
+        "index_bytes": 55726140
+      },
+      {
+        "name": "replay-baseline-fixed-git-r1",
+        "extra_origin_aliases": 0,
+        "pack_bytes": 1499492635,
+        "index_bytes": 55726140
+      },
+      {
+        "name": "replay-baseline-fixed-git-r2",
+        "extra_origin_aliases": 0,
+        "pack_bytes": 1499492635,
+        "index_bytes": 55726140
+      },
+      {
+        "name": "replay-baseline-fixed-gix-r1",
+        "extra_origin_aliases": 4799,
+        "pack_bytes": 1499492635,
+        "index_bytes": 55726140
+      },
+      {
+        "name": "replay-baseline-fixed-gix-r2",
+        "extra_origin_aliases": 4799,
+        "pack_bytes": 1499492635,
+        "index_bytes": 55726140
+      },
+      {
+        "name": "wan-optimized-git-r1",
+        "extra_origin_aliases": 0,
+        "pack_bytes": 1499492635,
+        "index_bytes": 55726140
+      },
+      {
+        "name": "wan-optimized-git-r2",
+        "extra_origin_aliases": 0,
+        "pack_bytes": 1511002718,
+        "index_bytes": 55726140
+      },
+      {
+        "name": "wan-optimized-gix-r1",
+        "extra_origin_aliases": 4799,
+        "pack_bytes": 1499492635,
+        "index_bytes": 55726140
+      },
+      {
+        "name": "wan-optimized-gix-r2",
+        "extra_origin_aliases": 4799,
+        "pack_bytes": 1499496829,
+        "index_bytes": 55726140
+      },
+      {
+        "name": "replay-optimized-git-r1",
+        "extra_origin_aliases": 0,
+        "pack_bytes": 1499492635,
+        "index_bytes": 55726140
+      },
+      {
+        "name": "replay-optimized-git-r2",
+        "extra_origin_aliases": 0,
+        "pack_bytes": 1499492635,
+        "index_bytes": 55726140
+      },
+      {
+        "name": "replay-optimized-gix-r1",
+        "extra_origin_aliases": 4799,
+        "pack_bytes": 1499492635,
+        "index_bytes": 55726140
+      },
+      {
+        "name": "replay-optimized-gix-r2",
+        "extra_origin_aliases": 4799,
+        "pack_bytes": 1499492635,
+        "index_bytes": 55726140
+      },
+      {
+        "name": "wan-optimized-git-r3",
+        "extra_origin_aliases": 0,
+        "pack_bytes": 1499496829,
+        "index_bytes": 55726140
+      },
+      {
+        "name": "wan-optimized-gix-r3",
+        "extra_origin_aliases": 4799,
+        "pack_bytes": 1511002718,
+        "index_bytes": 55726140
+      }
+    ]
+  },
+  "validation": {
+    "library_tests": {
+      "passed": 1122,
+      "ignored": 1
+    },
+    "integration_tests_passed": 48,
+    "live_private_https_ssh_tests_passed": 2,
+    "benchmark_python_tests_passed": 12,
+    "cargo_fmt_all_check": "passed",
+    "cargo_clippy_locked_all_targets_deny_warnings": "passed",
+    "rule_bundle_check": "passed",
+    "mkdocs_build": "passed",
+    "windows_x64_arm64": "passed; see vmware_validation",
+    "linux": "passed; see vmware_validation",
+    "macos_affected_tests_after_guest_fixes": {
+      "integration_passed": 16,
+      "ssh_unit_passed": 12,
+      "ssh_fixture_ignored": 1,
+      "cargo_fmt_all_check": "passed",
+      "cargo_clippy_locked_all_targets_deny_warnings": "passed"
+    }
+  },
+  "vmware_validation": {
+    "measured_on": "2026-11-14",
+    "hypervisor": {
+      "product": "VMware Fusion",
+      "version": "26.0.1",
+      "build": 25689522
+    },
+    "host": "Same Apple M4 Max/macOS host as environment above",
+    "source": {
+      "base_revision": "32ae71bbd3ef56789c2e6ed8f0dd1cad6229a8ce",
+      "archive_sha256": "f567e73f3ad146310f7eabff2d6df1466d0abf807f3685b0a4556de58774200f",
+      "validation_source_sha256": "1ec69bd03677413e362b3958874e89d921fa8c5251e110346c9c9e7ee0bc3a15",
+      "expected_files_verified": 1022,
+      "unchanged_regular_files": 1018,
+      "test_only_adjustments": [
+        {
+          "path": "src/git_binary/ssh.rs",
+          "archive_sha256": "20dd0ed2afebcbfee2cc11b173b0d332304f27c16b3fb518800df3d99236fae3",
+          "current_sha256": "3993ae5ab71d6cf19f50c3f55a62f9d0bf2fb710cb8b75691f50b7e6f1b34c94",
+          "rationale": "Accept the native Windows .exe suffix while preserving SSH argument and trust assertions; cfg(test) only."
+        },
+        {
+          "path": "tests/git_live.rs",
+          "archive_sha256": "4319acd3a428983a47a2df6673a76b521598954485d756dd7dbf520deb964c13",
+          "current_sha256": "1b1cf5304690f5e345142bab7e1a38bb4ce1d665439270f5a1e6a81967e96a19",
+          "rationale": "Allow an explicit absolute SSH configuration for isolated pinned guest trust; ignored integration tests only."
+        },
+        {
+          "path": "tests/no_limits.rs",
+          "archive_sha256": "99b3ec6f7de379fbd97c26277ce0f874600b7d03395972e0f2aefaa808f6db3f",
+          "current_sha256": "72243ded8d81f442228a6fc70c5126a89b56d0999015820ef17730932effd3a8",
+          "rationale": "Expect the in-process Git operation timeout diagnostic, preserving bounded/unbounded deadlines and connection-cleanup checks."
+        },
+        {
+          "path": "tests/repository_id.rs",
+          "archive_sha256": "5038b8aec93c6ec48855e4079db377457fc7ed98203f2a1f1250a07ffe888659",
+          "current_sha256": "005bc67b8646a266ad9a598b5b30fdd3af339b10e9fe87b8d7c3ec9a51982cce",
+          "rationale": "Rewrite the credential-free Bitbucket URL to the local fixture, retaining all provider-ID and no-other-instance lookup assertions."
+        }
+      ],
+      "runtime_changes_during_vm_validation": false,
+      "scope": "Frozen guest sources before subsequent host report-only edits",
+      "guest_verification_scope": "Expected source files; unexpected guest files/build outputs were not enumerated",
+      "host_post_validation_comparison": {
+        "verified_at_utc": "2026-11-14T22:18:57.743422+00:00",
+        "frozen_normalized_validation_source_sha256": "1ec69bd03677413e362b3958874e89d921fa8c5251e110346c9c9e7ee0bc3a15",
+        "expected_files_present": 1022,
+        "archive_unchanged_regular_files_excluding_reports": 1016,
+        "verified_test_only_overlays": [
+          "src/git_binary/ssh.rs",
+          "tests/git_live.rs",
+          "tests/no_limits.rs",
+          "tests/repository_id.rs"
+        ],
+        "report_only_current_bytes_excluded": [
+          "docs/GIT_CLONE_BENCHMARK.json",
+          "docs/GIT_CLONE_BENCHMARK.md"
+        ],
+        "runtime_changes_since_snapshot": false,
+        "git_listed_existing_file_set_matches_snapshot": true,
+        "enumeration_scope": "Git cached plus untracked, excluding ignored files and missing deleted entries",
+        "proof_sha256": "118267bb6e399ce5c2beaba021967040bfb05d5f5f1e7269b7a211c1417528a8"
+      }
+    },
+    "method": {
+      "transport": "Guest-loopback replay of the identical top-level frozen_replay payload; no guest GitHub WAN timing",
+      "scope": "Full-history mirrors of all advertised refs; no shallow/filter/alternates/checkout/local hardlinks",
+      "samples_per_engine_per_execution_target": 2,
+      "order": [
+        "git-r1",
+        "gix-r1",
+        "gix-r2",
+        "git-r2"
+      ],
+      "concurrency": "Serial targets and clones; no competing task builds, tests, benchmarks, inventories, or fsck while timing",
+      "cache_state": "OS caches not flushed; replay payload warm",
+      "engine_threads": "Default; six guest vCPUs",
+      "release_profile": {
+        "production_default_unmodified": true,
+        "lto": true,
+        "codegen_units": 1
+      },
+      "gix_runtime": {
+        "path": "empty",
+        "KF_GIT_BINARY": "kingfisher-no-git-must-be-needed",
+        "native_git_fallback": false
+      },
+      "verification": "Full ref, stored/reachable object and HEAD-tree inventory parity plus native Git fsck --full --no-reflogs, outside timing",
+      "limitations": [
+        "Two paired rounds per target, not statistical proof",
+        "Windows x64 runs under Prism emulation, not native x64 hardware",
+        "Guest loopback results are not WAN throughput measurements",
+        "Native Git version differs between Linux and Windows",
+        "Windows Python harness is x64 under Prism, not native ARM64 Python SDK runtime coverage",
+        "kingfisher-node excluded from guest workspace tests; Node-API runtime not covered",
+        "System background activity was not disabled or exhaustively controlled"
+      ],
+      "cleanup_guard_scope": "Quiescent controlled guest with fixed owned paths, no-following reparse/mount/volume checks and explicit Cargo output directories; path-based checks are not protection against hostile concurrent path swaps"
+    },
+    "linux_arm64": {
+      "environment": {
+        "os": "Ubuntu 24.04.5",
+        "kernel": "6.8.0-147-generic",
+        "architecture": "aarch64",
+        "vcpus": 6,
+        "memory_mib": 16384,
+        "filesystem": "ext4",
+        "source_on_shared_folder": false,
+        "rustc": "1.99.0 (b940084d7)",
+        "git": "2.43.0",
+        "python": "3.12.3"
+      },
+      "tests": {
+        "workspace_harnesses": 115,
+        "workspace": {
+          "passed": 2768,
+          "failed": 0,
+          "ignored": 7,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "workspace_node_excluded": true,
+        "live_private_https_ssh_passed": 2,
+        "benchmark_python_passed": 12,
+        "format": "passed",
+        "clippy_all_targets_deny_warnings": "passed",
+        "profile": "ci-test",
+        "build_jobs": 1,
+        "test_threads": 1,
+        "umask": "077"
+      },
+      "artifacts": [
+        {
+          "label": "gix_release",
+          "bytes": 7749648,
+          "sha256": "db1762819eab7d4568c89c4d310f5d42f4bcba2244c1c0405034d87513ccdaa0",
+          "format": "ELF64",
+          "machine": 183,
+          "architecture": "aarch64"
+        },
+        {
+          "label": "live_auth_tests",
+          "bytes": 44344968,
+          "sha256": "1ccbc123236e39bac5dc48981b5c5e273550ba58dcec34ad5ada23b7f727547d",
+          "format": "ELF64",
+          "machine": 183,
+          "architecture": "aarch64"
+        },
+        {
+          "label": "native_git",
+          "bytes": 4003072,
+          "sha256": "068c11a6747b848c3ed35599f714250864d2bd94b4165d27770ce5c36e83894f",
+          "format": "ELF64",
+          "machine": 183,
+          "architecture": "aarch64"
+        }
+      ],
+      "benchmark": {
+        "status": "passed",
+        "started_at_utc": "2026-11-14T19:58:32.075328+00:00",
+        "runs": [
+          {
+            "engine": "git",
+            "round": 1,
+            "wall_seconds": 48.572030064999126,
+            "user_seconds": 78.14219100000001,
+            "system_seconds": 10.787031,
+            "exit_code": 0
+          },
+          {
+            "engine": "gix",
+            "round": 1,
+            "wall_seconds": 21.029532593998738,
+            "user_seconds": 34.657707,
+            "system_seconds": 4.749009000000001,
+            "exit_code": 0
+          },
+          {
+            "engine": "gix",
+            "round": 2,
+            "wall_seconds": 25.18909646999964,
+            "user_seconds": 37.378738,
+            "system_seconds": 14.493774999999998,
+            "exit_code": 0
+          },
+          {
+            "engine": "git",
+            "round": 2,
+            "wall_seconds": 53.67361623400029,
+            "user_seconds": 79.341713,
+            "system_seconds": 16.221087000000004,
+            "exit_code": 0
+          }
+        ],
+        "medians_seconds": {
+          "git": 51.12282314949971,
+          "gix": 23.10931453199919
+        },
+        "gix_elapsed_time_reduction_percent": 54.79648206355885,
+        "gix_speedup_factor": 2.212217202665642,
+        "gix_executable_sha256": "db1762819eab7d4568c89c4d310f5d42f4bcba2244c1c0405034d87513ccdaa0"
+      },
+      "parity": {
+        "status": "passed",
+        "full_proof_sha256": "27ddb57d4832fb158b2d64b717106db0b1eeb738bd2ff3f2b7f4ba483facd4ee",
+        "repositories_checked": 5,
+        "unique_repository_paths": 5,
+        "fsck_full_passed": 5,
+        "matches_top_level_dataset": true,
+        "canonical_refs": 4799,
+        "canonical_refs_sha256": "062a22acf7635ea8ad8fc4126337a91b6c5e1c5792bb1bbfff0d0faeeeae005d",
+        "mismatches": {},
+        "repositories": [
+          {
+            "name": "source",
+            "extra_origin_aliases": 0,
+            "pack_bytes": 1499492635,
+            "index_bytes": 55726140,
+            "fsck_full": "passed"
+          },
+          {
+            "name": "git-r1",
+            "extra_origin_aliases": 0,
+            "pack_bytes": 1499492635,
+            "index_bytes": 55726140,
+            "fsck_full": "passed"
+          },
+          {
+            "name": "gix-r1",
+            "extra_origin_aliases": 4799,
+            "pack_bytes": 1499492635,
+            "index_bytes": 55726140,
+            "fsck_full": "passed"
+          },
+          {
+            "name": "git-r2",
+            "extra_origin_aliases": 0,
+            "pack_bytes": 1499492635,
+            "index_bytes": 55726140,
+            "fsck_full": "passed"
+          },
+          {
+            "name": "gix-r2",
+            "extra_origin_aliases": 4799,
+            "pack_bytes": 1499492635,
+            "index_bytes": 55726140,
+            "fsck_full": "passed"
+          }
+        ]
+      },
+      "cleanup": {
+        "make_command": [
+          "make",
+          "-f",
+          "SOURCE/Makefile",
+          "clean"
+        ],
+        "make_exit": 0,
+        "all_expected_build_paths_absent": true,
+        "cargo_reported_files_removed": 26814,
+        "cargo_reported_gib_removed": 21.3,
+        "verified_benchmark_directories_removed": 3,
+        "exported_files_hash_verified": 39,
+        "export_manifest_sha256": "cda9371cd7eb3d9a4684325a8199a3301e9bcad6021a6e833407a4bca477fda4",
+        "replay_process_stopped_and_reaped": true,
+        "audit_sha256": "88f677bd07ac160c760b0b989ca01cc23aba4d73631837e7ff3459c13ec6deb8"
+      },
+      "shutdown": {
+        "mode": "soft",
+        "exit_code": 0,
+        "requested_at_utc": "2026-11-14T20:30:58.565835+00:00",
+        "confirmed_off_at_utc": "2026-11-14T20:31:04.640195+00:00",
+        "make_clean_preceded_shutdown": true,
+        "absent_from_running_list": true
+      }
+    },
+    "windows": {
+      "environment": {
+        "os": "Windows 11",
+        "os_build": "10.0.26200",
+        "host_architecture": "aarch64",
+        "vcpus": 6,
+        "memory_mib": 12800,
+        "filesystem": "NTFS",
+        "source_on_shared_folder": false,
+        "rustc": "1.99.0 native aarch64-pc-windows-gnullvm compiler",
+        "git": "2.56.1 per matching architecture",
+        "python_harness": "CPython 3.13.2 x64 under Prism"
+      },
+      "tests": {
+        "scope": "Locked workspace/all-targets CI profile; kingfisher-node excluded because GNU Node libnode.dll unavailable",
+        "production_source_changes": false,
+        "python_tests_note": "12 benchmark-script Python tests; Python interpreter is x64 PE running under Prism, NOT native ARM64 Python binding runtime coverage",
+        "architectures": {
+          "arm64": {
+            "rust_passed": 2740,
+            "rust_failed": 0,
+            "rust_ignored": 7,
+            "rust_harnesses": 115,
+            "python_passed": 12,
+            "python_seconds": 11.612,
+            "started_at_utc": "2026-11-14T18:49:33.599356+00:00",
+            "finished_at_utc": "2026-11-14T19:03:37.415207+00:00",
+            "ssh_exit_code": 0,
+            "log": "target/vm-validation-20261114/windows/test-arm64-final.log",
+            "log_sha256": "a87630ebcef56a2581ec680ca042e24d7f4a4e040fec9569bacd14420e069e24",
+            "ignored_tests": [
+              "test git_binary::ssh::tests::hanging_child_process ... ignored, subprocess fixture for SSH lifecycle tests",
+              "test authenticated_private_https_clone_without_git ... ignored, requires gh authentication and read access to a small private GitHub repository",
+              "test authenticated_private_ssh_clone_without_git ... ignored, requires gh plus a GitHub-authorized SSH key/agent and trusted GitHub host key",
+              "test validates_mysql_secret_against_testcontainer ... ignored",
+              "test validates_postgres_secret_against_testcontainer ... ignored",
+              "test smoke_scan_live_wrongsecrets_image ... ignored, manual live registry smoke test; downloads/scans a large third-party image",
+              "test private_key::tests::structural_filter_microbenchmark ... ignored, manual candidate-only microbenchmark; run with --release --ignored --nocapture"
+            ]
+          },
+          "x64-prism": {
+            "rust_passed": 2740,
+            "rust_failed": 0,
+            "rust_ignored": 7,
+            "rust_harnesses": 115,
+            "python_passed": 12,
+            "python_seconds": 17.796,
+            "started_at_utc": "2026-11-14T19:05:55.066249+00:00",
+            "finished_at_utc": "2026-11-14T19:55:34.245476+00:00",
+            "ssh_exit_code": 0,
+            "log": "target/vm-validation-20261114/windows/test-x64-native-cross.log",
+            "log_sha256": "048d09c459fe6ff505d8de18076736a69235f33ff24a9d93b52a851e8b119d63",
+            "ignored_tests": [
+              "test git_binary::ssh::tests::hanging_child_process ... ignored, subprocess fixture for SSH lifecycle tests",
+              "test authenticated_private_https_clone_without_git ... ignored, requires gh authentication and read access to a small private GitHub repository",
+              "test authenticated_private_ssh_clone_without_git ... ignored, requires gh plus a GitHub-authorized SSH key/agent and trusted GitHub host key",
+              "test validates_mysql_secret_against_testcontainer ... ignored",
+              "test validates_postgres_secret_against_testcontainer ... ignored",
+              "test smoke_scan_live_wrongsecrets_image ... ignored, manual live registry smoke test; downloads/scans a large third-party image",
+              "test private_key::tests::structural_filter_microbenchmark ... ignored, manual candidate-only microbenchmark; run with --release --ignored --nocapture"
+            ]
+          }
+        }
+      },
+      "execution_targets": {
+        "arm64": {
+          "execution": "native ARM64",
+          "benchmark": {
+            "status": "passed",
+            "scope": "full-history mirror, all advertised refs, no checkout",
+            "runs": [
+              {
+                "engine": "git",
+                "round": 1,
+                "wall_seconds": 45.85611725000126,
+                "exit_code": 0
+              },
+              {
+                "engine": "gix",
+                "round": 1,
+                "wall_seconds": 26.849372625001706,
+                "exit_code": 0
+              },
+              {
+                "engine": "gix",
+                "round": 2,
+                "wall_seconds": 26.81033595900044,
+                "exit_code": 0
+              },
+              {
+                "engine": "git",
+                "round": 2,
+                "wall_seconds": 48.352545292000286,
+                "exit_code": 0
+              }
+            ],
+            "medians_seconds": {
+              "git": 47.104331271000774,
+              "gix": 26.829854292001073
+            },
+            "gix_elapsed_time_reduction_percent": 43.041640613379094,
+            "gix_speedup_factor": 1.7556685458796635,
+            "gix_executable_sha256": "ae28c4f3175c781fabd1c7a76de872d82fde4ceb7bf6ab94b602fcdcd1258f37",
+            "raw_results_sha256": "448245d254243cb59c22573401ad69a950508a10d57dbcd6c2b56f93e780508f",
+            "started_at_utc": "2026-11-14T21:11:54.334233+00:00",
+            "raw_architecture_field": "ARM64 is the host platform.machine() result; actual client PE architecture is independently verified"
+          }
+        },
+        "x64": {
+          "execution": "x64 under Prism emulation",
+          "benchmark": {
+            "status": "passed",
+            "scope": "full-history mirror, all advertised refs, no checkout",
+            "runs": [
+              {
+                "engine": "git",
+                "round": 1,
+                "wall_seconds": 70.83607533299983,
+                "exit_code": 0
+              },
+              {
+                "engine": "gix",
+                "round": 1,
+                "wall_seconds": 39.50623120799901,
+                "exit_code": 0
+              },
+              {
+                "engine": "gix",
+                "round": 2,
+                "wall_seconds": 39.52246266699876,
+                "exit_code": 0
+              },
+              {
+                "engine": "git",
+                "round": 2,
+                "wall_seconds": 70.53833141700125,
+                "exit_code": 0
+              }
+            ],
+            "medians_seconds": {
+              "git": 70.68720337500054,
+              "gix": 39.514346937498885
+            },
+            "gix_elapsed_time_reduction_percent": 44.09971670845072,
+            "gix_speedup_factor": 1.7888996998181133,
+            "gix_executable_sha256": "42f8443d693f233c079622bd46692395ffe64b0101fecdc86ba0c01bd4a7fd91",
+            "raw_results_sha256": "34aad89565d10f295532bc84ae388f2ea835465f49f2543421f25dc4f6a16a6e",
+            "started_at_utc": "2026-11-14T21:14:23.370410+00:00",
+            "raw_architecture_field": "ARM64 is the host platform.machine() result; actual client PE architecture is independently verified"
+          }
+        }
+      },
+      "release_build_recovery": {
+        "initial_jobs": 2,
+        "initial_failure": "Native ARM64 rustc allocation failure while EC2 and SSM optimized concurrently; cargo exit101",
+        "retry_jobs": 1,
+        "release_profile_or_source_weakened": false,
+        "persistent_pagefile_or_vm_memory_changes": false,
+        "retry_status": "passed_both_targets",
+        "retry_exit_codes": {
+          "arm64": 0,
+          "x64_prism": 0
+        },
+        "cargo_reported_build_times": {
+          "arm64": "5m 54s",
+          "x64_prism": "31m 59s"
+        },
+        "retry_log_sha256": "668822df1c50f53c38f0fa0157fff6c5952608071d0f57eecb255bca20670998",
+        "both_empty_path_invalid_git_override_loader_probes_passed": true
+      },
+      "cleanup": {
+        "status": "passed",
+        "make_command": [
+          "make",
+          "-f",
+          "SOURCE/Makefile",
+          "clean"
+        ],
+        "actual_command_posix": "/usr/bin/make -f /c/kf-vm-20261114-0916/source/Makefile clean",
+        "recorded_at_utc": "2026-11-14T22:10:10.0083107Z",
+        "make_exit": 0,
+        "pipeline_group_exit": 0,
+        "tee_exit": 0,
+        "all_expected_build_paths_absent": true,
+        "build_paths_lexists_lstat_absent": 8,
+        "fresh_postcleanup_paths_absent": 9,
+        "cargo_reported_files_removed": 29613,
+        "cargo_reported_gib_removed": 58.7,
+        "preclean_shared_target_bytes": 62997511781,
+        "cargo_target_and_build_directories_pinned_to_shared_target": true,
+        "verified_owned_benchmark_directory_removed": true,
+        "preclean_owned_benchmark_bytes": 15545100477,
+        "preclean_owned_benchmark_repositories": 9,
+        "source_logs_tools_retained": true,
+        "replay_process_stopped_and_port_refused": true,
+        "postcleanup_owned_or_build_tool_processes": 0,
+        "preclean_evidence_export_files_hash_verified": 59,
+        "preclean_evidence_export_archive_sha256": "4cc601aa1c3f41d4d0eca566ea0144c7148155e297a078637c97452cdb5f874f",
+        "cleanup_export_files_hash_verified": 23,
+        "cleanup_export_manifest_sha256": "126939f42f9118f80a2390497074bd0be8724aa2cf20036391b4118a449e44a2",
+        "clean_receipt_sha256": "b24f76776e0a6ed3d3e7bdc421c9a91ddc46367e9a267a280b57a4d5d2504a7f",
+        "make_command_log_sha256": "cafc483bf17e22bf43448c516b0c072e116a378c4c24936257146f90aca205e3",
+        "make_command_exit_receipt_sha256": "b475f1d3400058917d83fe3857116bbc97e566cdb481107c24eac5758bd0c091",
+        "fixture_cleanup_receipt_sha256": "3798788823bfdabefbe2155efc47fb7c87df4a08d444eb0f3897483d21eb7856",
+        "postcleanup_audit_sha256": "973b913b6b4f453afef1f43c2fb18fcff01d480d639f861110ad7b646220bd6c",
+        "parent_cleanup_verification_sha256": "230df8114a1c4ae00c1b0eb0757d73994f3ec51267990b3fb9c9ea5b3e9db66d",
+        "native_powershell_bash_and_benign_guard_probe": "passed",
+        "non_following_recursive_scope_guard": "passed; no reparse points, differing volumes, or unexpected Cargo output directories",
+        "executed_guard_sha256": "868461d4a57064da9bdc23ba6f725073f8d8820d79e07da619efd504b9f7fcbe",
+        "executed_controller_sha256": "beebf76089e4ae250e072586ba9fdcd05e2b9ccc4bc6f1b5547ac2126aacd0be",
+        "executed_shim_sha256": "50da3b8ab80ac8efe95647933cc15857bd381c075a5a47af69915f4813f13288"
+      },
+      "shutdown": {
+        "status": "soft_shutdown_verified_off",
+        "shutdown_mode": "soft",
+        "soft_exit": 0,
+        "vm_running_after": false,
+        "requested_at_utc": "2026-11-14T22:19:06.974398+00:00",
+        "checked_at_utc": "2026-11-14T22:20:16.850445+00:00",
+        "make_clean_preceded_shutdown": true,
+        "hard_shutdown_or_reboot_requested": false,
+        "audit_sha256": "687694becfa7181c83a73624f09e466da6178a6f5c2ebcf94b983afbb4f2bb8b"
+      },
+      "authentication": {
+        "private_https_and_ssh_passed_per_target": 2,
+        "git_unavailable_to_gix": true,
+        "ssh_trust_pinned_and_unchanged": true,
+        "private_keys_copied": false,
+        "temporary_agent_bridges_cleaned": true,
+        "stock_ssh": "Microsoft OpenSSH 9.5",
+        "launcher_workaround": {
+          "stale_win32_sshd_fd_environment_removed_case_insensitively": true,
+          "scope": "Test-process launcher environment only; no runtime or persistent guest changes",
+          "native_git_control": "Same stall with inherited descriptor metadata; sanitized stock-client ls-remote passed with two refs in 1.553152 seconds",
+          "stdin_eof_or_protocol_preload_used": false
+        },
+        "targets": {
+          "arm64": {
+            "passed": 2,
+            "seconds": 10.05,
+            "harness_sha256": "132971ece0ab9acdcd076ad35201ae61d1d3d5ed11b9e7a627d1bd8ba5669f94",
+            "pe_machine": 43620,
+            "log_sha256": "a4cf0a3d9e51957f1fc299b7ebfae6c89e3f2a2abbb480b8994cf59502171c4c",
+            "gh_config_credential_persistence": false
+          },
+          "x64-prism": {
+            "passed": 2,
+            "seconds": 11.76,
+            "harness_sha256": "0b7eae91871b804fc288dbe40609565c0a7aa0414d8f0f4e0a8cb5086b6a6f27",
+            "pe_machine": 34404,
+            "log_sha256": "bf8776e8c62135c8baf88b73180ea280e69f272f851de5286b57e6d0016828ff",
+            "gh_config_credential_persistence": false
+          }
+        }
+      },
+      "artifacts": [
+        {
+          "label": "python-windows-x64",
+          "bytes": 105840,
+          "sha256": "7d96a4ed35d6e596cd9dd8933feafc66349cc21f75be3b15c89fd336e50140c1",
+          "format": "PE32+",
+          "machine": 34404,
+          "architecture": "x86_64"
+        },
+        {
+          "label": "rustc-native-arm64",
+          "bytes": 84480,
+          "sha256": "0111ab29c655a94d6be1d4934aeb125539b57ac2ec23e2b1951328787aeebb07",
+          "format": "PE32+",
+          "machine": 43620,
+          "architecture": "aarch64"
+        },
+        {
+          "label": "git-native-arm64",
+          "bytes": 42696,
+          "sha256": "afee584a5d832a2bb5fc376fe29304396436928e8cb2267f408c52cecaf2e9ab",
+          "format": "PE32+",
+          "machine": 43620,
+          "architecture": "aarch64"
+        },
+        {
+          "label": "git-core-native-arm64",
+          "bytes": 3977416,
+          "sha256": "5af7f811534ff08e817f64f5b94022af0b63ac5f8d71fd960bc975b4448dab71",
+          "format": "PE32+",
+          "machine": 43620,
+          "architecture": "aarch64"
+        },
+        {
+          "label": "git-native-x64",
+          "bytes": 44872,
+          "sha256": "177bc8a9af84fa3a400c694c975fda731d048279c074e1a93947ce8b067ebb48",
+          "format": "PE32+",
+          "machine": 34404,
+          "architecture": "x86_64"
+        },
+        {
+          "label": "git-core-native-x64",
+          "bytes": 4414792,
+          "sha256": "9bf8ee81d79f38a11eaf7799499a634c46a718e009a4a9b2b20b115804643302",
+          "format": "PE32+",
+          "machine": 34404,
+          "architecture": "x86_64"
+        },
+        {
+          "label": "driver-native-arm64",
+          "bytes": 7022592,
+          "sha256": "ae28c4f3175c781fabd1c7a76de872d82fde4ceb7bf6ab94b602fcdcd1258f37",
+          "format": "PE32+",
+          "machine": 43620,
+          "architecture": "aarch64"
+        },
+        {
+          "label": "driver-x64-prism",
+          "bytes": 9475072,
+          "sha256": "42f8443d693f233c079622bd46692395ffe64b0101fecdc86ba0c01bd4a7fd91",
+          "format": "PE32+",
+          "machine": 34404,
+          "architecture": "x86_64"
+        },
+        {
+          "label": "live-test-aarch64-pc-windows-gnullvm",
+          "bytes": 42320384,
+          "sha256": "132971ece0ab9acdcd076ad35201ae61d1d3d5ed11b9e7a627d1bd8ba5669f94",
+          "format": "PE32+",
+          "machine": 43620,
+          "architecture": "aarch64"
+        },
+        {
+          "label": "live-test-x86_64-pc-windows-gnu",
+          "bytes": 830068736,
+          "sha256": "0b7eae91871b804fc288dbe40609565c0a7aa0414d8f0f4e0a8cb5086b6a6f27",
+          "format": "PE32+",
+          "machine": 34404,
+          "architecture": "x86_64"
+        }
+      ],
+      "parity": {
+        "status": "passed",
+        "full_proof_sha256": "4191d6ecc5c080a73135ca1b060f936ef1973b0d71cc09e4f5a6ed8ef65b1f85",
+        "repositories_checked": 9,
+        "unique_repository_paths": 9,
+        "timed_mirrors_checked": 8,
+        "fsck_full_passed": 9,
+        "fsck_command": "git fsck --full --no-reflogs",
+        "fsck_strict": false,
+        "shared_historical_fsck_warning": {
+          "kind": "zeroPaddedFilemode",
+          "tree": "3e731fc8d1a567d0b41028a0b06328b2fd97351c",
+          "repositories_reporting_same_warning": 9,
+          "exit_code": 0
+        },
+        "matches_top_level_dataset": true,
+        "canonical_refs": 4799,
+        "canonical_refs_sha256": "062a22acf7635ea8ad8fc4126337a91b6c5e1c5792bb1bbfff0d0faeeeae005d",
+        "stored_objects": 1990181,
+        "reachable_objects": 1990181,
+        "head_files": 56155,
+        "mismatches": {},
+        "repositories": [
+          {
+            "name": "source",
+            "extra_origin_aliases": 0,
+            "pack_bytes": 1499492635,
+            "index_bytes": 55726140,
+            "fsck_full": "passed"
+          },
+          {
+            "name": "arm64-git-r1",
+            "extra_origin_aliases": 0,
+            "pack_bytes": 1499492635,
+            "index_bytes": 55726140,
+            "fsck_full": "passed"
+          },
+          {
+            "name": "arm64-git-r2",
+            "extra_origin_aliases": 0,
+            "pack_bytes": 1499492635,
+            "index_bytes": 55726140,
+            "fsck_full": "passed"
+          },
+          {
+            "name": "arm64-gix-r1",
+            "extra_origin_aliases": 4799,
+            "pack_bytes": 1499492635,
+            "index_bytes": 55726140,
+            "fsck_full": "passed"
+          },
+          {
+            "name": "arm64-gix-r2",
+            "extra_origin_aliases": 4799,
+            "pack_bytes": 1499492635,
+            "index_bytes": 55726140,
+            "fsck_full": "passed"
+          },
+          {
+            "name": "x64-git-r1",
+            "extra_origin_aliases": 0,
+            "pack_bytes": 1499492635,
+            "index_bytes": 55726140,
+            "fsck_full": "passed"
+          },
+          {
+            "name": "x64-git-r2",
+            "extra_origin_aliases": 0,
+            "pack_bytes": 1499492635,
+            "index_bytes": 55726140,
+            "fsck_full": "passed"
+          },
+          {
+            "name": "x64-gix-r1",
+            "extra_origin_aliases": 4799,
+            "pack_bytes": 1499492635,
+            "index_bytes": 55726140,
+            "fsck_full": "passed"
+          },
+          {
+            "name": "x64-gix-r2",
+            "extra_origin_aliases": 4799,
+            "pack_bytes": 1499492635,
+            "index_bytes": 55726140,
+            "fsck_full": "passed"
+          }
+        ]
+      },
+      "pre_timing_gates": {
+        "prewarm_original_proof": {
+          "sha256": "4453d7d52ce1820f6371034a4e35e160555d7ee9f412f3d13eb9dd038e348060",
+          "finished_at_utc": "2026-11-14T21:11:48.5661862Z",
+          "started_at_utc": "2026-11-14T21:11:46.4597640Z",
+          "path": "C:\\kf-vm-20261114-0916\\benchmark\\replay\\response.bin",
+          "full_file_read_before_all_eight_timings": true,
+          "no_hash_between_architectures": true,
+          "bytes": 1499607087
+        },
+        "prewarm_scope_correction": {
+          "recorded_at_utc": "2026-11-14T21:32:44.632722+00:00",
+          "original_proof_preserved": true,
+          "corrects_field": "payload-prewarm-proof.json:no_hash_between_architectures",
+          "corrected_scope": "No replay-payload or repository verification hashes, inventories, or fsck between ARM64 four timings and x64/Prism four timings.",
+          "no_payload_or_repository_verification_between_architecture_groups": true,
+          "unchanged_helper_per_group_driver_sha256": true,
+          "driver_hash_is_untimed": true,
+          "arm64_driver_bytes": 7022592,
+          "x64_driver_bytes": 9475072,
+          "benchmark_source": "scripts/benchmark-git-clone.py:99",
+          "python_and_replay_server_process_architecture": "x86_64 / Prism for both groups",
+          "os_architecture": "ARM64",
+          "client_architecture_proof": "source-provenance-final.log: actual PE 0xAA64 native ARM64 and 0x8664 x64/Prism drivers and matching Git wrappers+cores",
+          "reruns_performed": false,
+          "all_original_timings_retained": true
+        },
+        "idle": {
+          "owned_build_test_processes": 0,
+          "passed": true,
+          "drive_free_bytes": 77517934592,
+          "replay_python_architecture": "x86_64 under Prism, identical server for both clients",
+          "samples": [
+            {
+              "Path": "\\\\mickg1932\\processor(_total)\\% processor time",
+              "CookedValue": 1.2399022715607666
+            },
+            {
+              "Path": "\\\\mickg1932\\physicaldisk(_total)\\disk bytes/sec",
+              "CookedValue": 328434.9625004677
+            },
+            {
+              "Path": "\\\\mickg1932\\processor(_total)\\% processor time",
+              "CookedValue": 0.9735577111549154
+            },
+            {
+              "Path": "\\\\mickg1932\\physicaldisk(_total)\\disk bytes/sec",
+              "CookedValue": 216802.4230305525
+            },
+            {
+              "Path": "\\\\mickg1932\\processor(_total)\\% processor time",
+              "CookedValue": 0.18760010593887877
+            },
+            {
+              "Path": "\\\\mickg1932\\physicaldisk(_total)\\disk bytes/sec",
+              "CookedValue": 177567.2827079444
+            }
+          ],
+          "replay_python": "C:\\Users\\mickg\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+          "replay_pid": 4852,
+          "recorded_at_utc": "2026-11-14T21:11:53.4241807Z"
+        },
+        "source_provenance_sha256": "e2d1107cb91db20c74cb793af5e8546e75e38a5773f992b90321ef56d5e6e32e",
+        "preclean_source_provenance_sha256": "039d94198469acde6f6c747f4fecc8f4522d2d54a4e7a998ddb50ba48be577d0",
+        "all_ten_pe_artifact_architectures_verified": true
+      },
+      "evidence_export": {
+        "archive_sha256": "4cc601aa1c3f41d4d0eca566ea0144c7148155e297a078637c97452cdb5f874f",
+        "archive_bytes": 1929471,
+        "manifest_sha256": "0a47ee9da584c377fe3e7e3f8ec78d10e550fa1b1dd5a12c8b882b4b8ab0aa95",
+        "payload_files_byte_and_hash_verified": 59,
+        "zip_crc_verified": true,
+        "native_dotnet_zip_backslash_paths_safely_normalized": true,
+        "parent_archive_and_extracted_bytes_verified": true,
+        "independent_evidence_review": "passed",
+        "parent_verification_sha256": "6c223498fbabcdb14185b5fe75a998b59dad565f2597819780a42cbcf9e70d6c"
+      }
+    },
+    "coverage": {
+      "workspace_passed": 8248,
+      "live_private_https_ssh_passed": 6,
+      "python_harness_passed": 36,
+      "workspace_ignored_per_execution_target": 7,
+      "note": "Ignored live auth cases rerun separately; Python harness counts do not imply Python SDK native-runtime coverage",
+      "timed_mirrors_passed": 12,
+      "distinct_guest_repositories_full_parity_and_fsck": 14
+    },
+    "completion": {
+      "both_guests_make_clean_passed_before_shutdown": true,
+      "both_guests_soft_shutdown_verified_off": true,
+      "final_running_vm_count": 0,
+      "verified_at_utc": "2026-11-14T22:20:16.850445+00:00"
+    }
+  }
+}

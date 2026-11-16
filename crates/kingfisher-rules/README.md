@@ -8,7 +8,7 @@ secrets are detected without changing the Rust API.
 
 ```toml
 [dependencies]
-kingfisher-rules = "3.2.0"
+kingfisher-rules = "3.2.1"
 anyhow = "1"
 ```
 
@@ -117,6 +117,16 @@ generator input hashes, first-party rule origins, and artifact hashes.
 and source headers); null records an absent upstream NOTICE. `generated/NOTICES.txt` contains
 readable attribution and license text preserved in the repository.
 These records document what was imported; they do not establish upstream authorship.
+
+## Dependency modernization
+
+Version 3.2.1 retains the public rules 3.x API and loads existing Kingfisher YAML
+and Betterleaks TOML without edits. The YAML implementation is now `yaml_serde`;
+loading APIs still return `anyhow::Result`, and `RulesError` variants are unchanged.
+Callers that explicitly downcast parser causes should use `yaml_serde::Error`
+instead of `serde_yaml::Error`; concrete parser sources are implementation details.
+Use core 2.0.0 and scanner 4.0.0 when depending on their exposed types. See the
+[dependency migration guide](../../docs/LIBRARY.md#dependency-modernization-migration).
 
 ## Migrating to 3.0
 

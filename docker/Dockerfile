@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 FROM alpine:latest@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 
-RUN apk add --no-cache curl tar git
+RUN apk add --no-cache ca-certificates curl openssh-client tar
 
 ARG TARGETARCH
 ARG KINGFISHER_VERSION
@@ -18,13 +18,17 @@ RUN set -eux; \
     esac; \
     # download & unpack
     test -n "${KINGFISHER_VERSION}"; \
-    LATEST_URL=$(curl -fsSL "https://api.github.com/repos/mongodb/kingfisher/releases/tags/v${KINGFISHER_VERSION}" \
-        | grep -Eo "https://[^\"]*${SUFFIX}"); \
-    if [ -z "$LATEST_URL" ]; then \
-        echo "Failed to fetch the latest release URL for ${SUFFIX}" >&2; \
-        exit 1; \
-    fi; \
-    curl -fsSL "$LATEST_URL" -o kingfisher.tgz; \
+    apk add --no-cache --virtual .kingfisher-fetch jq; \
+    ASSET="kingfisher-${SUFFIX}"; \
+    RELEASE_JSON=$(curl -fsSL "https://api.github.com/repos/mongodb/kingfisher/releases/tags/v${KINGFISHER_VERSION}"); \
+    ASSET_URL=$(printf '%s' "$RELEASE_JSON" \
+        | jq -er --arg name "$ASSET" '.assets[] | select(.name == $name) | .browser_download_url'); \
+    # GitHub publishes a SHA-256 digest for each release asset; refuse unverified archives.
+    ASSET_SHA256=$(printf '%s' "$RELEASE_JSON" \
+        | jq -er --arg name "$ASSET" '.assets[] | select(.name == $name) | .digest | select(startswith("sha256:")) | ltrimstr("sha256:")'); \
+    curl -fsSL "$ASSET_URL" -o kingfisher.tgz; \
+    test "$(sha256sum kingfisher.tgz | cut -d ' ' -f 1)" = "$ASSET_SHA256"; \
+    apk del .kingfisher-fetch; \
     tar -xzf kingfisher.tgz; \
     rm -f kingfisher.tgz CHECKSUM-*.txt; \
     # locate the binary (pattern covers kingfisher-linux-x64 / kingfisher-linux-arm64)

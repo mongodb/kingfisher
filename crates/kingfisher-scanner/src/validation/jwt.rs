@@ -3,10 +3,15 @@ use anyhow::{Result, anyhow};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::Utc;
 use jsonwebtoken::{
-    Algorithm, DecodingKey, Validation as JwtValidation, decode, decode_header, jwk::JwkSet,
+    Algorithm, AlgorithmFamily, DecodingKey, DecodingKeyKind, Validation as JwtValidation, decode,
+    decode_header,
+    errors::{Error as JwtError, ErrorKind},
+    jwk::JwkSet,
 };
 use reqwest::{Client, Url, redirect::Policy};
+use rsa::{BoxedUint, PublicKey, pkcs1::RsaPublicKeyRef, pkcs8::der::Decode};
 use serde::Deserialize;
+use sha2::{Sha256, Sha384, Sha512};
 use std::sync::{LazyLock, Once};
 
 /// Global redirect-free client with strict TLS validation.
@@ -35,7 +40,7 @@ static JWT_CRYPTO_PROVIDER: Once = Once::new();
 
 pub fn ensure_crypto_provider() {
     JWT_CRYPTO_PROVIDER.call_once(|| {
-        let _ = jsonwebtoken::crypto::rust_crypto::DEFAULT_PROVIDER.install_default();
+        let _ = jsonwebtoken::crypto::aws_lc::DEFAULT_PROVIDER.install_default();
     });
 }
 
@@ -148,7 +153,7 @@ pub async fn validate_jwt_with(
             validation.validate_exp = false;
             validation.validate_nbf = false;
 
-            decode::<Claims>(token, decoding_key, &validation)
+            verify_signature(token, decoding_key, &validation)
                 .map_err(|e| anyhow!("signature verification (fallback key) failed: {e}"))?;
 
             return Ok((
@@ -230,10 +235,157 @@ pub async fn validate_jwt_with(
     validation.validate_exp = false;
     validation.validate_nbf = false;
 
-    decode::<Claims>(token, &decoding_key, &validation)
+    verify_signature(token, &decoding_key, &validation)
         .map_err(|e| anyhow!("signature verification failed: {e}"))?;
 
     Ok((true, format!("JWT valid (alg: {:?}, iss: {issuer}, aud: {:?})", alg, aud_strings)))
+}
+
+/// Keep the normal provider for all supported signatures. Secret scanning must
+/// also recognize existing weak RSA credentials, not just keys suitable for new
+/// signing: AWS-LC's JWT verifier requires 2048 bits for all six RSA algorithms.
+/// Verify those signatures locally with current RSA, without changing a global
+/// provider that another component or embedding application may already use.
+fn verify_signature(token: &str, key: &DecodingKey, validation: &JwtValidation) -> Result<()> {
+    let error = match decode::<Claims>(token, key, validation) {
+        Ok(_) => return Ok(()),
+        Err(error) => error,
+    };
+    // jsonwebtoken 12 checks the header's critical extensions before verifying
+    // signatures. Only retry InvalidSignature: invalid b64/crit headers must
+    // retain the normal provider's rejection and never enter compatibility.
+    if error.kind() != &ErrorKind::InvalidSignature || key.family() != AlgorithmFamily::Rsa {
+        return Err(error.into());
+    }
+
+    let alg = decode_header(token)?.alg;
+    if alg.family() != AlgorithmFamily::Rsa
+        || validation.algorithms != [alg]
+        // jsonwebtoken 12 has no public per-call provider or claims-only
+        // validator. The compatibility path below preserves exactly the policy
+        // constructed at both call sites; fail closed if that policy changes.
+        || validation.validate_exp
+        || validation.validate_nbf
+        || validation.iss.is_some()
+        || validation.sub.is_some()
+        || validation.required_spec_claims.len() != 1
+        || !validation.required_spec_claims.contains("exp")
+    {
+        return Err(error.into());
+    }
+
+    let (n, e);
+    let parsed;
+    match key.kind() {
+        DecodingKeyKind::SecretOrDer(der) => {
+            // Parse components explicitly: PublicKey's default DER constructor
+            // disallows sub-1024-bit keys that the old verifier accepted.
+            parsed = RsaPublicKeyRef::from_der(der)?;
+            n = parsed.modulus.as_bytes();
+            e = parsed.public_exponent.as_bytes();
+        }
+        DecodingKeyKind::RsaModulusExponent { n: modulus, e: exponent } => {
+            n = modulus.as_slice();
+            e = exponent.as_slice();
+        }
+    }
+    // Raw JWK components may be zero-padded; bounds apply to their values,
+    // matching the old verifier rather than rejecting otherwise equivalent keys.
+    let n = &n[n.iter().position(|byte| *byte != 0).unwrap_or(n.len())..];
+    let e = &e[e.iter().position(|byte| *byte != 0).unwrap_or(e.len())..];
+    // Bound work before allocating big integers; retain normal exponent and
+    // modulus checks, while allowing legacy sizes for verification only.
+    if n.is_empty() || e.is_empty() || n.len() > PublicKey::MAX_SIZE / 8 || e.len() > 8 {
+        return Err(error.into());
+    }
+    let public_key = PublicKey::new_with_size_limits(
+        BoxedUint::from_be_slice(n, (n.len() * 8) as u32)?,
+        BoxedUint::from_be_slice(e, (e.len() * 8) as u32)?,
+        1..=PublicKey::MAX_SIZE,
+    )?;
+    let (message, signature) =
+        token.rsplit_once('.').ok_or_else(|| anyhow!("invalid JWT format"))?;
+    let signature = URL_SAFE_NO_PAD.decode(signature)?;
+    match alg {
+        Algorithm::RS256 => public_key.pkcs1v15_verify::<Sha256>(message.as_bytes(), &signature),
+        Algorithm::RS384 => public_key.pkcs1v15_verify::<Sha384>(message.as_bytes(), &signature),
+        Algorithm::RS512 => public_key.pkcs1v15_verify::<Sha512>(message.as_bytes(), &signature),
+        Algorithm::PS256 => public_key.pss_verify::<Sha256>(message.as_bytes(), &signature),
+        Algorithm::PS384 => public_key.pss_verify::<Sha384>(message.as_bytes(), &signature),
+        Algorithm::PS512 => public_key.pss_verify::<Sha512>(message.as_bytes(), &signature),
+        _ => return Err(error.into()),
+    }
+    .map_err(|_| JwtError::from(ErrorKind::InvalidSignature))?;
+
+    // Only reached after cryptographic verification with the header's exact
+    // algorithm and an RSA-family key. Time checks already ran on these same
+    // claims at entry; retain jsonwebtoken's required unsigned exp and audience
+    // validation (including rejection of an empty audience array without an
+    // expected audience). Reproduce its permissive deserialization from the
+    // original bytes: invalid scalar sub is ignored, but malformed objects and
+    // arrays may leave input unconsumed and must still fail parsing. Preserve
+    // field order too, since serde also accepts positional JSON arrays.
+    let payload = token.split('.').nth(1).ok_or_else(|| anyhow!("invalid JWT format"))?;
+    let payload = URL_SAFE_NO_PAD.decode(payload)?;
+    let claims: ClaimsForValidation = serde_json::from_slice(&payload).map_err(JwtError::from)?;
+    if !matches!(claims.exp, LenientClaim::Parsed(_)) {
+        return Err(JwtError::from(ErrorKind::MissingRequiredClaim("exp".into())).into());
+    }
+    if validation.validate_aud {
+        let accepted = match (&claims.aud, &validation.aud) {
+            (LenientClaim::FailedToParse, _) => {
+                return Err(JwtError::from(ErrorKind::InvalidClaimFormat("aud".into())).into());
+            }
+            (LenientClaim::NotPresent, _) => true,
+            (LenientClaim::Parsed(_), None) => false,
+            (LenientClaim::Parsed(Aud::Str(aud)), Some(expected)) => expected.contains(aud),
+            (LenientClaim::Parsed(Aud::Arr(audiences)), Some(expected)) => {
+                audiences.iter().any(|aud| expected.contains(aud))
+            }
+        };
+        if !accepted {
+            return Err(JwtError::from(ErrorKind::InvalidAudience).into());
+        }
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct ClaimsForValidation {
+    // The entry-point Claims parser already rejects floating-point and out-of-i64
+    // timestamps; unsigned parsing here retains the required-exp presence rule.
+    #[serde(default)]
+    exp: LenientClaim<u64>,
+    #[serde(rename = "nbf", default)]
+    _nbf: LenientClaim<u64>,
+    #[serde(rename = "sub")]
+    _sub: LenientClaim<String>,
+    #[serde(rename = "iss")]
+    _iss: LenientClaim<Aud>,
+    aud: LenientClaim<Aud>,
+}
+
+#[derive(Default)]
+enum LenientClaim<T> {
+    Parsed(T),
+    FailedToParse,
+    #[default]
+    NotPresent,
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for LenientClaim<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        // Match jsonwebtoken 12's TryParse<T>, including the distinction between
+        // malformed and absent claims. IgnoredAny would widen acceptance by
+        // consuming input that the normal parser leaves unconsumed.
+        Ok(match Option::<T>::deserialize(deserializer) {
+            Ok(Some(value)) => Self::Parsed(value),
+            Ok(None) => Self::NotPresent,
+            Err(_) => Self::FailedToParse,
+        })
+    }
 }
 
 fn extract_aud_strings(claims: &Claims) -> Vec<String> {

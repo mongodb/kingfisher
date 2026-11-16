@@ -19,7 +19,6 @@ This guide covers all installation methods for Kingfisher, including pre-commit 
   - [Using the pre-commit Framework](#using-the-pre-commit-framework)
   - [Using Husky (Node.js projects)](#using-husky-nodejs-projects)
 - [Cargo](#cargo)
-- [Native Scan Wizard](#native-scan-wizard)
 - [Compile from Source](#compile-from-source)
 - [PyPI Wheels](#pypi-wheels)
 - [Run Kingfisher in Docker](#run-kingfisher-in-docker)
@@ -154,13 +153,14 @@ curl --silent --location \
 
 ## Windows
 
-Remote repository scans and `--staged` scans require [Git for Windows](https://gitforwindows.org/).
-Install it with command-line access enabled and verify `git --version` in PowerShell.
-If Git is installed outside `PATH`, or MSYS2 supplies a different Git, select the executable:
-
-```powershell
-$env:KF_GIT_BINARY = 'C:\Program Files\Git\cmd\git.exe'
-```
+HTTPS repository cloning, history scanning, and `--staged` scans use native Rust
+libraries; no Git executable or Git for Windows installation is required.
+SSH targets additionally require an SSH client: the Windows "OpenSSH Client"
+optional feature (`ssh.exe` on `PATH`) or, if that is absent, the `ssh.exe` bundled
+with Git for Windows. They also need configured keys or an SSH agent and trusted
+`known_hosts` entries.
+`KF_GIT_BINARY` and `KF_GIT_SSL_BACKEND` are obsolete and ignored. Git is still
+needed to create commits or run Git hooks, but not to run Kingfisher scans.
 
 Download and run the PowerShell installer to place the binary in
 `$env:USERPROFILE\bin` (or another directory you specify):
@@ -448,25 +448,6 @@ kingfisher --version
 This compiles from source and requires Rust 1.99 or newer and the platform's native build
 prerequisites described below. The rule catalog is bundled; installation does not fetch
 Betterleaks or Veles sources.
-
-## Native Scan Wizard
-
-The native GPUI workspace is built into the CLI with the optional `gui` feature:
-
-```sh
-cargo build --release --features gui --bin kingfisher
-./target/release/kingfisher wizard
-# Equivalent alias:
-./target/release/kingfisher gui
-```
-
-On Windows, run `target\release\kingfisher.exe wizard`. You can supply a scan target or open
-an existing report with `kingfisher wizard --report report.json`. Scans run the same binary;
-no separate desktop executable or CLI installation is needed. Ordinary headless builds do
-not compile GPUI. Current pre-built releases do not include this optional feature.
-
-See the [wizard guide](WIZARD.md) for controls, native report views, shell command copying,
-and platform prerequisites.
 
 ## Compile from Source
 

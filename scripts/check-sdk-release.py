@@ -34,6 +34,10 @@ _recovery_spec = importlib.util.spec_from_file_location(
     "crates_recovery", ROOT / "scripts/check-crates-recovery.py")
 crates_recovery = importlib.util.module_from_spec(_recovery_spec)
 _recovery_spec.loader.exec_module(crates_recovery)
+_source_spec = importlib.util.spec_from_file_location(
+    "release_source", ROOT / "scripts/check-release-source.py")
+release_source = importlib.util.module_from_spec(_source_spec)
+_source_spec.loader.exec_module(release_source)
 
 
 def sdk_version(root=ROOT):
@@ -88,15 +92,15 @@ def committed_toml(root, revision, path):
     return tomllib.loads(git(root, "show", f"{revision}:{path}"))
 
 
-def lock_dependencies(lock):
-    """Ignore CLI-only lock churn by comparing only the SDK dependency closure."""
+def lock_dependencies(lock, package_name="kingfisher-python"):
+    """Ignore CLI-only lock churn by comparing only the selected SDK dependency closure."""
     packages = lock["package"]
     by_name = {}
     for package in packages:
         by_name.setdefault(package["name"], []).append(package)
-    pending = [item for item in packages if item["name"] == "kingfisher-python"]
+    pending = [item for item in packages if item["name"] == package_name]
     if len(pending) != 1:
-        raise ValueError("Cargo.lock must contain exactly one kingfisher-python package")
+        raise ValueError(f"Cargo.lock must contain exactly one {package_name} package")
     selected = {}
     while pending:
         package = pending.pop()
@@ -195,38 +199,9 @@ def compare_source(root, event_name, event, head, version):
 
 
 def publication_source(root, env, event, version):
-    """Authorize publishing from the upstream main history, never a mutable ref."""
-    event_name = env.get("GITHUB_EVENT_NAME")
-    ref = env.get("GITHUB_REF", "")
-    manual = event_name == "workflow_dispatch" and event.get("inputs", {}).get("publish") in (True, "true")
-    automatic = event_name == "push" and (ref == "refs/heads/main" or ref.startswith("refs/tags/python-v"))
-    if not (manual or automatic):
-        return False, False
-    if env.get("GITHUB_REPOSITORY") != UPSTREAM:
-        if manual:
-            raise ValueError("SDK publication requires the upstream mongodb/kingfisher repository")
-        return False, False
-    head = git(root, "rev-parse", "HEAD")
-    if not SHA.fullmatch(env.get("GITHUB_SHA", "")) or head != env["GITHUB_SHA"]:
-        raise ValueError("SDK publication checkout must match the pinned GITHUB_SHA")
-    inputs = event.get("inputs", {})
-    if manual:
-        if ref != "refs/heads/main":
-            raise ValueError("Manual SDK publication requires refs/heads/main")
-        if not SHA.fullmatch(inputs.get("expected_sha", "")) or inputs["expected_sha"] != head:
-            raise ValueError("expected_sha must be the full pinned main checkout SHA")
-        if inputs.get("expected_version") != version:
-            raise ValueError("expected_version must match the SDK manifest version")
-    if ref.startswith("refs/tags/python-v") and ref != "refs/tags/python-v" + version:
-        raise ValueError("SDK release tag must match the SDK manifest version")
-    # Read-only fetch: the checkout's origin is created by actions/checkout for
-    # this verified upstream repository. Do not trust a stale local main ref.
-    git(root, "fetch", "--no-tags", "origin", "refs/heads/main:refs/remotes/origin/main")
-    main = git(root, "rev-parse", "refs/remotes/origin/main")
-    git(root, "merge-base", "--is-ancestor", head, main)
-    if manual and main != head:
-        raise ValueError("expected_sha is no longer the current upstream main SHA")
-    return True, manual
+    """Share the coordinator's pinned source policy, including sibling SDK tags."""
+    return release_source.publication_source(
+        root, env, event, versions={"python": version}, git_fn=git)
 
 
 def workflow_plan(root, env, event, version):

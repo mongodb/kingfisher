@@ -1,5 +1,4 @@
 use clap::{Args, Subcommand, ValueEnum, ValueHint};
-use strum::Display;
 use url::Url;
 
 use crate::cli::commands::output::OutputArgs;
@@ -81,8 +80,7 @@ impl GitHubRepoSpecifiers {
 }
 
 /// GitHub repository type filter
-#[derive(Copy, Clone, Debug, Display, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-#[strum(serialize_all = "kebab-case")]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum GitHubRepoType {
     /// Only source repositories (not forks)
     Source,
@@ -104,8 +102,7 @@ impl From<GitHubRepoType> for crate::github::RepoType {
 }
 
 /// Output formats for GitHub commands
-#[derive(Copy, Clone, Debug, ValueEnum, Display)]
-#[strum(serialize_all = "kebab-case")]
+#[derive(Copy, Clone, Debug, ValueEnum)]
 pub enum GitHubOutputFormat {
     Pretty,
     Json,
@@ -117,8 +114,7 @@ pub enum GitHubOutputFormat {
 // -----------------------------------------------------------------------------
 // Git Repository Cloning/History
 // -----------------------------------------------------------------------------
-#[derive(Copy, Clone, Debug, Display, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-#[strum(serialize_all = "kebab-case")]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum GitCloneMode {
     /// Equivalent to `git clone --bare`
     Bare,
@@ -127,11 +123,17 @@ pub enum GitCloneMode {
 }
 
 /// Specifies how to handle a repository's Git history.
-#[derive(Copy, Clone, Debug, Display, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-#[strum(serialize_all = "kebab-case")]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum GitHistoryMode {
     /// Scan all history
     Full,
     /// Ignore history entirely
     None,
 }
+
+crate::cli::impl_value_enum_display!(
+    GitHubRepoType,
+    GitHubOutputFormat,
+    GitCloneMode,
+    GitHistoryMode
+);

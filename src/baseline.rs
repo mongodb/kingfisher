@@ -83,7 +83,7 @@ pub struct BaselineFinding {
 
 pub fn load_baseline(path: &Path) -> Result<BaselineFile> {
     let data = fs::read_to_string(path).context("read baseline file")?;
-    let baseline: BaselineFile = serde_yaml::from_str(&data).context("parse baseline yaml")?;
+    let baseline: BaselineFile = yaml_serde::from_str(&data).context("parse baseline yaml")?;
     validate_baseline(&baseline)?;
     Ok(baseline)
 }
@@ -153,7 +153,7 @@ fn parse_fingerprint(s: &str) -> FingerprintForms {
 /// Atomically writes a baseline in the same directory as its destination.
 pub fn save_baseline(path: &Path, baseline: &BaselineFile) -> Result<()> {
     validate_baseline(baseline)?;
-    let data = serde_yaml::to_string(baseline).context("serialize baseline")?;
+    let data = yaml_serde::to_string(baseline).context("serialize baseline")?;
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())

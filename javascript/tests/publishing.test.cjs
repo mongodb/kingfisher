@@ -1,5 +1,6 @@
 'use strict';
 const assert = require('node:assert/strict');
+const childProcess = require('node:child_process');
 const { test } = require('node:test');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -25,7 +26,7 @@ function pack(item, directory) {
   return archive;
 }
 function environment(overrides = {}) {
-  return { GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted',
+  return { GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'push', RUNNER_ENVIRONMENT: 'github-hosted',
     GITHUB_REPOSITORY: 'mongodb/kingfisher', GITHUB_REF_TYPE: 'tag',
     GITHUB_REF_NAME: `npm-v${pkg.version}`, GITHUB_REF: `refs/tags/npm-v${pkg.version}`,
     ACTIONS_ID_TOKEN_REQUEST_URL: 'https://example.invalid/oidc',
@@ -145,15 +146,139 @@ test('a changed local archive invalidates a plan before the first upload', async
   } finally { await mock.close(); cleanup(value); }
 });
 
-test('publication requires the exact repository, SDK tag, hosted runner and OIDC permission', () => {
+test('publication requires an upstream main or matching SDK tag push, hosted runner and OIDC', () => {
   const plan = { repository: 'mongodb/kingfisher', version: pkg.version };
-  checkPublishEnvironment(plan, environment());
-  for (const change of [{ GITHUB_ACTIONS: 'false' }, { RUNNER_ENVIRONMENT: 'self-hosted' },
-    { GITHUB_REPOSITORY: 'other/kingfisher' }, { GITHUB_REF_TYPE: 'branch' },
-    { GITHUB_REF_NAME: 'v2.17.0' }, { GITHUB_REF: 'refs/heads/main' },
-    { ACTIONS_ID_TOKEN_REQUEST_TOKEN: '' }]) {
-    assert.throws(() => checkPublishEnvironment(plan, environment(change)));
+  const main = { GITHUB_REF_TYPE: 'branch', GITHUB_REF_NAME: 'main', GITHUB_REF: 'refs/heads/main' };
+  for (const source of [{}, main]) {
+    checkPublishEnvironment(plan, environment(source));
+    for (const change of [{ GITHUB_ACTIONS: 'false' }, { RUNNER_ENVIRONMENT: 'self-hosted' },
+      { GITHUB_REPOSITORY: 'other/kingfisher' }, { GITHUB_EVENT_NAME: 'pull_request' },
+      { GITHUB_EVENT_NAME: 'workflow_dispatch' }, { GITHUB_EVENT_NAME: '' },
+      { GITHUB_REF_TYPE: 'branch', GITHUB_REF_NAME: 'development', GITHUB_REF: 'refs/heads/development' },
+      { GITHUB_REF_NAME: 'v2.17.0' }, { GITHUB_REF: 'refs/heads/feature/main' },
+      { ACTIONS_ID_TOKEN_REQUEST_URL: '' }, { ACTIONS_ID_TOKEN_REQUEST_TOKEN: '' }]) {
+      assert.throws(() => checkPublishEnvironment(plan, environment({ ...source, ...change })));
+    }
   }
+  assert.throws(() => checkPublishEnvironment(plan, environment({ GITHUB_REF_TYPE: 'branch' })));
+  assert.throws(() => checkPublishEnvironment(plan, environment({ ...main, GITHUB_REF_TYPE: 'tag' })));
+});
+
+test('sibling CLI and Python release tags match their own source manifest versions', () => {
+  const plan = { repository: 'mongodb/kingfisher', version: pkg.version };
+  for (const [prefix, relative] of [['v', 'Cargo.toml'], ['python-v', 'crates/kingfisher-python/Cargo.toml']]) {
+    const text = fs.readFileSync(path.resolve(__dirname, '../..', relative), 'utf8');
+    const version = /^version\s*=\s*"([^"]+)"/m.exec(text)[1];
+    const tag = `${prefix}${version}`;
+    checkPublishEnvironment(plan, environment({ GITHUB_REF_NAME: tag, GITHUB_REF: `refs/tags/${tag}` }));
+    for (const invalid of [`${prefix}9999.9999.9999`, `${tag}-rc.1`, `${tag}+build`, `${prefix}01.2.3`]) {
+      assert.throws(() => checkPublishEnvironment(plan, environment({
+        GITHUB_REF_NAME: invalid, GITHUB_REF: `refs/tags/${invalid}` })), /source manifest/);
+    }
+  }
+});
+
+test('sibling tag validation cannot borrow a dependency version', context => {
+  const original = fs.readFileSync;
+  context.mock.method(fs, 'readFileSync', (file, ...args) => {
+    if (file === path.resolve(__dirname, '../../Cargo.toml')) {
+      return '[package]\nname = "kingfisher-bin"\n[dependencies.example]\nversion = "1.2.3"\n';
+    }
+    return original(file, ...args);
+  });
+  assert.throws(() => checkPublishEnvironment({ repository: 'mongodb/kingfisher', version: pkg.version },
+    environment({ GITHUB_REF_NAME: 'v1.2.3', GITHUB_REF: 'refs/tags/v1.2.3' })), /stable package version/);
+});
+
+test('guarded manual publication requires main, explicit authorization and the exact pinned SHA', () => {
+  const plan = { repository: 'mongodb/kingfisher', version: pkg.version };
+  const manual = { GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REF_TYPE: 'branch',
+    GITHUB_REF_NAME: 'main', GITHUB_REF: 'refs/heads/main', GITHUB_SHA: 'a'.repeat(40),
+    KINGFISHER_RELEASE_EXPECTED_SHA: 'a'.repeat(40), KINGFISHER_RELEASE_PUBLISH: 'true' };
+  checkPublishEnvironment(plan, environment(manual));
+  for (const change of [{ KINGFISHER_RELEASE_PUBLISH: '' }, { KINGFISHER_RELEASE_PUBLISH: 'false' },
+    { KINGFISHER_RELEASE_EXPECTED_SHA: '' }, { KINGFISHER_RELEASE_EXPECTED_SHA: 'a'.repeat(7) },
+    { KINGFISHER_RELEASE_EXPECTED_SHA: `${'a'.repeat(40)}\n`, GITHUB_SHA: `${'a'.repeat(40)}\n` },
+    { KINGFISHER_RELEASE_EXPECTED_SHA: '0'.repeat(40), GITHUB_SHA: '0'.repeat(40) },
+    { KINGFISHER_RELEASE_EXPECTED_SHA: 'b'.repeat(40) }, { GITHUB_SHA: 'b'.repeat(40) },
+    { GITHUB_REF: `refs/tags/npm-v${pkg.version}`, GITHUB_REF_TYPE: 'tag', GITHUB_REF_NAME: `npm-v${pkg.version}` },
+    { GITHUB_REF: 'refs/heads/development', GITHUB_REF_NAME: 'development' },
+    { GITHUB_REPOSITORY: 'fork/kingfisher' }, { RUNNER_ENVIRONMENT: 'self-hosted' },
+    { ACTIONS_ID_TOKEN_REQUEST_TOKEN: '' }]) {
+    assert.throws(() => checkPublishEnvironment(plan, environment({ ...manual, ...change })));
+  }
+});
+
+test('verified npm-tag handoff keeps the original trusted workflow and exact cohort SHA', context => {
+  const plan = { repository: 'mongodb/kingfisher', version: pkg.version };
+  const sha = 'a'.repeat(40);
+  context.mock.method(childProcess, 'execFileSync', (command, args, options) => {
+    assert.equal(command, 'git');
+    assert.equal(options.cwd, path.resolve(__dirname, '../..'));
+    assert.deepEqual(args, ['rev-parse', 'HEAD']);
+    return `${sha}\n`;
+  });
+  const manual = { GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_SHA: sha,
+    GITHUB_WORKFLOW_REF: `mongodb/kingfisher/.github/workflows/node-sdk.yml@refs/tags/npm-v${pkg.version}`,
+    KINGFISHER_RELEASE_PUBLISH: 'true', KINGFISHER_RELEASE_COHORT: 'true',
+    KINGFISHER_RELEASE_EXPECTED_SHA: sha };
+  checkPublishEnvironment(plan, environment(manual));
+  for (const change of [{ KINGFISHER_RELEASE_COHORT: '' }, { KINGFISHER_RELEASE_COHORT: 'false' },
+    { KINGFISHER_RELEASE_PUBLISH: 'false' }, { KINGFISHER_RELEASE_EXPECTED_SHA: '' },
+    { KINGFISHER_RELEASE_EXPECTED_SHA: 'b'.repeat(40) }, { GITHUB_SHA: 'b'.repeat(40) },
+    { GITHUB_SHA: sha.slice(0, 7) }, { GITHUB_SHA: `${sha}\n` }, { GITHUB_SHA: '0'.repeat(40) },
+    { GITHUB_WORKFLOW_REF: '' },
+    { GITHUB_WORKFLOW_REF: `mongodb/kingfisher/.github/workflows/release.yml@refs/tags/npm-v${pkg.version}` },
+    { GITHUB_WORKFLOW_REF: 'mongodb/kingfisher/.github/workflows/node-sdk.yml@refs/heads/main' },
+    { GITHUB_REF_NAME: 'npm-v9.9.9', GITHUB_REF: 'refs/tags/npm-v9.9.9' },
+    { RUNNER_ENVIRONMENT: 'self-hosted' }, { GITHUB_REPOSITORY: 'fork/kingfisher' },
+    { ACTIONS_ID_TOKEN_REQUEST_TOKEN: '' }]) {
+    assert.throws(() => checkPublishEnvironment(plan, environment({ ...manual, ...change })));
+  }
+});
+
+test('coordinator manual CLI-tag completion pins the checkout and its committed stable version', context => {
+  const plan = { repository: 'mongodb/kingfisher', version: pkg.version };
+  const sha = 'a'.repeat(40);
+  const calls = [];
+  context.mock.method(childProcess, 'execFileSync', (command, args, options) => {
+    assert.equal(command, 'git');
+    assert.equal(options.cwd, path.resolve(__dirname, '../..'));
+    calls.push(args);
+    if (args.join(' ') === 'rev-parse HEAD') return `${sha}\n`;
+    assert.deepEqual(args, ['show', `${sha}:Cargo.toml`]);
+    return "[package] # committed package version, not the mutable worktree\nname = 'kingfisher-bin'\nversion = '2.14.0'\n";
+  });
+  const manual = { GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REF_TYPE: 'tag',
+    GITHUB_REF_NAME: 'v2.14.0', GITHUB_REF: 'refs/tags/v2.14.0', GITHUB_SHA: sha,
+    KINGFISHER_RELEASE_PUBLISH: 'true' };
+  checkPublishEnvironment(plan, environment(manual));
+  assert.deepEqual(calls, [['rev-parse', 'HEAD'], ['show', `${sha}:Cargo.toml`]]);
+  for (const change of [{ KINGFISHER_RELEASE_PUBLISH: '' }, { KINGFISHER_RELEASE_PUBLISH: 'false' },
+    { GITHUB_SHA: '' }, { GITHUB_SHA: sha.slice(0, 7) }, { GITHUB_SHA: `${sha}\n` },
+    { GITHUB_SHA: '0'.repeat(40) }, { GITHUB_SHA: 'b'.repeat(40) },
+    { GITHUB_REF_TYPE: 'branch' }, { GITHUB_REF_NAME: 'v9.9.9', GITHUB_REF: 'refs/tags/v9.9.9' },
+    { GITHUB_REF_NAME: 'v2.14.0-rc.1', GITHUB_REF: 'refs/tags/v2.14.0-rc.1' },
+    { GITHUB_REF_NAME: 'v2.14.0+build', GITHUB_REF: 'refs/tags/v2.14.0+build' },
+    { GITHUB_REF_NAME: `npm-v${pkg.version}`, GITHUB_REF: `refs/tags/npm-v${pkg.version}` },
+    { GITHUB_REF_NAME: 'python-v1.5.0', GITHUB_REF: 'refs/tags/python-v1.5.0' },
+    { GITHUB_EVENT_NAME: 'pull_request' }, { GITHUB_EVENT_NAME: 'workflow_call' },
+    { GITHUB_REPOSITORY: 'fork/kingfisher' }, { RUNNER_ENVIRONMENT: 'self-hosted' },
+    { ACTIONS_ID_TOKEN_REQUEST_TOKEN: '' }]) {
+    assert.throws(() => checkPublishEnvironment(plan, environment({ ...manual, ...change })));
+  }
+});
+
+test('an authorized npm tag publication uploads the tested platform archives before the SDK', async () => {
+  const value = stagedFixture();
+  const mock = await registry();
+  try {
+    const plan = await createPlan(value.release, options(value, mock));
+    const uploads = [];
+    publishPlan(plan, { env: environment(), run: item => uploads.push(item.archive) });
+    assert.deepEqual(uploads, readArchives(value.release).map(item => item.archive));
+    assert.equal(plan.packages.at(-1).name, pkg.name);
+  } finally { await mock.close(); cleanup(value); }
 });
 
 test('a failed publication stops later packages and never ignores upload errors', async () => {

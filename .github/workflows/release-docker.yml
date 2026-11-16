@@ -12,8 +12,12 @@ on:
         description: "Tag to push (e.g. v1.2.3)"
         required: true
         type: string
+      phase:
+        description: Build, or publish only after the coordinator's shared gate
+        type: string
+        default: build
 
-  # Manual: "Run workflow" button or `gh workflow run`
+  # Standalone manual runs build only; publish through the release coordinator.
   workflow_dispatch:
     inputs:
       tag:
@@ -28,6 +32,7 @@ permissions:
 ###############################################################################
 jobs:
   build-and-push:
+    if: inputs.phase != 'publish' || (github.repository == 'mongodb/kingfisher' && startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -66,6 +71,10 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         ref: v${{ steps.tag.outputs.tag }}
+        fetch-depth: 0
+    - name: Recheck the tested release source before authentication
+      if: inputs.phase == 'publish'
+      run: python3 scripts/check-release-source.py
 
     # -----------------------------------------------------------------------
     # Build & push
@@ -73,6 +82,7 @@ jobs:
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
     - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+      if: inputs.phase == 'publish'
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
@@ -85,7 +95,7 @@ jobs:
         build-args: |
           KINGFISHER_VERSION=${{ steps.tag.outputs.tag }}
         platforms: linux/amd64,linux/arm64
-        push: true
+        push: ${{ inputs.phase == 'publish' }}
         tags: |
           ghcr.io/mongodb/kingfisher:latest
           ghcr.io/mongodb/kingfisher:${{ steps.tag.outputs.tag }}

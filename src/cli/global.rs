@@ -6,8 +6,6 @@ use std::sync::LazyLock;
 use clap::{
     ArgAction, ArgMatches, Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum,
 };
-use strum::Display;
-use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 use tracing::Level;
 
 use crate::cli::commands::{
@@ -80,10 +78,6 @@ pub enum Command {
     /// Scan content for secrets and sensitive information
     Scan(ScanCommandArgs),
 
-    /// Open the native scan wizard and report workspace (requires a GUI-enabled build)
-    #[command(visible_alias = "gui")]
-    Wizard(WizardArgs),
-
     /// Manage rules
     #[command(alias = "rule")]
     Rules(RulesArgs),
@@ -109,26 +103,68 @@ pub enum Command {
     SelfUpdate,
 }
 
-/// Starting content for the native workspace.
-#[derive(Args, Debug)]
-pub struct WizardArgs {
-    /// Optional file, directory, or repository URL to scan
-    pub target: Option<std::ffi::OsString>,
-    /// Open a report directly in the native viewer
-    #[arg(long, conflicts_with = "target")]
-    pub report: Option<PathBuf>,
+pub static RAM_GB: LazyLock<Option<f64>> =
+    LazyLock::new(|| physical_memory_bytes().map(|bytes| bytes as f64 / 1024.0 / 1024.0 / 1024.0));
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn physical_memory_bytes() -> Option<u64> {
+    let mut mib = [libc::CTL_HW, libc::HW_MEMSIZE];
+    let mut bytes = 0u64;
+    let mut size = std::mem::size_of::<u64>();
+    // SAFETY: the MIB and output pointers address initialized, correctly sized
+    // buffers. Passing a null new-value pointer makes this a read-only query.
+    let status = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            mib.len() as _,
+            (&mut bytes as *mut u64).cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    (status == 0 && size == std::mem::size_of::<u64>() && bytes != 0).then_some(bytes)
 }
 
-pub static RAM_GB: LazyLock<Option<f64>> = LazyLock::new(|| {
-    if sysinfo::IS_SUPPORTED_SYSTEM {
-        let s = System::new_with_specifics(
-            RefreshKind::nothing().with_memory(MemoryRefreshKind::nothing().with_ram()),
-        );
-        Some(s.total_memory() as f64 / 1024.0 / 1024.0 / 1024.0)
-    } else {
-        None
-    }
-});
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "netbsd"
+))]
+fn physical_memory_bytes() -> Option<u64> {
+    // SAFETY: sysconf takes only a constant selector and does not access Rust memory.
+    let pages = u64::try_from(unsafe { libc::sysconf(libc::_SC_PHYS_PAGES) }).ok()?;
+    // SAFETY: as above. A negative/error result is rejected before multiplication.
+    let page_size = u64::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).ok()?;
+    pages.checked_mul(page_size).filter(|bytes| *bytes != 0)
+}
+
+#[cfg(windows)]
+fn physical_memory_bytes() -> Option<u64> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+
+    let mut memory = MEMORYSTATUSEX {
+        dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: memory is initialized, and dwLength is the exact buffer size required by Windows.
+    let status = unsafe { GlobalMemoryStatusEx(&mut memory) };
+    (status != 0 && memory.ullTotalPhys != 0).then_some(memory.ullTotalPhys)
+}
+
+#[cfg(not(any(
+    windows,
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "netbsd"
+)))]
+fn physical_memory_bytes() -> Option<u64> {
+    None
+}
 
 /// Top-level global CLI arguments
 #[derive(Args, Debug, Clone)]
@@ -261,8 +297,7 @@ impl GlobalArgs {
 
 /// Mode for enabling or disabling features based on terminal capabilities
 /// Generic mode with `auto/never/always`.
-#[derive(Copy, Clone, Debug, Display, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Default)]
-#[strum(serialize_all = "kebab-case")]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Default)]
 pub enum Mode {
     #[default]
     Auto,
@@ -274,8 +309,7 @@ pub enum Mode {
 ///
 /// Controls how TLS certificates are validated when connecting to endpoints
 /// during credential validation (e.g., database connections, API calls).
-#[derive(Copy, Clone, Debug, Display, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Default)]
-#[strum(serialize_all = "kebab-case")]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Default)]
 pub enum TlsMode {
     /// Full WebPKI certificate validation: trusted CA chain, hostname match, not expired.
     /// This is the default and most secure mode.
@@ -292,9 +326,26 @@ pub enum TlsMode {
     Off,
 }
 
+crate::cli::impl_value_enum_display!(Mode, TlsMode);
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(
+        windows,
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "netbsd"
+    ))]
+    #[test]
+    fn cli_utility_ram_size_is_available_for_scan_job_sizing() {
+        let ram_gb = RAM_GB.expect("supported platforms should report their physical RAM");
+        assert!(ram_gb.is_finite() && ram_gb > 0.0, "invalid RAM size: {ram_gb}");
+    }
 
     #[test]
     fn tls_mode_default_is_strict() {

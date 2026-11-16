@@ -1,6 +1,5 @@
 use anyhow::{Context, bail};
 use clap::{Args, Subcommand, ValueEnum, ValueHint};
-use path_dedot::ParseDot;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -8,7 +7,6 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
 };
-use strum::Display;
 use tracing::debug;
 use url::Url;
 
@@ -30,7 +28,7 @@ use crate::{
     },
     git_url::GitUrl,
     rules::rule::Confidence,
-    util::expand_tilde,
+    util::{expand_tilde, normalize_absolute_path},
 };
 
 /// Sentinel `max_results` meaning "keep paging while the provider returns
@@ -108,7 +106,7 @@ pub struct ScanArgs {
     #[arg(global = true, long, short = 'n', default_value_t = false)]
     pub no_validate: bool,
 
-    /// Disable scan network, Git subprocess, repository, and validation deadlines.
+    /// Disable scan network, Git clone/update, repository, and validation deadlines.
     /// Overrides individual timeout settings; stalled operations can wait indefinitely.
     /// Content limits remain enabled unless --no-limits is also supplied.
     /// Cleanup waits and provider-specific probe deadlines remain bounded.
@@ -369,8 +367,7 @@ pub struct ConfigWebhookOverride {
 }
 
 /// Confidence levels for findings
-#[derive(Copy, Clone, Debug, Display, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-#[strum(serialize_all = "kebab-case")]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum ConfidenceLevel {
     Low,
     Medium,
@@ -378,10 +375,7 @@ pub enum ConfidenceLevel {
 }
 
 /// Controls which validation outcomes are included in scan reports.
-#[derive(
-    Copy, Clone, Debug, Display, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Serialize, Deserialize,
-)]
-#[strum(serialize_all = "kebab-case")]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ValidationFilter {
     /// Include every finding, regardless of validation outcome.
@@ -391,6 +385,8 @@ pub enum ValidationFilter {
     /// Include active credentials and high-confidence assumed-valid secrets.
     Actionable,
 }
+
+crate::cli::impl_value_enum_display!(ConfidenceLevel, ValidationFilter);
 
 impl ScanArgs {
     /// Effective budget for repository enumeration, scanning, and audit metadata.
@@ -1023,13 +1019,9 @@ impl ScanCommandArgs {
 /// on a case-sensitive one distinct names differing only by case are rejected
 /// as a precaution).
 fn paths_refer_to_same_file(a: &Path, b: &Path) -> bool {
-    fn normalize(path: &Path) -> Option<PathBuf> {
-        std::path::absolute(path)
-            .ok()
-            .map(|abs| abs.parse_dot().map(|dedotted| dedotted.into_owned()).unwrap_or(abs))
-    }
-
-    let (Some(a), Some(b)) = (normalize(a), normalize(b)) else { return a == b };
+    let (Ok(a), Ok(b)) = (normalize_absolute_path(a), normalize_absolute_path(b)) else {
+        return a == b;
+    };
     if a == b {
         return true;
     }
@@ -1101,10 +1093,7 @@ fn path_is_beneath(candidate: &Path, root: &Path) -> bool {
 }
 
 fn root_for_comparison(path: &Path) -> PathBuf {
-    std::path::absolute(path)
-        .ok()
-        .and_then(|absolute| absolute.parse_dot().ok().map(|path| path.into_owned()))
-        .unwrap_or_else(|| path.to_path_buf())
+    normalize_absolute_path(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn parse_git_url_target(path: &Path) -> Option<GitUrl> {
@@ -1199,11 +1188,12 @@ pub enum ScanInputCommand {
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct FilesystemScanArgs {
-    /// Files, directories, or '-' for stdin
+    /// Files, directories, HTTP(S)/SSH repository URLs, or '-' for stdin
     #[arg(value_name = "PATH", value_hint = ValueHint::AnyPath)]
     pub paths: Vec<PathBuf>,
 
-    /// Deprecated: git repository URLs to clone and scan. Prefer positional targets.
+    /// Deprecated: clone HTTP(S) or SSH repository URLs. Prefer positional targets.
+    /// SSH requires OpenSSH with configured keys/agent and known hosts.
     #[arg(long = "git-url", value_hint = ValueHint::Url)]
     pub git_url: Vec<GitUrl>,
 }
@@ -1758,6 +1748,28 @@ mod tests {
         std::fs::hard_link(&a, &b).unwrap();
 
         assert!(paths_refer_to_same_file(&a, &b));
+    }
+
+    #[test]
+    fn cli_utility_path_comparisons_handle_missing_dotted_output_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let report = directory.path().join("report.json");
+        let dotted = directory.path().join("missing").join("..").join("report.json");
+        assert!(paths_refer_to_same_file(&report, &dotted));
+        assert_eq!(root_for_comparison(&dotted), report);
+    }
+
+    #[test]
+    fn cli_utility_path_containment_does_not_accept_parent_escape_or_sibling_prefix() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("workspace");
+        let inside = root.join("subdirectory").join("..").join("audit.jsonl");
+        let outside = root.join("..").join("audit.jsonl");
+        let sibling = directory.path().join("workspace-other").join("audit.jsonl");
+        assert!(path_is_beneath(&inside, &root));
+        assert!(!path_is_beneath(&outside, &root));
+        assert!(!path_is_beneath(&sibling, &root));
+        assert!(!path_is_beneath(&root, &root));
     }
 
     #[test]

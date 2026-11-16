@@ -1,17 +1,15 @@
-//! Live CLI progress and opt-in snapshots for the native wizard's child process.
-//! No report content or credentials are written to either channel.
+//! Live CLI terminal progress without report content or credentials.
 use std::{
     sync::{
         Arc, LazyLock, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc,
     },
-    thread,
     time::{Duration, Instant},
 };
 
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
-use thousands::Separable;
+
+use crate::formatting::comma_grouped;
 
 #[derive(Default)]
 struct Counters {
@@ -59,8 +57,7 @@ impl Counters {
     }
 }
 
-#[derive(Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum PhaseKind {
     #[default]
     Other,
@@ -125,7 +122,6 @@ impl Phase {
     }
 }
 
-#[derive(serde::Serialize)]
 struct Snapshot {
     bytes: u64,
     blobs: u64,
@@ -150,17 +146,17 @@ impl Snapshot {
                 };
                 format!(
                     "scanning {} inputs · {} · {}/s · {} findings (incl. duplicates) · {elapsed}",
-                    self.blobs.separate_with_commas(),
+                    comma_grouped(self.blobs as u128),
                     format_bytes(self.bytes as f64),
                     format_bytes(rate),
-                    self.findings.separate_with_commas(),
+                    comma_grouped(self.findings as u128),
                 )
             }
             PhaseKind::Validation => format!(
                 "validating {}/{} findings checked · {} findings (incl. duplicates) · {elapsed}",
-                self.completed.separate_with_commas(),
-                self.total.separate_with_commas(),
-                self.findings.separate_with_commas(),
+                comma_grouped(self.completed as u128),
+                comma_grouped(self.total as u128),
+                comma_grouped(self.findings as u128),
             ),
             PhaseKind::Other => format!("{} · {elapsed}", self.phase),
         }
@@ -181,18 +177,9 @@ fn format_bytes(bytes: f64) -> String {
 
 static COUNTERS: LazyLock<Arc<Counters>> = LazyLock::new(|| Arc::new(Counters::default()));
 
-pub(crate) struct ProgressGuard {
-    sender: Option<mpsc::Sender<()>>,
-    thread: Option<thread::JoinHandle<()>>,
-}
+pub(crate) struct ProgressGuard;
 impl Drop for ProgressGuard {
     fn drop(&mut self) {
-        if let Some(sender) = &self.sender {
-            let _ = sender.send(());
-        }
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
         finish_terminal();
         COUNTERS.enabled.store(false, Ordering::Relaxed);
         COUNTERS.claimed.store(false, Ordering::Release);
@@ -200,13 +187,12 @@ impl Drop for ProgressGuard {
 }
 
 pub(crate) fn start(terminal_enabled: bool, include_hidden: bool) -> Option<ProgressGuard> {
-    let path = std::env::var_os("KINGFISHER_PROGRESS_FILE");
-    if !terminal_enabled && path.is_none() {
+    if !terminal_enabled {
         return None;
     }
     let counters = Arc::clone(&COUNTERS);
     // A second scan must not reset another guard's counters or later clear its
-    // terminal. The original guard owns progress until its snapshot writer exits.
+    // terminal. The original guard owns progress until it is dropped.
     if counters.claimed.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err()
     {
         return None;
@@ -221,48 +207,22 @@ pub(crate) fn start(terminal_enabled: bool, include_hidden: bool) -> Option<Prog
     counters.enabled.store(true, Ordering::Relaxed);
     phase("Preparing scan", 0, PhaseKind::Other);
 
-    let terminal = terminal_enabled.then(|| {
-        let counters = Arc::clone(&counters);
-        let style = ProgressStyle::with_template("{spinner} {status}")
-            .expect("progress template should compile")
-            .with_key("status", move |state: &ProgressState, writer: &mut dyn std::fmt::Write| {
-                let _ =
-                    writer.write_str(&counters.snapshot(Instant::now()).message(state.elapsed()));
-            });
-        let pb = ProgressBar::new_spinner().with_style(style);
-        pb.enable_steady_tick(Duration::from_millis(100));
-        pb
-    });
-    *counters.terminal.lock().unwrap() = terminal.clone();
-    let (sender, thread) = if let Some(path) = path {
-        let (sender, receiver) = mpsc::channel();
-        let thread = thread::spawn(move || {
-            let mut finished = false;
-            loop {
-                let snapshot = counters.snapshot(Instant::now());
-                // A reader may catch an incomplete write; it keeps the previous valid snapshot.
-                let _ = std::fs::write(&path, serde_json::to_vec(&snapshot).unwrap());
-                if finished {
-                    break;
-                }
-                finished = !matches!(
-                    receiver.recv_timeout(Duration::from_millis(500)),
-                    Err(mpsc::RecvTimeoutError::Timeout)
-                );
-            }
+    let style = ProgressStyle::with_template("{spinner} {status}")
+        .expect("progress template should compile")
+        .with_key("status", move |state: &ProgressState, writer: &mut dyn std::fmt::Write| {
+            let _ = writer.write_str(&counters.snapshot(Instant::now()).message(state.elapsed()));
         });
-        (Some(sender), Some(thread))
-    } else {
-        (None, None)
-    };
-    Some(ProgressGuard { sender, thread })
+    let terminal = ProgressBar::new_spinner().with_style(style);
+    terminal.enable_steady_tick(Duration::from_millis(100));
+    *COUNTERS.terminal.lock().unwrap() = Some(terminal);
+    Some(ProgressGuard)
 }
 
 pub(crate) fn terminal() -> Option<ProgressBar> {
     COUNTERS.terminal.lock().unwrap().clone()
 }
 
-/// Stop terminal rendering before reports/summaries, but keep wizard snapshots alive.
+/// Stop terminal rendering before reports/summaries without releasing its owner.
 pub(crate) fn finish_terminal() {
     if let Some(terminal) = COUNTERS.terminal.lock().unwrap().take() {
         terminal.finish_and_clear();
@@ -348,14 +308,14 @@ pub(crate) fn phase(label: &str, total: u64, kind: PhaseKind) {
 mod tests {
     use super::*;
     #[test]
-    fn terminal_can_finish_before_snapshot_guard_and_nested_start_cannot_replace_it() {
+    fn terminal_can_finish_before_its_guard_and_nested_start_cannot_replace_it() {
         let guard = start(true, false).expect("first progress owner");
         scanned(42);
         assert!(start(true, true).is_none());
         assert_eq!(COUNTERS.snapshot(Instant::now()).bytes, 42);
         finish_terminal();
         assert!(terminal().is_none());
-        assert!(enabled(), "snapshot counters remain active during report output");
+        assert!(enabled(), "the progress owner remains active during report output");
         scanned(8);
         assert_eq!(COUNTERS.snapshot(Instant::now()).bytes, 50);
         drop(guard);
@@ -431,6 +391,26 @@ mod tests {
         let remaining = counters.snapshot(start + Duration::from_secs(11));
         assert!(remaining.kind == PhaseKind::Validation);
         assert_eq!((remaining.completed, remaining.total), (7, 30));
+    }
+
+    #[test]
+    fn terminal_counters_advance_before_validation_activity_finishes() {
+        let counters = Arc::new(Counters::default());
+        counters.found([true, false, true].into_iter(), 1);
+        counters.enter(PhaseKind::Validation, 2, Instant::now());
+        let progress =
+            ActivityGuard { counters: Some(Arc::clone(&counters)), kind: PhaseKind::Validation };
+        progress.advance(1);
+        let snapshot = counters.snapshot(Instant::now());
+        assert_eq!((snapshot.findings, snapshot.completed, snapshot.total), (2, 1, 2));
+        assert_eq!(
+            snapshot.message(Duration::from_secs(1)),
+            "validating 1/2 findings checked · 2 findings (incl. duplicates) · 00:01"
+        );
+        progress.advance(1);
+        assert_eq!(counters.snapshot(Instant::now()).completed, 2);
+        drop(progress);
+        assert!(counters.snapshot(Instant::now()).kind == PhaseKind::Other);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 [package]
 name = "kingfisher-core"
-version = "1.0.6"
+version = "2.0.0"
 description = "Core types and traits for Kingfisher secret scanner"
 edition.workspace = true
 rust-version.workspace = true
@@ -39,13 +39,7 @@ bstr.workspace = true
 memchr = "2.8"
 
 # Git types (minimal, for ObjectId and Time)
-gix = { version = "0.87", default-features = false, features = ["serde", "sha1"] }
+gix = { version = "0.90", default-features = false, features = ["serde", "sha1"] }
 
-# Console formatting
-console = "0.16"
-
-# Language detection for content types
-tokei = "14.0.0"
-
-[dev-dependencies]
-pretty_assertions = "1.4"
+# ANSI stripping only; terminal I/O and Unicode display widths are unused.
+console = { version = "0.16", default-features = false, features = ["alloc", "ansi-parsing"] }

@@ -111,6 +111,60 @@ mod tests {
     }
 
     #[test]
+    fn escaped_strips_terminal_control_sequence_families() {
+        for input in [
+            "\x1b[1;31mvisible\x1b[0m",
+            "\x1b[2J\x1b[Hvisible\x1b[K",
+            "\u{9b}31mvisible\u{9b}0m",
+            "\x1b]0;window title\x07visible",
+            "\x1b]8;;https://example.invalid\x1b\\visible\x1b]8;;\x1b\\",
+            "\x1b]8;;https://example.invalid\x07visible\x1b]8;;\x07",
+            "\x1bPdevice data\x1b\\visible",
+            "\x1b(0\x1b)Bvisible",
+        ] {
+            assert_eq!(Escaped(input.as_bytes()).to_string(), "visible", "{input:?}");
+        }
+    }
+
+    #[test]
+    fn escaped_preserves_unicode_and_whitespace_around_controls() {
+        let input = "\x1b[32m日本語 🔑\x1b[0m\r\n\t\u{a0}\0\u{7f}\u{85}";
+        assert_eq!(
+            Escaped(input.as_bytes()).to_string(),
+            "日本語 🔑\r\n\t\u{a0}\\u{0}\\u{7f}\u{85}"
+        );
+        assert_eq!(Escaped(b"\x1b[31m\xff\x1b[0m").to_string(), "\u{fffd}");
+    }
+
+    #[test]
+    fn escaped_handles_incomplete_and_unrecognized_sequences() {
+        for (input, expected) in [
+            ("text\x1b", "text"),
+            ("text\x1b[", "text["),
+            ("text\x1b[?", "text[?"),
+            ("text\x1b]unfinished title", "text"),
+            ("text\x1bPunfinished data", "text"),
+            ("text\x1b☃", "text☃"),
+            ("text\u{80}", "text\\u{80}"),
+        ] {
+            assert_eq!(Escaped(input.as_bytes()).to_string(), expected, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn escaped_propagates_formatting_errors() {
+        struct Reject;
+
+        impl std::fmt::Write for Reject {
+            fn write_str(&mut self, _: &str) -> std::fmt::Result {
+                Err(std::fmt::Error)
+            }
+        }
+
+        assert!(std::fmt::write(&mut Reject, format_args!("{}", Escaped(b"\x1b[31mred"))).is_err());
+    }
+
+    #[test]
     fn test_escaped_struct_invalid_utf8() {
         let bytes = b"Hello\xFF\xFEWorld";
         let escaped = Escaped(bytes);

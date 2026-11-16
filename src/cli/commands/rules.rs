@@ -1,7 +1,6 @@
 use std::{path::PathBuf, time::Duration};
 
 use clap::{ArgAction, Args, Subcommand, ValueEnum, ValueHint};
-use strum::Display;
 
 use crate::{
     cli::commands::{output::OutputArgs, scan::ConfidenceLevel},
@@ -218,14 +217,15 @@ pub struct RulesCompileCacheArgs {
 // -----------------------------------------------------------------------------
 // Rules List Output Format
 // -----------------------------------------------------------------------------
-#[derive(Copy, Clone, Debug, Display, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-#[strum(serialize_all = "kebab-case")]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum RulesListOutputFormat {
     /// A human-friendly text-based format
     Pretty,
     /// Pretty-printed JSON
     Json,
 }
+
+crate::cli::impl_value_enum_display!(RulesListOutputFormat);
 
 fn parse_duration_arg(value: &str) -> Result<Duration, String> {
     humantime::parse_duration(value).map_err(|err| err.to_string())

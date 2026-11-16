@@ -149,7 +149,7 @@ DOC_MAP = {
     "JAVASCRIPT.md": (
         "reference/javascript-bindings.md",
         "JavaScript and TypeScript SDK",
-        "Use Kingfisher's stable Node SDK (1.0.1): native Node-API detection, validation, revocation and VS Code workspace extensions.",
+        "Use Kingfisher's stable Node SDK (1.0.2): native Node-API detection, validation, revocation and VS Code workspace extensions.",
     ),
     "COMPARISON.md": (
         "reference/comparison.md",
@@ -254,7 +254,7 @@ def rewrite_links(content: str, *, root_level: bool = False) -> str:
             content,
         )
     # Source-only guides and Rust examples are browsed in the repository.
-    for guide in ("PUBLISHING.md", "WIZARD.md", "benchmark/README.md"):
+    for guide in ("PUBLISHING.md", "benchmark/README.md"):
         content = content.replace(
             "](" + guide,
             "](https://github.com/mongodb/kingfisher/blob/main/docs/" + guide,

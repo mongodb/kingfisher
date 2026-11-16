@@ -1,21 +1,44 @@
 # Maintainer release checklist
 
 This is an internal maintainer runbook for publishing GitHub release assets and the downstream
-Docker, PyPI, and crates.io packages. End users should follow
+Docker, PyPI, npm, and crates.io packages. End users should follow
 [release verification](../docs/INSTALLATION.md#verifying-release-artifacts).
 
 ## Release workflow
 
-The workflow runs on pushes of `v*` tags and `workflow_dispatch`. Every run must use a tag
-ref matching the root Cargo version, including the `v` prefix; this is checked before tests
-or builds start. Release assets are attested from that tag ref so consumers can verify the
-version-specific signing identity. Pushes to `main` do not publish releases.
+The [coordinator](workflows/release.yml) runs on upstream `main` pushes, `v*`,
+`python-v*`, and `npm-v*` tag pushes, and manual dispatch. Tags must match the corresponding
+committed manifest and identify a commit merged into upstream `main`.
 
-After all tests and builds pass, the workflow creates or updates a draft release, uploads
-all assets, and publishes it only after the uploads succeed. A build or upload failure leaves
-the release unpublished. Docker, PyPI, and crates.io publication follows the GitHub release.
+Every release first passes one **Release build gate** for the same pinned SHA: all normal
+cross-platform tests and binary builds, four verified Cargo packages and their read-only
+registry plan, all Python SDK wheel/sdist/cache-portability tests, all npm native builds and
+sealed-tarball tests, and six CLI PyPI wheels built from this run's binary artifacts. Failure,
+cancellation, or a skipped required build prevents **every** registry publisher from starting.
+SDKs are tested even when their unchanged version is already published.
 
-Manual rebuilds select the tag with `--ref`; there is no separate tag input.
+A `v<CLI-version>` tag also creates/updates a draft GitHub release, uploads and attests all
+assets, and publishes the release only after uploads succeed. Its downstream registry jobs
+wait for that public release too. Main and SDK-tag runs publish pending crates and Python SDK
+versions without creating a CLI GitHub release, Docker image, or CLI PyPI release.
+
+**npm remains tag-only:** uploads require an existing `npm-v<committed SDK version>` tag
+pointing to the producer's exact SHA. Main/CLI/Python runs skip the npm handoff if that tag
+is missing or points elsewhere; other registries proceed. The npm tag's own coordinator
+cohort can publish it. CI never creates or moves tags. Publication retains the original
+top-level `node-sdk.yml` / `npm` identity, existing `npm-v*`-only environment and reviewer;
+no existing npmjs account or trust changes are needed.
+
+Registry uploads are serialized per registry but are not a distributed transaction: an outage
+or authentication error can leave a partial release after the build gate. Recover with the
+original tested artifacts, following the npm handoff retry rules below; do not move tags or
+reuse versions for changed bytes.
+
+Manual CLI rebuilds select the existing tag with `--ref`; there is no separate tag input.
+A manual main run is test-only unless `publish=true`, the full `expected_sha`, and the Python
+SDK `expected_version` are supplied. Ordinary standalone SDK, CLI-wheel and Docker manual
+workflows are build/test-only. The Node SDK's internal publish dispatch must validate the
+coordinator's completed gates and exact artifacts; it is not an independent publication route.
 
 ## Before publishing
 
@@ -58,9 +81,9 @@ The workflow uses the latest changelog section for the release notes.
 
 Unchanged libraries keep their existing versions: the crates.io planner verifies their
 packaged contents and skips their uploads. `make release` pushes only the CLI's `v*` tag;
-it does not trigger the independently versioned Python SDK workflow. On main merges and
-`python-v*` SDK tags, that workflow checks the SDK version on PyPI and skips the
-protected publish job entirely if that version already exists.
+the coordinator nevertheless tests every SDK and releases pending crate/Python SDK versions.
+A pending npm upload additionally requires the same-SHA npm tag described above.
+Already-published unchanged SDK versions are tested but skip upload.
 
 Do not start a release with `gh release create` or the GitHub **Publish release** button:
 those publish immediately, before the build. Adding `--draft` prevents immediate publication
@@ -97,21 +120,27 @@ needed. A packaging failure reports Cargo's first error summary with credentials
 verbose tool/authentication logs remain private. No release is dispatched after a failure.
 
 - **Crates:** discovers the existing CLI release and its passing build/test run. It retries
-  only the original failed crates job when using that exact tested commit, or selects the
-  guarded metadata-only recovery below. It does not rebuild the platform release archives,
-  Docker image, or CLI PyPI package. Crate extraction/build verification still runs.
-- **Python SDK:** dispatches the existing SDK workflow's explicit publish mode. The six wheel
-  builds, source-distribution tests, and cache-portability checks must pass before publication
-  through the protected `pypi-sdk` environment. An existing version fails before those builds;
-  missing-artifact staging and `skip-existing` remain final race/retry safeguards, not permission
-  to replace an existing release. Ordinary versioned main merges still publish automatically.
-- **npm SDK:** infers the independent version from `javascript/package.json`, checks the
-  matching Node/native manifests and lockfiles, and pushes only an annotated
-  `npm-v<SDK-version>` tag. All six builds and sealed-package verification must pass before
-  approving the protected `npm` deployment. It never runs local `npm publish`. Existing
-  public tags are rejected; recover via the original run's failed publication job, not a new
-  tag. A failed push may reuse a same-commit annotated local tag. To select a public remote
-  named `upstream`, use `make release npm RELEASE_REMOTE=upstream`.
+  only the original failed crates job at that exact tested commit, or selects the guarded
+  metadata-only recovery below. Recovery reruns the complete current build cohort but does
+  not replace public assets or publish Docker/PyPI/npm releases.
+- **Python SDK:** dispatches the coordinator's pinned main publish mode. All normal binary,
+  Cargo and npm checks, six wheels, source-distribution tests, and cache-portability checks
+  must pass before publication through `pypi-sdk`. Pending crates release too; npm uploads
+  only with a matching existing npm tag at the same SHA. An existing Python version fails
+  before those builds; missing-artifact staging and `skip-existing` remain race/retry
+  safeguards, not permission to replace an existing release.
+- **npm SDK:** `make release npm` infers the version from `javascript/package.json`, checks
+  matching Node/native manifests and lockfiles, and pushes an annotated
+  `npm-v<SDK-version>` tag. It never runs local `npm publish`. That tag's coordinator run
+  must pass the complete shared gate before handing the exact tested tarballs to the
+  original top-level Node SDK workflow at that same tag/SHA. Keep the `npm` environment
+  limited to **`npm-v*` tags only**, with its existing reviewer unchanged. PRs,
+  development/fork pushes and ordinary manual SDK runs only test. The source preflight
+  rejects changed packaged/shared-runtime inputs at a published SDK version; unchanged
+  published versions still pass their full test matrix but skip upload. Existing remote
+  tags are rejected; use the handoff retry procedure below with the original artifacts,
+  not a new tag. A failed push may reuse a same-commit annotated local tag. To select a
+  public remote named `upstream`, use `make release npm RELEASE_REMOTE=upstream`.
 
 The `crates-io`, `pypi-sdk`, and `npm` environments and registry Trusted Publishers/API-token
 permissions must already be configured. Read-only local checks cannot prove external registry
@@ -130,7 +159,7 @@ trigger. Manual dispatch requires the workflow to exist on the default branch as
 
 Confirm all expected platform archives, Linux packages, `kingfisher-rule-bundle.tgz`, and
 `multiple.intoto.jsonl` are attached. Verify an artifact using the end-user instructions with
-the new version, and check the Docker, PyPI, and crates.io publishing jobs separately.
+the new version, and check the Docker, PyPI, npm handoff/child, and crates.io jobs separately.
 
 For both Linux architectures, inspect the package headers, not just filenames: RPM `Name`
 and DEB `Package` must be `kingfisher`. Corrected RPMs must include
@@ -144,14 +173,38 @@ If a job fails, inspect its logs and rerun the failed jobs from the original Act
 appropriate. Keep the original tag and commit. A code fix needs a new release version.
 An upload failure leaves a draft that the next attempt can update. Published releases are
 skipped by the upload step so reruns do not replace their assets; rerun failed downstream
-jobs to recover package publication. To restart an unpublished release on an existing tag:
+jobs to recover package publication, following the npm handoff rules below. To restart an
+unpublished release on an existing tag:
 
 ```bash
 gh workflow run release.yml --repo mongodb/kingfisher --ref vX.Y.Z
 ```
 
-Normal release dispatch on `main` must fail. A free-form tag input or checking out a tag
-inside a run on `main` does not provide the tag-based signing identity consumers verify.
+Main dispatch without `publish=true` is build/test-only. Guarded main publication releases
+pending crates/Python SDKs, plus npm only when its existing tag matches the same SHA, not
+CLI assets. A free-form tag input or checking out a tag inside a main run does not provide
+the CLI tag-based signing identity consumers verify.
+
+### npm handoff recovery
+
+After **Release build gate** and **Authorize the complete release cohort** succeed, the
+coordinator's npm dispatcher uses `contents: read` / `actions: write` and
+[`scripts/dispatch-node-sdk.py`](../scripts/dispatch-node-sdk.py) to dispatch the original
+Node SDK workflow at the existing npm tag and wait for the exact returned run ID. The
+child validates the producer workflow/repository/SHA/`run_attempt`, both successful gates,
+the intended running/successful dispatcher, the exact immutable staging artifact ID and
+metadata, and the same-SHA npm tag/manifest/fresh upstream ancestry. These checks run both
+before entering `npm` and again after protected approval, before downloading the tested
+archives by validated artifact ID; there is no rebuild or repack.
+
+Rerun a failed npm child only while its authorizing parent run and npm dispatcher remain
+active or successful. A failed, cancelled, or timed-out parent rejects stale children.
+Otherwise rerun the **original coordinator's failed npm handoff job**: it can dispatch a
+new Node child with the same producer artifacts and current attempt authorization. Gates
+not rerun retain their most recent successful result; newer failed/skipped/pending gates
+cannot fall back to an older success, and the dispatcher must belong to the current attempt.
+Do not create/move tags, dispatch an independent manual publish, or rebuild an existing version.
+See the [npm recovery details](../docs/PUBLISHING.md#npm-handoff-recovery).
 
 ### Registry-only metadata recovery
 
@@ -187,10 +240,11 @@ all six platform test jobs, and every other test job present in that run. An ove
 run is acceptable when downstream package publication failed. Missing releases or prerequisite
 jobs, lookup failures, and mismatched commits fail closed.
 
-Normal tests, platform builds, public release uploads, Docker, and PyPI are skipped. The
-crates job runs the library tests, verifies the rule bundle and all four extracted packages,
-rechecks recovery eligibility, then runs the unchanged full publication planner **before
-registry authentication**. It uses the same `crates-io` environment, OIDC workflow identity,
+Recovery reruns all current platform tests/builds, SDK matrices, CLI wheel builds, library
+tests, rule-bundle checks and all four extracted packages through the same shared build gate.
+Public release uploads and Docker/PyPI/npm publication remain skipped. The crates publisher
+rechecks recovery eligibility and the unchanged full publication plan **before registry
+authentication**. It uses the same `crates-io` environment, OIDC workflow identity,
 and publication concurrency lock. Matching already-published packages remain immutable and
 are skipped; conflicting contents still stop publication. No GitHub assets or attestations
 are created or replaced, and the original run can remain red after a successful recovery.

@@ -906,7 +906,7 @@ For selective control, `--max-file-size 0`, `--extraction-depth 0`,
 `--git-repo-timeout 0`, and `--validation-timeout 0` disable their respective limits.
 Validation timeouts and archive depth also accept positive values above the former
 60-second and 25-layer maxima. `KF_GIT_CLONE_TIMEOUT_SECS=0` and
-`KF_GIT_UPDATE_TIMEOUT_SECS=0` disable the corresponding Git subprocess deadline.
+`KF_GIT_UPDATE_TIMEOUT_SECS=0` disable the corresponding native Git operation deadline.
 Negative, NaN, and infinite file sizes are rejected.
 
 To enable the preset in an explicitly loaded configuration file:
@@ -919,17 +919,37 @@ scan:
 
 ## Notable Scan Options
 
-Git clone/update commands ignore global and system Git configuration and enable
-`core.longpaths=true` on Windows. Set `KF_GIT_BINARY` to select a Git executable;
-the same executable is used for local staged scans. Provider credentials must be
-supplied through Kingfisher's authentication options rather than inherited Git
-credential helpers.
+Repository cloning, updates, history, and staged scans do not require a Git
+executable. HTTP(S) transport and local repository operations use native Rust;
+SSH transport uses managed OpenSSH processes. `KF_GIT_BINARY` and
+`KF_GIT_SSL_BACKEND` are ignored. Clone/update operations do not inherit
+global/system Git configuration or invoke Git credential helpers, process filters,
+or external Git transport helpers. Supply HTTPS provider credentials through
+Kingfisher's authentication options; they are sent only to trusted HTTPS
+authorities, never plaintext HTTP or an untrusted clone target.
 
-For HTTPS repositories using certificates in the Windows Certificate Store, set
-`KF_GIT_SSL_BACKEND=schannel` when using Git for Windows. Other installations can
-select `openssl` if their Git supports it. With OpenSSL, `GIT_SSL_CAINFO` and
-`GIT_SSL_CAPATH` can specify a CA file or directory. Selecting a TLS backend does
-not disable certificate verification.
+SSH targets support both `ssh://git@host/path/repo.git` and
+`git@host:path/repo.git`. They require an OpenSSH `ssh` executable on `PATH` (on Windows,
+the `usr\bin\ssh.exe` bundled with Git for Windows is used when none is on
+`PATH`), an already-configured private key or SSH agent, and trusted
+`known_hosts` entries. `GIT_SSH_COMMAND` or `GIT_SSH` selects a different client.
+SSH runs with `BatchMode=yes`: interactive password/passphrase prompts and host-key
+enrollment are not supported. SSH's diagnostics are captured, and the last line (for
+example, `Permission denied (publickey)`) is included in the reported clone error. Normal OpenSSH host-key verification remains enabled;
+Kingfisher does not change keys or known-host configuration. Provider tokens such
+as `KF_GITHUB_TOKEN` authenticate HTTPS only; they are not SSH keys.
+
+Native HTTPS uses Rustls with platform certificate trust, including the Windows
+Certificate Store. Private CA PEM files can be supplied through `GIT_SSL_CAINFO`
+(preferred over `http.sslCAInfo` and `SSL_CERT_FILE`); `GIT_SSL_CAPATH` and
+`SSL_CERT_DIR` support PEM certificate directories. As with OpenSSL-backed Git, the
+explicit Git settings (`GIT_SSL_CAINFO`, `http.sslCAInfo`, `GIT_SSL_CAPATH`) replace the
+platform trust store, while `SSL_CERT_FILE`/`SSL_CERT_DIR` certificates are added to it.
+Git CA settings that are unreadable or contain no PEM certificates (for example, a DER
+`.cer` file) fail the fetch; unreadable `SSL_CERT_FILE`/`SSL_CERT_DIR` entries are skipped. Standard `HTTP_PROXY`,
+`HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` environment settings are honored.
+Certificate verification remains enabled by default; adding a private CA does not
+disable hostname or chain validation.
 
 - `--jobs <N>`: Set the number of parallel scanner workers; see [Control Scan Concurrency](#control-scan-concurrency).
 - `--disk-offload`: Store accumulated repository findings in a private temporary file; see [Disk Offload](#disk-offload).
@@ -1069,7 +1089,7 @@ See [FINGERPRINT.md](FINGERPRINT.md) for complete details.
 
 Kingfisher automatically queries GitHub for a newer release when it starts and tells you whether an update is available. The check is informational only — the binary is not modified unless you explicitly opt in.
 
-- **Update and exit** – Run `kingfisher self-update` (alias `kingfisher update`) to download the latest release, replace the running binary in place, and exit. No scanning occurs.
+- **Update and exit** – Run `kingfisher self-update` (alias `kingfisher update`) to download the latest release, replace the running binary in place, and exit. No scanning occurs. The command exits with status 1 if the release check fails or a newer release could not be installed, so scripts can detect a failed update.
 
 - **Update then run with the new version** – Pass the global `--self-update` flag (alias `--update`) on any scan or other command. If a newer release exists, Kingfisher downloads it, replaces the on-disk binary, and **re-execs into the freshly installed binary** so the current invocation completes with the new code (including the latest detection rules). On Unix this is a true `exec()` (same PID); on Windows the new binary is spawned and the parent exits with its status code. If no update is available, the command runs normally with no extra steps.
 

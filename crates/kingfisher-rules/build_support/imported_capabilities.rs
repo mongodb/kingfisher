@@ -8,21 +8,21 @@ use serde::{Deserialize, Serialize};
 struct ImportedCapabilities {
     version: u32,
     #[serde(default, deserialize_with = "unique_rules")]
-    betterleaks: BTreeMap<String, serde_yaml::Value>,
+    betterleaks: BTreeMap<String, yaml_serde::Value>,
     #[serde(default, deserialize_with = "unique_rules")]
-    veles: BTreeMap<String, serde_yaml::Value>,
+    veles: BTreeMap<String, yaml_serde::Value>,
 }
 
 fn unique_rules<'de, D>(
     deserializer: D,
-) -> std::result::Result<BTreeMap<String, serde_yaml::Value>, D::Error>
+) -> std::result::Result<BTreeMap<String, yaml_serde::Value>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     struct UniqueRules;
 
     impl<'de> serde::de::Visitor<'de> for UniqueRules {
-        type Value = BTreeMap<String, serde_yaml::Value>;
+        type Value = BTreeMap<String, yaml_serde::Value>;
 
         fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             formatter.write_str("a mapping of unique rule capability IDs")
@@ -33,7 +33,7 @@ where
             M: serde::de::MapAccess<'de>,
         {
             let mut rules = BTreeMap::new();
-            while let Some((id, capabilities)) = map.next_entry::<String, serde_yaml::Value>()? {
+            while let Some((id, capabilities)) = map.next_entry::<String, yaml_serde::Value>()? {
                 if rules.insert(id.clone(), capabilities).is_some() {
                     return Err(serde::de::Error::custom(format!(
                         "duplicate rule capability ID {id:?}"
@@ -50,22 +50,22 @@ where
 #[derive(Serialize)]
 struct SourceCapabilities {
     version: u32,
-    rules: BTreeMap<String, serde_yaml::Value>,
+    rules: BTreeMap<String, yaml_serde::Value>,
 }
 
 pub fn split_config(contents: &str) -> Result<(String, String)> {
     let config: ImportedCapabilities =
-        serde_yaml::from_str(contents).context("invalid imported-rule capability overlay")?;
+        yaml_serde::from_str(contents).context("invalid imported-rule capability overlay")?;
     if config.version != 1 {
         bail!("unsupported imported-rule capability overlay version {}", config.version);
     }
 
     Ok((
-        serde_yaml::to_string(&SourceCapabilities {
+        yaml_serde::to_string(&SourceCapabilities {
             version: config.version,
             rules: config.betterleaks,
         })?,
-        serde_yaml::to_string(&SourceCapabilities {
+        yaml_serde::to_string(&SourceCapabilities {
             version: config.version,
             rules: config.veles,
         })?,
@@ -112,7 +112,7 @@ veles:
     fn preserves_filters_and_revocation_for_combined_entries() {
         let (betterleaks, _) =
             split_config(include_str!("../data/imported-rules-capabilities.yml")).unwrap();
-        let value: serde_yaml::Value = serde_yaml::from_str(&betterleaks).unwrap();
+        let value: yaml_serde::Value = yaml_serde::from_str(&betterleaks).unwrap();
         for id in ["heroku-api-key-v2", "slack-app-token"] {
             assert!(value["rules"][id]["filter_override"].is_string(), "{id}");
             assert!(value["rules"][id]["revocation"].is_mapping(), "{id}");

@@ -72,7 +72,7 @@ impl Rules {
     ) -> Result<Self> {
         let mut rules = Self::new();
         for (path, contents) in iterable {
-            match serde_yaml::from_slice::<RawRules>(contents) {
+            match yaml_serde::from_slice::<RawRules>(contents) {
                 Ok(rs) => {
                     rules.update(Self {
                         rules: BTreeMap::new(),
@@ -330,7 +330,7 @@ pub fn load_yaml_file<T: DeserializeOwned, P: AsRef<Path>>(path: P) -> Result<T>
     let file = File::open(path)
         .with_context(|| format!("Failed to open YAML file: {}", path.display()))?;
     let reader = BufReader::new(file);
-    let data = serde_yaml::from_reader(reader)
+    let data = yaml_serde::from_reader(reader)
         .with_context(|| format!("Failed to parse YAML from file: {}", path.display()))?;
     Ok(data)
 }

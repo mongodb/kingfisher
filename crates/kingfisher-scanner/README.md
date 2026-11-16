@@ -5,7 +5,7 @@ follows semantic versioning; breaking changes require a new major version.
 
 ```toml
 [dependencies]
-kingfisher-scanner = "3.0.3"
+kingfisher-scanner = "4.0.0"
 anyhow = "1"
 ```
 
@@ -55,6 +55,21 @@ The selected environment stays in the private credential snapshot. See the
 custom filters can use `Scanner::scan_blob_with_attributes` with caller-supplied
 `path`, `git.sha`, or other metadata. See the [library guide](../../docs/LIBRARY.md)
 and [rule format guide](../../docs/RULES.md).
+
+## Migrating to 4.0
+
+Use core `2.0.0`, rules `3.2.1`, and scanner `4.0.0` together when depending on
+these crates directly. Scanner 4.x re-exports core 2.x types; core 1.x buffers and
+identifiers are distinct Rust types. The `git` feature's public object IDs now
+come from `gix` 0.90; align direct `gix` dependencies to that version.
+With `validation`, `ValidateOptions::fallback_decoding_key` now uses
+`jsonwebtoken` 12's `DecodingKey`. Align direct dependencies and handle the
+fallible HMAC key constructors; empty HMAC keys are rejected.
+
+This is a Rust dependency-type migration, not a rule-file or runtime API migration.
+Existing Kingfisher YAML and Betterleaks TOML need no edits; scanner behavior and
+Python/npm runtime APIs remain compatible. See the
+[dependency migration guide](../../docs/LIBRARY.md#dependency-modernization-migration).
 
 ## Migrating to 3.0
 
@@ -202,7 +217,7 @@ scratch allocation or reentrant borrowing errors; prefer `try_with`.
 Validation is disabled by default. Enable all supported validators and revocation:
 
 ```toml
-kingfisher-scanner = { version = "3.0.3", features = ["validation"] }
+kingfisher-scanner = { version = "4.0.0", features = ["validation"] }
 ```
 
 `validation` enables every supported family and its dependencies. Legacy

@@ -94,7 +94,7 @@ use kingfisher::{
     gitea, github, huggingface,
     reporter::{DetailsReporter, ScanAuditContext, styles::Styles},
     scanner::{load_and_record_rules, run_scan},
-    update::{check_for_update_async, rewrite_argv_for_reexec},
+    update::{UpdateCheckStatus, check_for_update_async, rewrite_argv_for_reexec},
     util::tokio_blocking_threads_limit,
     validation::set_user_agent_suffix,
 };
@@ -148,25 +148,6 @@ fn main() -> anyhow::Result<std::process::ExitCode> {
         .context("Failed to spawn argument parser thread")?;
     let (args, matches) = parser.join().unwrap_or_else(|e| std::panic::resume_unwind(e));
 
-    // GPUI must run on the OS main thread. Keep the raw matches when handing other
-    // commands to the larger-stack worker so config precedence still distinguishes
-    // explicit flags from clap defaults.
-    if let Command::Wizard(wizard) = &args.command {
-        #[cfg(feature = "gui")]
-        return kingfisher::wizard::run(
-            wizard.target.clone(),
-            wizard.report.clone(),
-            kingfisher::wizard::global_values(&matches),
-        )
-        .map(|()| std::process::ExitCode::SUCCESS);
-        #[cfg(not(feature = "gui"))]
-        {
-            let _ = wizard;
-            anyhow::bail!(
-                "This build does not include the native wizard. Build with `cargo build --release --features gui --bin kingfisher`, then run `kingfisher wizard` (alias: `kingfisher gui`)."
-            );
-        }
-    }
     // Run the real entry point on a thread with an explicit, larger stack so that
     // deeply-nested async state machines (validation pipeline) cannot overflow the
     // default main-thread stack.
@@ -238,7 +219,7 @@ fn run(args: CommandLineArgs, matches: clap::ArgMatches) -> anyhow::Result<std::
         Command::Validate(_) => 1, // Single validation request
         Command::Revoke(_) => 1,   // Single revocation request
         Command::BlastRadius(_) => 1,
-        Command::View(_) | Command::Wizard(_) => 1,
+        Command::View(_) => 1,
         Command::Config(_) => 1,
     };
 
@@ -652,8 +633,12 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
             let mut g = global_args;
             g.self_update = true;
             g.no_update_check = false;
-            let _ = check_for_update_async(&g, None).await;
-            Ok(AsyncMainOutcome::Done)
+            let status = check_for_update_async(&g, None).await;
+            // The updater already printed why it failed; report it through the exit code
+            // so scripts do not mistake a failed check or a skipped replacement for success.
+            let failed = status.check_status == UpdateCheckStatus::Failed
+                || (status.is_outdated && !status.was_self_updated);
+            Ok(if failed { AsyncMainOutcome::Exit(1) } else { AsyncMainOutcome::Done })
         }
         Command::View(view_args) => view::run(view_args).await.map(|_| AsyncMainOutcome::Done),
         Command::BlastRadius(blast_radius_args) => {
@@ -1058,8 +1043,8 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
                         run_rules_list(list_args)?;
                     }
                 },
-                Command::View(_) | Command::Wizard(_) => {
-                    anyhow::bail!("View and wizard commands should not reach this branch")
+                Command::View(_) => {
+                    anyhow::bail!("View command should not reach this branch")
                 }
                 Command::BlastRadius(_) => {
                     anyhow::bail!("BlastRadius command should not reach this branch")

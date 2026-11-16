@@ -1896,8 +1896,6 @@ mod test_vectorscan {
         time::{Duration, SystemTime},
     };
 
-    use pretty_assertions::assert_eq;
-
     use super::*;
     use crate::{Confidence, rules::Rules};
 

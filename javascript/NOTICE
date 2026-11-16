@@ -12,6 +12,14 @@ https://www.mongodb.com
 
 Source repository: https://github.com/mongodb/kingfisher
 
+--------------------------------------------------------------------
+tokei language-detection data
+--------------------------------------------------------------------
+The extension-to-language-name catalog in kingfisher-core is derived from
+Tokei 14.0.0, Copyright (c) 2016 Erin Power, under the MIT license.
+https://github.com/XAMPPRocky/tokei/tree/v14.0.0
+The complete license is preserved in crates/kingfisher-core/data/tokei-LICENSE-MIT.
+
 
 --------------------------------------------------------------------
 Nosey Parker

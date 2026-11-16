@@ -66,7 +66,7 @@ impl EndpointVars {
     fn from_config_path(path: &Path) -> Result<Self> {
         let raw = fs::read_to_string(path)
             .with_context(|| format!("Failed to read endpoint config from {}", path.display()))?;
-        let parsed: EndpointConfigFile = serde_yaml::from_str(&raw)
+        let parsed: EndpointConfigFile = yaml_serde::from_str(&raw)
             .with_context(|| format!("Failed to parse endpoint config {}", path.display()))?;
 
         let mut merged = parsed.endpoints;

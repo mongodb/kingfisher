@@ -7,6 +7,69 @@ description: "Kingfisher release history: new features, rules, bug fixes, and im
 
 All notable changes to this project will be documented in this file.
 
+## [v2.19.0]
+
+### Changed
+
+- Reduce Rust and Node dependency graphs with focused replacements and remove unused features.
+- Replace deprecated `serde_yaml` with maintained `yaml_serde`; update retained dependencies
+  and native SDK bindings while preserving existing YAML/TOML rules.
+- Remove the optional native wizard (`wizard`/`gui`) and its GUI dependencies;
+  use `kingfisher view` for visual report triage.
+- Reuse Bollard for database test fixtures, preserving login helpers, TLS, and cleanup.
+- Clone and update repositories natively with gitoxide; scans no longer need a Git executable.
+  HTTPS uses Rustls with OS certificate trust. SSH uses the system `ssh`, falling back to
+  Git for Windows' bundled `ssh.exe`. `KF_GIT_BINARY` and `KF_GIT_SSL_BACKEND` are ignored.
+- Modernize Git, SQLite, and RSA dependencies; share AWS-LC for JWT while retaining
+  verification-only support for legacy weak keys.
+- Preserve the CLI 2.x TOON wire format, including safe dotted-key folding and array layouts.
+- Keep CLI/application version 2.19.0; prepare core 2.0.0, rules 3.2.1, and scanner 4.0.0.
+  Remaining CLI commands and Python/Node APIs are unchanged; Rust Git/Jira APIs require
+  [migration](reference/library.md#dependency-modernization-migration).
+
+### Fixed
+
+- Always check for updates and download release assets anonymously, ignoring GitHub tokens.
+- Keep OpenAI inventory working after endpoint denials; handle non-JSON errors and bound responses
+  and service inventory page sizes without losing truncation notices or file-access severity.
+- Bound ASAR index parsing and expanded paths, sized for large Electron apps, and charge
+  extracted bytes against the archive size so overlapping member offsets cannot amplify memory
+  while well-formed archives are never truncated.
+- Skip expected Git discovery failures without hiding configuration or corruption errors.
+- Fix Linux Python SDK curl configuration quoting and current-thread Docker fixture cleanup;
+  honor all nonempty `DOCKER_TLS_VERIFY` values.
+- Guard Node loader exports and package versions against drift; prune stale license overrides.
+- Prevent CSS parser loops on misplaced or invalid `!important` markers.
+- Keep checkouts whose paths differ only by case on case-insensitive filesystems, as `git clone`
+  does, instead of discarding the clone; skip stale `SSL_CERT_FILE`/`SSL_CERT_DIR` locations
+  while explicit Git CA settings still fail closed.
+- Parse ASAR indexes into a typed tree so skipped metadata is never materialized, and keep
+  rejecting overlapping ASAR member offsets under `--no-limits`.
+- Emit 1-based SARIF region columns with an exclusive end column, as SARIF 2.1.0 requires.
+- Require GitHub's published SHA-256 digest before self-updating, and verify it when building
+  the release Docker image.
+- Report truncated OpenAI project and per-project inventories; parse Jira changelog entries
+  without an author and fetch every changelog page.
+- Retry truncated and TLS-interrupted Vectorscan prebuilt downloads in CI, including bodies that
+  end early without a read error.
+- Report multi-line findings with their real SARIF end line, and convert SARIF columns to UTF-16
+  code units for findings read directly from local files; keep tool rule order deterministic.
+- Exit `kingfisher self-update` with status 1 when the release check or installation fails, and
+  include the underlying cause in other replacement errors.
+- Pass the SSH remote command as one argument, as Git does, so Git for Windows' `ssh.exe` keeps
+  repository path quoting; accept `ssh.variant=auto`; report SSH's last stderr line in clone errors.
+- Fail explicit Git CA settings that contain no PEM certificates, make them replace (not extend)
+  platform trust as OpenSSL-backed Git does, and skip unreadable optional `SSL_CERT_DIR` entries.
+- Skip GitHub App token setup for `ssh://` GitHub URLs, which cannot use tokens.
+- Write local (`insteadOf` filesystem) fetches as one pack instead of loose objects.
+- Reject any overlapping ASAR member offsets in strict extraction, charge best-effort extraction
+  against the member payload rather than the whole archive, never copy part of a member, and
+  ignore non-object index values as earlier releases did.
+- Keep OpenAI inventories when the API returns new file purposes, job statuses, or roles; record a
+  failed per-project inventory without skipping the project's remaining inventories; never apply
+  the operator's `OPENAI_BASE_URL`, `OPENAI_ORG_ID`, or `OPENAI_PROJECT_ID` to scanned keys.
+- Fail Jira changelog export on an empty page before the last page instead of truncating it.
+
 ## [v2.18.1]
 
 ### Fixed

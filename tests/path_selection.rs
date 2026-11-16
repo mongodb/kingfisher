@@ -1,7 +1,9 @@
+#[path = "../src/git_test_fixture.rs"]
+mod fixture;
+
 use std::{fs, path::Path};
 
 use anyhow::Result;
-use git2::{Repository, Signature};
 
 const KEPT: &str = "acme_A1b2C3d4E5f6G7h8";
 const SKIPPED: &str = "acme_J1k2L3m4N5o6P7q8";
@@ -137,28 +139,29 @@ fn repository_selection_filters_shared_blob_appearances_for_azure_and_other_git_
 -> Result<()> {
     let root = tempfile::tempdir()?;
     let source = root.path().join("repository.git");
-    let repo = Repository::init_bare(&source)?;
-    repo.remote("origin", "https://dev.azure.com/example/project/_git/repository")?;
-    let kept = repo.blob(KEPT.as_bytes())?;
-    let skipped = repo.blob(SKIPPED.as_bytes())?;
+    let repo = gix::init_bare(&source)?;
+    fixture::origin(&repo, "https://dev.azure.com/example/project/_git/repository")?;
+    let kept = repo.write_blob(KEPT.as_bytes()).map(gix::Id::detach)?;
+    let skipped = repo.write_blob(SKIPPED.as_bytes()).map(gix::Id::detach)?;
     let generated = {
-        let mut tree = repo.treebuilder(None)?;
-        tree.insert("key.env", skipped, 0o100644)?;
-        tree.write()?
+        let mut tree = repo.empty_tree().edit()?;
+        fixture::insert(&mut tree, "key.env", skipped, 0o100644)?;
+        tree.write()?.detach()
     };
     let configs = {
-        let mut tree = repo.treebuilder(None)?;
-        tree.insert("key!literal.env", kept, 0o100644)?;
-        tree.insert("settings.yaml", skipped, 0o100644)?;
-        tree.insert("generated", generated, 0o040000)?;
-        tree.write()?
+        let mut tree = repo.empty_tree().edit()?;
+        fixture::insert(&mut tree, "key!literal.env", kept, 0o100644)?;
+        fixture::insert(&mut tree, "settings.yaml", skipped, 0o100644)?;
+        fixture::insert(&mut tree, "generated", generated, 0o040000)?;
+        tree.write()?.detach()
     };
-    let mut tree = repo.treebuilder(None)?;
-    tree.insert("configs", configs, 0o040000)?;
-    tree.insert("outside.env", kept, 0o100644)?;
-    let tree = repo.find_tree(tree.write()?)?;
-    let signature = Signature::now("Scanner test", "scanner@example.com")?;
-    let commit = repo.commit(Some("HEAD"), &signature, &signature, "fixture", &tree, &[])?;
+    let mut tree = repo.empty_tree().edit()?;
+    fixture::insert(&mut tree, "configs", configs, 0o040000)?;
+    fixture::insert(&mut tree, "outside.env", kept, 0o100644)?;
+    let tree = tree.write()?.detach();
+    let signature = fixture::signature("Scanner test", "scanner@example.com");
+    let commit =
+        fixture::commit(&repo, Some("HEAD"), &signature, &signature, "fixture", &tree, &[])?;
     let findings = scan(&source, &rules(root.path())?, true)?;
     let finding = &findings[0]["finding"];
     assert_eq!(finding["path"], "configs/key!literal.env");

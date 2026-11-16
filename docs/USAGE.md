@@ -79,6 +79,19 @@ kingfisher scan /projects/mono‑repo‑dir
 kingfisher scan ~/src/myrepo --no-validate
 ```
 
+### Scan a remote repository over HTTPS or SSH
+
+```bash
+kingfisher scan https://github.com/org/repo.git --format toon
+kingfisher scan ssh://git@github.com/org/repo.git --format toon
+kingfisher scan git@github.com:org/repo.git --format toon
+```
+
+HTTPS cloning is native and needs no Git installation. SSH uses OpenSSH's `ssh`
+executable with existing keys or an agent and trusted `known_hosts` entries;
+interactive authentication is not supported. HTTPS provider tokens do not replace
+SSH keys. Neither transport requires a local Git executable.
+
 ### Display only secrets confirmed active by third-party APIs
 
 ```bash
@@ -1388,13 +1401,14 @@ kingfisher revoke --rules-path ./custom-rules.yml --rule custom.github.pat \
 > flags because some deployments front-load auth (an SSO portal for repo
 > access vs. a direct API endpoint for token validation).
 
-> **Token scoping.** `KF_GITHUB_TOKEN` and freshly minted GitHub App
-> installation tokens are installed as a host-scoped, HTTPS-only git
-> credential helper, so they are sent only to `github.com` and
-> to the GHE host(s) you name in `--github-api-url` / `--endpoint github=…`.
+> **Token scoping.** The native Git transport sends `KF_GITHUB_TOKEN` and
+> freshly minted GitHub App installation tokens only to trusted HTTPS
+> authorities: `github.com` and the GHE host(s) you name in
+> `--github-api-url` / `--endpoint github=…`. No Git credential helper is invoked.
 > An untrusted clone target — or a plaintext `http://` remote — never
 > receives a token. The same scoping applies to the GitLab, Gitea, Azure,
 > and Hugging Face clone tokens and their corresponding API-URL flags.
+> These tokens authenticate HTTPS, not SSH; SSH targets use OpenSSH keys or an agent.
 
 ---
 
@@ -1676,7 +1690,7 @@ kingfisher scan gitea --organization my-org \
 
 ### Scan remote Gitea repository by URL
 
-A Git URL target clones the repository and scans its history. Adding `--repo-artifacts` also clones the repository wiki if one exists. Private repositories and wikis require `KF_GITEA_TOKEN` (and `KF_GITEA_USERNAME` when cloning via HTTPS).
+A Git URL target clones the repository and scans its history. Adding `--repo-artifacts` also clones the repository wiki if one exists. Private HTTPS clones require `KF_GITEA_TOKEN` and `KF_GITEA_USERNAME`; SSH clones use OpenSSH keys or an agent. Access to private artifact APIs still requires `KF_GITEA_TOKEN`.
 
 ```bash
 # Scan the repository only
@@ -2028,6 +2042,10 @@ kingfisher scan teams "secret OR password"
 ---
 
 ## TLS Certificate Validation
+
+Repository HTTPS cloning and updates use native Rustls with platform certificate
+trust, independently of the validation-only `--tls-mode` flag. For private CA and
+proxy settings, see [native Git transport options](ADVANCED.md#notable-scan-options).
 
 Kingfisher validates TLS certificates when connecting to endpoints during secret validation (database connections, API calls, JWKS fetching, etc.). The `--tls-mode` flag controls this behavior:
 

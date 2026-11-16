@@ -1,5 +1,6 @@
 """Exercise API downloads and workflow wiring without network or native builds."""
 import hashlib
+import http.client
 import importlib.util
 import io
 import json
@@ -7,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import ssl
 import subprocess
 import tempfile
 import unittest
@@ -126,18 +128,43 @@ class FetchVectorscanTests(unittest.TestCase):
                         self.assertEqual(opener.open.call_count, calls)
 
     def test_interrupted_download_is_restarted_before_atomic_promotion(self):
-        class Interrupted(io.BytesIO):
-            def read(self, size=-1):
-                if self.tell():
-                    raise ConnectionError("fixture connection reset")
-                return super().read(8)
+        failures = (
+            ConnectionError("fixture connection reset"),
+            http.client.IncompleteRead(b"partial", 8),
+            ssl.SSLError("fixture TLS reset"),
+        )
+        for failure in failures:
+            class Interrupted(io.BytesIO):
+                def read(self, size=-1):
+                    if self.tell():
+                        raise failure
+                    return super().read(8)
 
+            with self.subTest(failure=type(failure).__name__):
+                opener = Mock()
+                opener.open.side_effect = [response(metadata()), Interrupted(DATA), response(DATA)]
+                with tempfile.TemporaryDirectory() as directory, patch.object(FETCH.time, "sleep"):
+                    archive = FETCH.fetch(VERSION, NAME, SHA256, Path(directory), opener)
+                    self.assertEqual(archive.read_bytes(), DATA)
+                    self.assertEqual(list(Path(directory).resolve().iterdir()), [archive])
+
+    def test_short_body_without_an_exception_is_retried(self):
+        # CPython's HTTPResponse.read(amt) returns b"" when a Content-Length body ends
+        # early; it does not raise IncompleteRead. That must still be retried.
         opener = Mock()
-        opener.open.side_effect = [response(metadata()), Interrupted(DATA), response(DATA)]
+        opener.open.side_effect = [response(metadata()), response(DATA[:-3]), response(DATA)]
         with tempfile.TemporaryDirectory() as directory, patch.object(FETCH.time, "sleep"):
             archive = FETCH.fetch(VERSION, NAME, SHA256, Path(directory), opener)
             self.assertEqual(archive.read_bytes(), DATA)
-            self.assertEqual(list(Path(directory).resolve().iterdir()), [archive])
+        self.assertEqual(opener.open.call_count, 3)
+
+    def test_repeated_short_bodies_fail_after_the_retry_limit(self):
+        opener = Mock()
+        opener.open.side_effect = [response(metadata())] + [response(DATA[:-3]) for _ in range(3)]
+        with tempfile.TemporaryDirectory() as directory, patch.object(FETCH.time, "sleep"):
+            with self.assertRaises(http.client.IncompleteRead):
+                FETCH.fetch(VERSION, NAME, SHA256, Path(directory), opener)
+            self.assertEqual(list(Path(directory).iterdir()), [])
 
     def test_environment_export_occurs_only_after_verified_fetch(self):
         with tempfile.TemporaryDirectory(prefix="vectorscan env ") as directory:
@@ -233,7 +260,7 @@ class VectorscanWorkflowTests(unittest.TestCase):
         self.assertIn("x86_64-pc-windows-gnu", windows)
         self.assertIn("aarch64-pc-windows-gnullvm", windows)
 
-    def test_sdk_and_optional_wizard_builds_use_the_same_prefetch(self):
+    def test_sdk_builds_use_the_same_prefetch(self):
         node = (ROOT / ".github/workflows/node-sdk.yml").read_text(encoding="utf-8")
         build = job(node, "build")
         self.assertLess(build.index(ACTION), build.index("cargo clippy --locked"))
@@ -249,8 +276,6 @@ class VectorscanWorkflowTests(unittest.TestCase):
         self.assertIn("if: runner.os != 'Linux'", prefetch)
         self.assertIn("target: ${{ matrix.target }}", prefetch)
         self.assertIn("-e VECTORSCAN_BUILD_FROM_SOURCE=1", wheels)
-        wizard = (ROOT / ".github/workflows/wizard.yml").read_text(encoding="utf-8")
-        self.assertLess(wizard.index(ACTION), wizard.index("cargo test --locked"))
 
     def test_release_prefetch_uses_musl_not_the_linux_host_triple(self):
         release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")

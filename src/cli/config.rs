@@ -409,7 +409,7 @@ impl From<ReportOutputFormat> for ConfigReportFormat {
 /// surface at the `--config` site rather than mid-scan.
 pub fn parse_str(yaml: &str) -> Result<KingfisherConfig> {
     let cfg: KingfisherConfig =
-        serde_yaml::from_str(yaml).context("failed to parse kingfisher.yaml")?;
+        yaml_serde::from_str(yaml).context("failed to parse kingfisher.yaml")?;
     validate(&cfg)?;
     Ok(cfg)
 }
@@ -638,7 +638,7 @@ git:
 
     #[test]
     fn empty_yaml_yields_default() {
-        // serde_yaml rejects an empty document, so feed it the canonical empty
+        // yaml_serde rejects an empty document, so feed it the canonical empty
         // mapping. This both pins the contract (top-level must be a mapping)
         // and exercises the "no fields set" path.
         let cfg = parse_str("{}").unwrap();

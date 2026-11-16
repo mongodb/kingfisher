@@ -344,16 +344,28 @@ pub fn open_git_repo_with_options(
         .config_overrides([pack_cache_override])
         .open_path_as_is(open_path_as_is);
     match open_opts(path, opts) {
-        Err(gix::open::Error::NotARepository { .. }) => Ok(None),
+        // gix 0.90 wraps discovery failures in an outer NotFound classification.
+        // A candidate's unreadable HEAD can carry PermissionDenied underneath;
+        // this still means discovery did not identify a repository (as before
+        // the upgrade). Do not apply that fallback to configuration/open errors
+        // or to explicit corruption, even when they contain a NotFound cause.
+        Err(err) if is_non_repository_discovery_error(&err) => Ok(None),
         Err(err) => Err(err.into()),
         Ok(repo) => Ok(Some(repo)),
     }
 }
 
+fn is_non_repository_discovery_error(error: &gix::Error) -> bool {
+    error.classify().next().is_some_and(|class| class.class() == gix::error::Class::NotFound)
+        && matches!(
+            error.dominant_class(),
+            Some(gix::error::Class::NotFound | gix::error::Class::PermissionDenied)
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use git2::Repository as Git2Repository;
     use tempfile::tempdir;
 
     #[test]
@@ -366,10 +378,61 @@ mod tests {
     }
 
     #[test]
+    fn open_git_repo_returns_none_for_non_repositories() -> Result<()> {
+        let temp = tempdir()?;
+
+        assert!(open_git_repo(temp.path())?.is_none());
+        assert!(open_git_repo(&temp.path().join("missing"))?.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn discovery_permission_errors_are_skipped_but_open_errors_are_not() {
+        use gix::error::{ErrorExt, message};
+        let denied =
+            || gix::Error::from_error(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+        // Reproduce gix's discovery wrapper without relying on filesystem modes
+        // (which are ineffective for root and behave differently on Windows).
+        let discovery = denied().and_raise(message("not a repository").not_found());
+        assert!(is_non_repository_discovery_error(&discovery));
+        assert!(!is_non_repository_discovery_error(&denied()));
+        let corruption = gix::Error::from(message("corrupt repository").corrupted())
+            .and_raise(message("not a repository").not_found());
+        assert!(!is_non_repository_discovery_error(&corruption));
+    }
+
+    #[test]
+    fn open_git_repo_skips_unreadable_head_candidates() -> Result<()> {
+        let temp = tempdir()?;
+        // A directory cannot be read as a loose HEAD reference on any platform.
+        // Unlike chmod-based fixtures this remains effective when run as root.
+        std::fs::create_dir(temp.path().join("HEAD"))?;
+        for as_is in [true, false] {
+            assert!(open_git_repo_with_options(temp.path(), as_is)?.is_none());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn open_git_repo_preserves_configuration_errors() -> Result<()> {
+        let temp = tempdir()?;
+        let repo = gix::init(temp.path())?;
+        let git_dir = repo.git_dir().to_path_buf();
+        drop(repo);
+        for config in ["[invalid\n", "[core]\n bare = false\n worktree =\n"] {
+            std::fs::write(git_dir.join("config"), config)?;
+            assert!(open_git_repo(&git_dir).is_err());
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn open_git_repo_accepts_worktree_root() -> Result<()> {
         let temp = tempdir()?;
         let repo_path = temp.path().join("repo");
-        Git2Repository::init(&repo_path)?;
+        gix::init(&repo_path)?;
 
         assert!(open_git_repo(&repo_path.join(".git"))?.is_some());
 

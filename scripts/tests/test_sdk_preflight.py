@@ -141,6 +141,10 @@ class PublicationSourceTests(unittest.TestCase):
                 return checkout
             if args == ("rev-parse", "refs/remotes/origin/main"):
                 return main
+            if args == ("show", f"{HEAD}:Cargo.toml"):
+                return '[package]\nname = "kingfisher-bin"\nversion = "2.14.0"\n'
+            if args == ("show", f"{HEAD}:javascript/package.json"):
+                return json.dumps({"name": "kingfisher-secret-scanner", "version": "1.0.2"})
             return ""
         with patch.object(preflight, "git", side_effect=git) as command:
             plan = preflight.publication_source(ROOT, env or environment(), event or manual_event(), VERSION)
@@ -186,6 +190,34 @@ class PublicationSourceTests(unittest.TestCase):
         self.assertTrue(any(call.args[1:3] == ("merge-base", "--is-ancestor") for call in commands))
         with self.assertRaisesRegex(ValueError, "tag must match"):
             self.source(environment("push", GITHUB_REF="refs/tags/python-v0.0.0"))
+
+    def test_cli_and_npm_sibling_tags_validate_their_own_committed_manifests(self):
+        for tag, path in (("v2.14.0", "Cargo.toml"), ("npm-v1.0.2", "javascript/package.json")):
+            with self.subTest(tag=tag):
+                result, calls = self.source(environment("push", GITHUB_REF=f"refs/tags/{tag}"), {"before": BASE})
+                self.assertEqual(result, (True, False))
+                self.assertIn((ROOT, "show", f"{HEAD}:{path}"), [call.args for call in calls])
+                self.assertTrue(any(call.args[1] == "merge-base" for call in calls))
+        for tag in ("v9.9.9", "npm-v9.9.9", "npm-v1.0.2-rc.1"):
+            with self.subTest(tag=tag), self.assertRaisesRegex(ValueError, "tag"):
+                self.source(environment("push", GITHUB_REF=f"refs/tags/{tag}"))
+
+    def test_default_manual_cli_tag_completion_is_authorized_but_sdk_tags_are_not(self):
+        env = environment(GITHUB_REF="refs/tags/v2.14.0")
+        result, calls = self.source(env, {"inputs": {"publish": "false"}}, main=BASE)
+        self.assertEqual(result, (True, False))
+        self.assertIn((ROOT, "show", f"{HEAD}:Cargo.toml"), [call.args for call in calls])
+        self.assertIn((ROOT, "merge-base", "--is-ancestor", HEAD, BASE), [call.args for call in calls])
+        for tag in (f"python-v{VERSION}", "npm-v1.0.2"):
+            with self.subTest(tag=tag):
+                result, calls = self.source(environment(GITHUB_REF=f"refs/tags/{tag}"), {"inputs": {}})
+                self.assertEqual(result, (False, False))
+                self.assertEqual(calls, [])
+
+    def test_crates_recovery_never_authorizes_sdk_publication(self):
+        result, calls = self.source(event=manual_event(crates_only="true"))
+        self.assertEqual(result, (False, False))
+        self.assertTrue(any(call.args[1] == "fetch" for call in calls))
 
     def test_default_manual_and_fork_push_never_authorize_publish(self):
         for env, event in ((environment(), manual_event(publish="false")),
@@ -250,11 +282,19 @@ class WorkflowPlanTests(unittest.TestCase):
     def test_early_workflow_dag_guards_both_expensive_jobs_and_manual_publish(self):
         workflow = (ROOT / ".github/workflows/python-sdk.yml").read_text(encoding="utf-8")
         triggers = workflow.split("permissions:", 1)[0]
-        self.assertIn("workflow_dispatch:\n    inputs:\n      publish:", triggers)
+        self.assertIn("workflow_call:\n    inputs:\n      phase:", triggers)
+        self.assertIn("default: build", triggers)
         self.assertIn("type: boolean\n        default: false", triggers)
         self.assertIn("expected_sha:", triggers)
-        self.assertIn("expected_version:", triggers)
+        dispatch = triggers.split("  workflow_dispatch:", 1)[1]
+        self.assertNotIn("inputs:", dispatch)
+        self.assertNotIn("expected_version:", triggers)
+        coordinator = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        dispatch = coordinator.split("  workflow_dispatch:\n", 1)[1].split("concurrency:", 1)[0]
+        for guard in ("publish:", "type: boolean\n        default: false", "expected_sha:", "expected_version:"):
+            self.assertIn(guard, dispatch)
         precheck = workflow.split("  preflight:\n", 1)[1].split("  wheels:\n", 1)[0]
+        self.assertIn("if: inputs.phase != 'publish'", precheck)
         self.assertIn("fetch-depth: 0", precheck)
         self.assertIn("ref: ${{ github.sha }}", precheck)
         self.assertIn("python3 scripts/check-sdk-release.py --github-event", precheck)
@@ -263,10 +303,12 @@ class WorkflowPlanTests(unittest.TestCase):
         for job in ("wheels", "source"):
             block = workflow.split(f"  {job}:\n", 1)[1].split("    steps:\n", 1)[0]
             self.assertIn("needs: preflight", block)
-            self.assertIn("if: needs.preflight.outputs.build == 'true'", block)
+            self.assertIn("if: needs.preflight.outputs.build == 'true' || inputs.phase == 'build'", block)
         plan = workflow.split("  plan-publish:\n", 1)[1].split("  publish:\n", 1)[0]
         self.assertIn("needs.preflight.outputs.publish == 'true'", plan)
-        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.publish", plan)
+        self.assertIn("github.repository == 'mongodb/kingfisher'", plan)
+        self.assertNotIn("id-token: write", plan)
+        self.assertNotIn("environment:", plan)
         self.assertIn("needs: [preflight, wheels, source, cache-portability]", plan)
         self.assertIn("scripts/plan-python-sdk-publish.py", plan)
 

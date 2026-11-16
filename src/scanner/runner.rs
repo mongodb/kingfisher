@@ -727,7 +727,7 @@ async fn run_sequential_scan(
     let scan_result: Result<()> = (|| {
         for root in repo_roots {
             // Only Git repositories have a git boundary to snapshot; ordinary
-            // directories and files skip the subprocess work entirely.
+            // directories and files skip repository inspection entirely.
             let snapshot = is_git_repository_root(root)
                 .then(|| crate::scan_audit::git_snapshot(root, args, false));
             let audit_key = scan_audit.lock().unwrap().scan_started_with_snapshot(root, snapshot);
@@ -1198,10 +1198,9 @@ async fn run_parallel_scan(
                         }
                         let _guard = ScanGuard { permit_release, scan_counter };
 
-                        // Gather the git snapshot before taking the audit
-                        // mutex: it runs blocking Git subprocesses, and
-                        // holding the lock here would serialize the startup
-                        // of every parallel scan worker behind them.
+                        // Gather the native Git snapshot before taking the audit
+                        // mutex: repository inspection can block on disk I/O, and
+                        // holding the lock here would serialize worker startup.
                         let snapshot = audit_snapshot_for_root(
                             &args,
                             &root,

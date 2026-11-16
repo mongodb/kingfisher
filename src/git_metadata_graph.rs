@@ -775,11 +775,12 @@ fn check_deadline(deadline: Option<Instant>, phase: &str, repo_path: &Path) -> R
 
 #[cfg(test)]
 mod tests {
+    use crate::git_test_fixture as fixture;
+
     use std::{fs, path::Path, sync::Arc};
 
     use anyhow::{Result, bail};
     use bstr::ByteSlice;
-    use git2::{Repository as Git2Repository, Signature};
     use gix::{open::Options, open_opts};
     use globset::GlobSetBuilder;
     use tempfile::tempdir;
@@ -826,8 +827,8 @@ mod tests {
         use gix::{object::Kind, odb::store::iter::Ordering, prelude::*};
 
         let temp = tempdir()?;
-        let repo = Git2Repository::init_bare(temp.path())?;
-        let mut pack = repo.packbuilder()?;
+        let repo = gix::init_bare(temp.path())?;
+        let mut packed_ids = Vec::new();
         // Cross a batch boundary, with skipped small blobs interspersed among
         // scannable blobs. Packing below also leaves loose copies of the IDs.
         for i in 0..4200 {
@@ -836,22 +837,23 @@ mod tests {
             } else {
                 format!("scannable blob contents number {i}")
             };
-            pack.insert_object(repo.blob(contents.as_bytes())?, None)?;
+            packed_ids.push(repo.write_blob(contents.as_bytes())?.detach());
         }
         for size in [19, 20, 21] {
-            pack.insert_object(repo.blob(&vec![b'x'; size])?, None)?;
+            packed_ids.push(repo.write_blob(vec![b'x'; size])?.detach());
         }
-        let tree_id = repo.treebuilder(None)?.write()?;
-        let tree = repo.find_tree(tree_id)?;
-        let signature = Signature::now("tester", "tester@example.com")?;
-        let commit = repo.commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[])?;
-        let tag = repo.tag("v1", &repo.find_object(commit, None)?, &signature, "tag", false)?;
-        pack.insert_commit(commit)?;
-        pack.insert_object(tag, None)?;
+        let tree_id = repo.empty_tree().edit()?.write()?.detach();
+        let tree = tree_id;
+        let signature = fixture::signature("tester", "tester@example.com");
+        let commit =
+            fixture::commit(&repo, Some("HEAD"), &signature, &signature, "initial", &tree, &[])?;
+        let tag = fixture::tag(&repo, "v1", commit, &signature, "tag")?;
+        packed_ids.extend([tree_id, commit]);
+        packed_ids.push(tag);
 
         for packed in [false, true] {
             if packed {
-                pack.write(&repo.path().join("objects").join("pack"), 0)?;
+                fixture::pack(&repo, &packed_ids)?;
             }
             let repo = open_opts(temp.path(), Options::isolated().open_path_as_is(true))?;
             let mut expected = std::array::from_fn::<_, 4, _>(|_| ObjectIdBimap::with_capacity(0));
@@ -936,24 +938,31 @@ mod tests {
     fn commit_identities_are_interned_across_commits() -> Result<()> {
         let temp = tempdir()?;
         let repo_path = temp.path().join("repo");
-        let repo = Git2Repository::init(&repo_path)?;
-        let signature = Signature::now("shared committer", "shared@example.com")?;
+        let repo = gix::init(&repo_path)?;
+        let signature = fixture::signature("shared committer", "shared@example.com");
 
         fs::write(repo_path.join("first.txt"), b"first secret-like value long enough")?;
-        let mut index = repo.index()?;
-        index.add_path(Path::new("first.txt"))?;
-        let tree_id = index.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
+        let mut index = fixture::index(&repo)?;
+        fixture::stage(&repo, &mut index, Path::new("first.txt"))?;
+        let tree_id = fixture::write_tree(&repo, &index)?;
+        let tree = tree_id;
         let first_commit =
-            repo.commit(Some("HEAD"), &signature, &signature, "first", &tree, &[])?;
-        let first_commit = repo.find_commit(first_commit)?;
+            fixture::commit(&repo, Some("HEAD"), &signature, &signature, "first", &tree, &[])?;
 
         fs::write(repo_path.join("second.txt"), b"second secret-like value long enough")?;
-        let mut index = repo.index()?;
-        index.add_path(Path::new("second.txt"))?;
-        let tree_id = index.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        repo.commit(Some("HEAD"), &signature, &signature, "second", &tree, &[&first_commit])?;
+        let mut index = fixture::index(&repo)?;
+        fixture::stage(&repo, &mut index, Path::new("second.txt"))?;
+        let tree_id = fixture::write_tree(&repo, &index)?;
+        let tree = tree_id;
+        fixture::commit(
+            &repo,
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "second",
+            &tree,
+            &[&first_commit],
+        )?;
 
         let git_dir = repo_path.join(".git");
         let gix_repo = open_opts(&git_dir, Options::isolated().open_path_as_is(true))?;
@@ -987,32 +996,46 @@ mod tests {
     fn excluded_blob_path_does_not_hide_later_included_blob() -> Result<()> {
         let temp = tempdir()?;
         let repo_path = temp.path().join("repo");
-        let repo = Git2Repository::init(&repo_path)?;
-        let signature = Signature::now("tester", "tester@example.com")?;
+        let repo = gix::init(&repo_path)?;
+        let signature = fixture::signature("tester", "tester@example.com");
         let shared_contents = b"shared-secret-content-that-is-long-enough";
 
         let excluded_dir = repo_path.join("excluded");
         fs::create_dir_all(&excluded_dir)?;
         fs::write(excluded_dir.join("secret.txt"), shared_contents)?;
 
-        let mut index = repo.index()?;
-        index.add_path(Path::new("excluded/secret.txt"))?;
-        let tree_id = index.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        let first_commit =
-            repo.commit(Some("HEAD"), &signature, &signature, "excluded only", &tree, &[])?;
-        let first_commit = repo.find_commit(first_commit)?;
+        let mut index = fixture::index(&repo)?;
+        fixture::stage(&repo, &mut index, Path::new("excluded/secret.txt"))?;
+        let tree_id = fixture::write_tree(&repo, &index)?;
+        let tree = tree_id;
+        let first_commit = fixture::commit(
+            &repo,
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "excluded only",
+            &tree,
+            &[],
+        )?;
 
         fs::remove_file(excluded_dir.join("secret.txt"))?;
         let visible_path = repo_path.join("visible.txt");
         fs::write(&visible_path, shared_contents)?;
 
-        let mut index = repo.index()?;
-        index.remove_path(Path::new("excluded/secret.txt"))?;
-        index.add_path(Path::new("visible.txt"))?;
-        let tree_id = index.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        repo.commit(Some("HEAD"), &signature, &signature, "visible path", &tree, &[&first_commit])?;
+        let mut index = fixture::index(&repo)?;
+        fixture::unstage(&mut index, Path::new("excluded/secret.txt"))?;
+        fixture::stage(&repo, &mut index, Path::new("visible.txt"))?;
+        let tree_id = fixture::write_tree(&repo, &index)?;
+        let tree = tree_id;
+        fixture::commit(
+            &repo,
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "visible path",
+            &tree,
+            &[&first_commit],
+        )?;
 
         let git_dir = repo_path.join(".git");
         let gix_repo = open_opts(&git_dir, Options::isolated().open_path_as_is(true))?;
@@ -1065,7 +1088,7 @@ mod tests {
         };
 
         let temp = tempdir()?;
-        let repo = Git2Repository::init_bare(temp.path())?;
+        let repo = gix::init_bare(temp.path())?;
         let mut expected_ids = std::collections::HashSet::new();
         for i in 0..2300 {
             let candidate = i % 17 == 0;
@@ -1074,12 +1097,12 @@ mod tests {
             } else {
                 format!("ordinary source file number {i} with no token")
             };
-            let oid = repo.blob(contents.as_bytes())?;
+            let oid = repo.write_blob(contents.as_bytes()).map(gix::Id::detach)?;
             if candidate {
                 expected_ids.insert(oid.to_string());
             }
         }
-        let large = repo.blob(&vec![b' '; 4 * 1024 * 1024 + 1])?;
+        let large = repo.write_blob(vec![b' '; 4 * 1024 * 1024 + 1]).map(gix::Id::detach)?;
         expected_ids.insert(large.to_string());
         let repo = open_opts(temp.path(), Options::isolated())?.into_sync();
         let filter = GitContentFilter::new(
@@ -1134,25 +1157,28 @@ mod tests {
         };
 
         let temp = tempdir()?;
-        let repo = Git2Repository::init_bare(temp.path())?;
-        let candidate = repo.blob(b"candidate_secret_0123456789abcdef")?;
-        let clean = repo.blob(b"ordinary source file without matching credentials")?;
-        let mut builder = repo.treebuilder(None)?;
-        builder.insert("secret.txt", candidate, 0o100644)?;
-        let relevant_leaf = builder.write()?;
-        let mut builder = repo.treebuilder(None)?;
-        builder.insert("clean.txt", clean, 0o100644)?;
-        let clean_leaf = builder.write()?;
-        let mut builder = repo.treebuilder(None)?;
-        builder.insert("link", candidate, 0o120000)?;
-        let links_only = builder.write()?;
+        let repo = gix::init_bare(temp.path())?;
+        let candidate =
+            repo.write_blob(b"candidate_secret_0123456789abcdef").map(gix::Id::detach)?;
+        let clean = repo
+            .write_blob(b"ordinary source file without matching credentials")
+            .map(gix::Id::detach)?;
+        let mut builder = repo.empty_tree().edit()?;
+        fixture::insert(&mut builder, "secret.txt", candidate, 0o100644)?;
+        let relevant_leaf = builder.write()?.detach();
+        let mut builder = repo.empty_tree().edit()?;
+        fixture::insert(&mut builder, "clean.txt", clean, 0o100644)?;
+        let clean_leaf = builder.write()?.detach();
+        let mut builder = repo.empty_tree().edit()?;
+        fixture::insert(&mut builder, "link", candidate, 0o120000)?;
+        let links_only = builder.write()?.detach();
         let mut parent = relevant_leaf;
         let mut relevant = vec![relevant_leaf];
         for _ in 0..80 {
-            let mut builder = repo.treebuilder(None)?;
-            builder.insert("child", parent, 0o040000)?;
-            builder.insert("clean", clean_leaf, 0o040000)?;
-            parent = builder.write()?;
+            let mut builder = repo.empty_tree().edit()?;
+            fixture::insert(&mut builder, "child", parent, 0o040000)?;
+            fixture::insert(&mut builder, "clean", clean_leaf, 0o040000)?;
+            parent = builder.write()?.detach();
             relevant.push(parent);
         }
         let repo = open_opts(temp.path(), Options::isolated())?.into_sync();

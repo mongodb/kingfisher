@@ -1,12 +1,12 @@
 # kingfisher-core
 
 Shared content, location, provenance, entropy, and validation-outcome types for
-embedding Kingfisher in Rust 1.99+ applications. The `1.x` public Rust API follows
+embedding Kingfisher in Rust 1.99+ applications. The `2.x` public Rust API follows
 semantic versioning; breaking changes require a new major version.
 
 ```toml
 [dependencies]
-kingfisher-core = "1.0.6"
+kingfisher-core = "2.0.0"
 ```
 
 ```rust
@@ -33,6 +33,20 @@ exhaustive public enum or changing existing serialized names requires a major re
 
 This crate performs no credential validation or network requests. Use
 `kingfisher-scanner` for detection and `kingfisher-rules` for rule loading.
+
+## Migrating to 2.0
+
+Public Git types now use `gix` 0.90. Align direct `gix` dependencies when constructing
+`CommitMetadata` or using `BlobId`'s object-ID conversions: old `gix::ObjectId` and
+`gix::date::Time` values have different dependency type identities. The core error
+conversion is now `From<gix::Error>`, replacing `From<gix::open::Error>`.
+Use scanner 4.0.0 when sharing these core types with the scanner. Serialized data,
+blob/location behavior, and existing rule files remain compatible. See the
+[dependency migration guide](../../docs/LIBRARY.md#dependency-modernization-migration).
+
+Language hints use an embedded extension/filename mapping derived from tokei 14.0.0,
+not its runtime parser. The upstream MIT attribution is retained in the packaged
+[license](data/tokei-LICENSE-MIT).
 
 ## Runnable examples
 

@@ -78,7 +78,7 @@ For repository layout and project-specific guidance, see:
 
 ### JavaScript/TypeScript SDK Development
 
-The `kingfisher-secret-scanner` npm SDK **1.0.1** is a stable release.
+The `kingfisher-secret-scanner` npm SDK **1.0.2** is a stable release.
 Its version is independent of the CLI, Python SDK, and Rust crates. Use the
 checkout instructions below for SDK development.
 
@@ -121,7 +121,7 @@ make check-notices
 
 The generator derives the **exact locked third-party crate/version union** across
 **all workspace members, features and targets**, including normal/build dependencies
-and proc macros (also optional allocators, GUI and tools). Dev-only dependencies and
+and proc macros (also optional allocators and tools). Dev-only dependencies and
 first-party crates are excluded; stale Cargo entries are removed. Independent
 non-Cargo notices for the project, rule sources and Vectorscan are preserved, and
 the SDK's packaged notices are synchronized. Identical license/evidence texts are

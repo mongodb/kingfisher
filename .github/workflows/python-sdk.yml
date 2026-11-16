@@ -1,22 +1,28 @@
 name: Python SDK
 
 on:
-  pull_request:
-  push:
-    branches: [main]
-    tags: ['python-v*']
-  workflow_dispatch:
+  workflow_call:
     inputs:
+      phase:
+        description: Build/test, or publish the same run's already tested distributions
+        type: string
+        default: build
       publish:
-        description: Publish a new SDK version from the pinned upstream main commit
+        description: Authorized by the coordinator only after its shared build gate
         type: boolean
         default: false
       expected_sha:
-        description: Full upstream main SHA (required when publish is true)
+        description: Pinned main SHA for guarded manual publication
         type: string
-      expected_version:
-        description: SDK manifest version (required when publish is true)
-        type: string
+        default: ''
+    outputs:
+      publish:
+        value: ${{ jobs.plan-publish.outputs.pending }}
+      version:
+        value: ${{ jobs.preflight.outputs.version }}
+  pull_request:
+  # Main/tag publication is coordinated exclusively by release.yml.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -24,7 +30,7 @@ permissions:
 concurrency:
   # Only PR checks supersede earlier runs. Every release keeps its own slot,
   # including pending runs: GitHub concurrency is not a FIFO release queue.
-  group: python-sdk-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  group: python-sdk-${{ inputs.phase || 'build' }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -40,6 +46,7 @@ env:
 jobs:
   preflight:
     name: Read-only SDK release preflight
+    if: inputs.phase != 'publish'
     runs-on: ubuntu-latest
     outputs:
       build: ${{ steps.check.outputs.build }}
@@ -60,7 +67,7 @@ jobs:
   wheels:
     name: Wheel (${{ matrix.target }})
     needs: preflight
-    if: needs.preflight.outputs.build == 'true'
+    if: needs.preflight.outputs.build == 'true' || inputs.phase == 'build'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -129,7 +136,7 @@ jobs:
             -e VECTORSCAN_BUILD_FROM_SOURCE=1
             -e CARGO_PROFILE_RELEASE_PANIC=unwind
             -e CARGO_PROFILE_RELEASE_LTO=false
-            -e CURL_HOME="${{ github.workspace }}/.github/maturin-curl"
+            -e "CURL_HOME=${{ github.workspace }}/.github/maturin-curl"
       # manylinux builds Vectorscan from source to preserve the glibc 2.28 floor.
       - uses: ./.github/actions/vectorscan-prebuilt
         if: runner.os != 'Linux'
@@ -147,6 +154,9 @@ jobs:
           suppress-deprecation-warnings: ${{ matrix.msystem == 'MINGW64' && 'msystem-mingw64' || '' }}
           path-type: inherit
           update: true
+          # ARM64 setup's optional paccache pruning exits 127 after installation.
+          # Disable only that package cache; keep updates, builds, and tests enabled.
+          cache: ${{ matrix.target != 'aarch64-pc-windows-gnullvm' }}
           install: ${{ matrix.packages }} make git perl
       - name: Build Windows wheel
         if: runner.os == 'Windows'
@@ -293,7 +303,7 @@ jobs:
 
   source:
     needs: preflight
-    if: needs.preflight.outputs.build == 'true'
+    if: needs.preflight.outputs.build == 'true' || inputs.phase == 'build'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -328,7 +338,7 @@ jobs:
           if-no-files-found: error
 
   plan-publish:
-    if: needs.preflight.outputs.publish == 'true' && github.repository == 'mongodb/kingfisher' && ((github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/python-v'))) || (github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'))
+    if: needs.preflight.outputs.publish == 'true' && github.repository == 'mongodb/kingfisher'
     needs: [preflight, wheels, source, cache-portability]
     runs-on: ubuntu-latest
     outputs:
@@ -356,18 +366,26 @@ jobs:
           if-no-files-found: error
 
   publish:
-    if: needs.plan-publish.outputs.pending == 'true'
-    needs: [plan-publish]
+    # This phase is called only after release.yml's cross-package build barrier.
+    if: inputs.phase == 'publish' && github.repository == 'mongodb/kingfisher' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish))
     runs-on: ubuntu-latest
     concurrency:
-      group: pypi-sdk-publish-${{ github.run_id }}
+      group: pypi-sdk-publish
+      queue: max
       cancel-in-progress: false
     environment:
       name: pypi-sdk
       url: https://pypi.org/p/kingfisher-secret-scanner
     permissions:
+      contents: read
       id-token: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Recheck the pinned release source before authenticating
+        run: python3 scripts/check-release-source.py
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: python-sdk-pending

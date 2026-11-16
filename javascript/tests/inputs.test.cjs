@@ -12,6 +12,14 @@ const { TOKEN, temporary, rulesIn, zip } = require('./helpers.cjs');
 
 async function collect(values) { const results = []; for await (const value of values) results.push(value); return results; }
 
+function asar(files, payload) {
+  const json = Buffer.from(JSON.stringify({ files }));
+  const paddedLength = Math.ceil(json.length / 4) * 4;
+  const prefix = Buffer.alloc(16);
+  [4, paddedLength + 8, paddedLength + 4, json.length].forEach((value, index) => prefix.writeUInt32LE(value, index * 4));
+  return Buffer.concat([prefix, json, Buffer.alloc(paddedLength - json.length), payload]);
+}
+
 test('filesystem enumeration is lazy, respects local ignores, and skips symlinks and .git', async () => {
   const directory = temporary();
   try {
@@ -241,6 +249,74 @@ test('nested ZIP expansion preserves metadata and scans each member separately',
     assert.equal(results[0].findings[0].secret, TOKEN);
     assert.ok(!JSON.stringify(results).includes(TOKEN));
   } finally { await scanner?.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('Electron ASAR members retain Unicode paths, provenance, empty files and offline scanning', async () => {
+  const directory = temporary();
+  let scanner;
+  try {
+    const data = Buffer.from(TOKEN);
+    const hash = require('node:crypto').createHash('sha256').update(data).digest('hex');
+    const archive = asar({
+      nested: { files: { '配置.env': { size: data.length, offset: '0', executable: true,
+        integrity: { algorithm: 'SHA256', hash, blockSize: 4194304, blocks: [hash] } } } },
+      'empty.env': { size: 0, offset: String(data.length) },
+      'external.env': { size: 100, unpacked: true },
+      'alias.env': { link: 'nested/配置.env' },
+    }, data);
+    const input = new ScanInput({ path: 'application.asar', data: archive, repository: 'original-repository',
+      commit: 'original-commit', blobId: 'original-blob' });
+    const expanded = await collect(expandArchives([input]));
+    assert.deepEqual(expanded.map(value => value.path), [
+      'application.asar!empty.env', 'application.asar!external.env', 'application.asar!nested/配置.env',
+    ]);
+    for (const member of expanded) {
+      assert.equal(member.repository, input.repository);
+      assert.equal(member.commit, input.commit);
+      assert.equal(member.blobId, input.blobId);
+    }
+    assert.equal(expanded[0].data.length, 0);
+    // External members must not read application.asar.unpacked or follow links.
+    assert.equal(expanded[1].data.length, 0);
+    assert.deepEqual(Buffer.from(expanded[2].data), data);
+    const wrapped = await collect(expandArchives([new ScanInput({
+      path: 'artifact.zip', data: zip([['application.asar', archive]]), repository: input.repository,
+      commit: input.commit, blobId: input.blobId,
+    })], { depth: 2 }));
+    assert.deepEqual(wrapped.map(value => value.path), expanded.map(value => `artifact.zip!${value.path}`));
+    assert.deepEqual(Buffer.from(wrapped[2].data), data);
+    assert.equal(wrapped[2].repository, input.repository);
+    assert.equal(wrapped[2].commit, input.commit);
+    assert.equal(wrapped[2].blobId, input.blobId);
+    scanner = await Scanner.create({ rules: await rulesIn(directory) });
+    const results = await collect(scanner.scanInputs(expanded));
+    const findings = results.flatMap(result => result.findings);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].secret, TOKEN);
+    assert.ok(!JSON.stringify(results).includes(TOKEN));
+  } finally { await scanner?.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('ASAR malformed members, traversal and resource limits never yield a partial root', async () => {
+  const payload = Buffer.from('ab');
+  const archive = asar({ 'a.env': { size: 1, offset: '0' }, 'b.env': { size: 1, offset: '1' } }, payload);
+  const unsafe = asar({ 'a.env': { size: 1, offset: '0' }, 'z/../../escape.env': { size: 1, offset: '1' } }, payload);
+  const repeated = asar({ 'a.env': { size: 256, offset: '0' }, 'b.env': { size: 256, offset: '0' } }, Buffer.alloc(256));
+  assert.ok(repeated.length < 512, 'Repeated members exceed the output budget without exceeding the input cap');
+  for (const [data, options, code] of [
+    [archive, { maxBytes: 1 }, 'ERR_KINGFISHER_LIMIT'],
+    // Inner archive budgets retain the existing extraction-error category.
+    [repeated, { maxBytes: repeated.length }, 'ERR_KINGFISHER_EXTRACTION'],
+    [archive, { maxEntries: 1 }, 'ERR_KINGFISHER_EXTRACTION'],
+    [unsafe, {}, 'ERR_KINGFISHER_EXTRACTION'],
+    [archive.subarray(0, archive.length - 1), {}, 'ERR_KINGFISHER_EXTRACTION'],
+  ]) {
+    const output = [];
+    await assert.rejects(async () => {
+      for await (const value of expandArchives([new ScanInput({ path: 'application.asar', data })], options)) output.push(value);
+    }, error => error.code === code);
+    assert.equal(output.length, 0);
+  }
 });
 
 test('unsafe ZIP members reject the complete root rather than omit coverage', async () => {

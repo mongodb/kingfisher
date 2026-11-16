@@ -1,3 +1,6 @@
+#[path = "../src/git_test_fixture.rs"]
+mod fixture;
+
 use clap::Parser;
 use kingfisher::{
     cli::{
@@ -324,7 +327,6 @@ async fn gitlab_streams_users_and_groups_before_later_page_failure() {
 #[tokio::test(flavor = "multi_thread")]
 async fn scanning_completes_while_later_discovery_is_waiting() -> anyhow::Result<()> {
     use assert_cmd::Command as ProcessCommand;
-    use git2::{Repository, Signature};
     use std::{
         fs,
         path::Path,
@@ -334,13 +336,13 @@ async fn scanning_completes_while_later_discovery_is_waiting() -> anyhow::Result
     let temp = tempfile::tempdir()?;
     let repo_dir = temp.path().join("fixture");
     {
-        let repo = Repository::init(&repo_dir)?;
-        let sig = Signature::now("tester", "tester@example.com")?;
+        let repo = gix::init(&repo_dir)?;
+        let sig = fixture::signature("tester", "tester@example.com");
         fs::write(repo_dir.join("secret.txt"), "issue525_streamed_secret")?;
-        let mut index = repo.index()?;
-        index.add_path(Path::new("secret.txt"))?;
-        let tree = repo.find_tree(index.write_tree()?)?;
-        repo.commit(Some("HEAD"), &sig, &sig, "fixture", &tree, &[])?;
+        let mut index = fixture::index(&repo)?;
+        fixture::stage(&repo, &mut index, Path::new("secret.txt"))?;
+        let tree = fixture::write_tree(&repo, &index)?;
+        fixture::commit(&repo, Some("HEAD"), &sig, &sig, "fixture", &tree, &[])?;
     }
     let rules = temp.path().join("rules.yml");
     fs::write(
