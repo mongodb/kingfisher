@@ -434,7 +434,8 @@ jobs:
       phase: build
     permissions:
       contents: read
-      # Reusable permission ceiling; its build jobs themselves have contents: read only.
+      # GitHub validates every nested job's ceiling, including skipped publishers.
+      actions: read
       id-token: write
 
   python-sdk:

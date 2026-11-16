@@ -66,6 +66,24 @@ def dependencies(body):
     return result
 
 
+def permission_levels(body, indent=4):
+    """Read the literal permission maps used here; None means inherit."""
+    value = field(body, "permissions", indent)
+    if value is None:
+        return None
+    if value == "{}":
+        return {}
+    levels = {"none": 0, "read": 1, "write": 2}
+    result = {}
+    for line in value.splitlines():
+        line = line.split(" #", 1)[0].rstrip()
+        match = re.fullmatch(r"([a-z-]+): (none|read|write)", line)
+        if match is None or match[1] in result:
+            raise AssertionError(f"Unsupported/duplicate permission: {line!r}")
+        result[match[1]] = levels[match[2]]
+    return result
+
+
 def action_options(body, action):
     """Read with: options of the ordinary six-space workflow steps used here."""
     for step in re.split(r"(?m)^      - ", body):
@@ -362,6 +380,30 @@ class ReleaseCohortTests(unittest.TestCase):
         for name in ("wheels", "source"):
             self.assertIn("inputs.phase == 'build'", field(python.jobs[name], "if"))
 
+    def test_reusable_calls_allow_every_nested_job_permission_even_when_skipped(self):
+        for name, caller in self.release.jobs.items():
+            uses = field(caller, "uses")
+            if uses is None:
+                continue
+            self.assertTrue(uses.startswith("./.github/workflows/"), uses)
+            called = Workflow.load(Path(uses).name)
+            allowed = permission_levels(caller)
+            if allowed is None:
+                allowed = permission_levels(self.release.header, indent=0)
+            self.assertIsNotNone(allowed, name)
+            # GitHub checks all nested jobs at startup, before evaluating if:.
+            for nested_name, nested in called.jobs.items():
+                requested = permission_levels(nested)
+                if requested is None:
+                    requested = permission_levels(called.header, indent=0)
+                self.assertIsNotNone(requested, (uses, nested_name))
+                for scope, level in requested.items():
+                    with self.subTest(caller=name, nested=nested_name, permission=scope):
+                        self.assertLessEqual(
+                            level, allowed.get(scope, 0),
+                            f"{name} must allow {uses}'s {nested_name} to request {scope}",
+                        )
+
     def test_publishers_download_the_exact_tested_archives_without_rebuilding(self):
         cases = (
             ("node-sdk.yml", "package", "node-sdk-registry-staging", "javascript/release"),
@@ -489,6 +531,25 @@ class ReleaseReaderTests(unittest.TestCase):
         self.assertEqual(dependencies("    needs:\n      - a\n      - b\n    runs-on: x\n"), {"a", "b"})
         self.assertEqual(dependencies("    needs: a\n"), {"a"})
         self.assertEqual(field("    if: >-\n      always() &&\n      !cancelled()\n    runs-on: x\n", "if"), "always() && !cancelled()")
+
+    def test_permission_maps_distinguish_inheritance_from_explicit_denial(self):
+        self.assertIsNone(permission_levels("    runs-on: x\n"))
+        self.assertEqual(permission_levels("    permissions: {}\n"), {})
+        self.assertEqual(
+            permission_levels("permissions:\n  contents: read\n", indent=0),
+            {"contents": 1},
+        )
+        self.assertEqual(
+            permission_levels("    permissions:\n      actions: none\n      id-token: write\n"),
+            {"actions": 0, "id-token": 2},
+        )
+        self.assertEqual(
+            permission_levels("    permissions:\n      packages: write    # push to ghcr.io\n"),
+            {"packages": 2},
+        )
+        for value in ("read-all", "contents: unknown", "contents: read\n      contents: write"):
+            with self.subTest(value=value), self.assertRaises(AssertionError):
+                permission_levels(f"    permissions:\n      {value}\n")
 
     def test_unknown_dynamic_duplicate_and_cyclic_dependencies_fail_closed(self):
         for value in ("${{ inputs.jobs }}", "*shared", "[a, a]", "[a,]"):
