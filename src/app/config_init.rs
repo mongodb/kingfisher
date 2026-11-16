@@ -361,9 +361,9 @@ pub(crate) fn build_config_yaml(
 
     // Serialize, then prune null/empty mappings so the YAML is concise.
     let mut value =
-        serde_yaml::to_value(&cfg).context("serialize KingfisherConfig to YAML value")?;
+        yaml_serde::to_value(&cfg).context("serialize KingfisherConfig to YAML value")?;
     prune_empty(&mut value);
-    let mut yaml = serde_yaml::to_string(&value).context("emit YAML")?;
+    let mut yaml = yaml_serde::to_string(&value).context("emit YAML")?;
 
     if yaml.trim() == "{}" || yaml.trim().is_empty() {
         // Avoid emitting "{}" — a no-op YAML is more confusing than empty.
@@ -377,10 +377,10 @@ pub(crate) fn build_config_yaml(
 }
 
 /// Recursively drop `null` values, empty sequences, and empty mappings from
-/// a [`serde_yaml::Value`]. Used by `build_config_yaml` to keep the output
+/// a [`yaml_serde::Value`]. Used by `build_config_yaml` to keep the output
 /// file as small as the user's actual flag set.
-fn prune_empty(value: &mut serde_yaml::Value) {
-    use serde_yaml::Value;
+fn prune_empty(value: &mut yaml_serde::Value) {
+    use yaml_serde::Value;
     match value {
         Value::Mapping(map) => {
             let keys: Vec<_> = map.keys().cloned().collect();

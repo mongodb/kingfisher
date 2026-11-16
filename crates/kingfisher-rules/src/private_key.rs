@@ -342,7 +342,7 @@ fn armor_body(body: &str, label: &str) -> Option<ArmorBody> {
 
 fn rsa_key(bytes: &[u8]) -> bool {
     // Syntax only: no primality tests, big-integer arithmetic, or minimum key size.
-    pkcs1::RsaPrivateKey::from_der(bytes).is_ok()
+    pkcs1::RsaPrivateKeyRef::from_der(bytes).is_ok()
 }
 
 fn non_der_ber(bytes: &[u8]) -> bool {
@@ -469,11 +469,12 @@ fn der_value(value: AnyRef<'_>, depth: usize) -> Option<bool> {
 }
 
 fn pkcs8_key(bytes: &[u8]) -> bool {
-    let Ok(key) = pkcs8::PrivateKeyInfo::from_der(bytes) else { return false };
-    if key.private_key.is_empty() {
+    let Ok(key) = pkcs8::PrivateKeyInfoRef::from_der(bytes) else { return false };
+    let private_key = key.private_key.as_bytes();
+    if private_key.is_empty() {
         return false;
     }
-    if non_der_ber(key.private_key) {
+    if non_der_ber(private_key) {
         return true;
     }
     // Parsing the outer OCTET STRING alone would accept arbitrary text as a key.
@@ -483,23 +484,23 @@ fn pkcs8_key(bytes: &[u8]) -> bool {
             || oid == ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.7")
             || oid == ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.10") =>
         {
-            rsa_key(key.private_key)
+            rsa_key(private_key)
         }
         oid if oid == ObjectIdentifier::new_unwrap("1.2.840.10045.2.1") => {
             key.algorithm.parameters.is_none_or(|value| ec_parameters(value).is_ok())
-                && ec_key(key.private_key)
+                && ec_key(private_key)
         }
         oid if oid == ObjectIdentifier::new_unwrap("1.2.840.10040.4.1") => {
             key.algorithm.parameters.is_none_or(|value| {
                 value
-                    .sequence(|reader| {
+                    .sequence(|reader| -> der::Result<()> {
                         for _ in 0..3 {
                             reader.decode::<UintRef<'_>>()?;
                         }
                         Ok(())
                     })
                     .is_ok()
-            }) && UintRef::from_der(key.private_key).is_ok()
+            }) && UintRef::from_der(private_key).is_ok()
         }
         oid if oid == ObjectIdentifier::new_unwrap("1.3.101.110")
             || oid == ObjectIdentifier::new_unwrap("1.3.101.111")
@@ -511,7 +512,7 @@ fn pkcs8_key(bytes: &[u8]) -> bool {
                 "1.3.101.113" => 57, // Ed448
                 _ => 32,             // X25519 / Ed25519
             };
-            OctetStringRef::from_der(key.private_key).is_ok_and(|key| key.as_bytes().len() == size)
+            <&OctetStringRef>::from_der(private_key).is_ok_and(|key| key.as_bytes().len() == size)
         }
         _ => true,
     }
@@ -527,7 +528,7 @@ fn encrypted_pkcs8(bytes: &[u8]) -> bool {
                 if algorithm.oid == ObjectIdentifier::new_unwrap("1.2.840.113549.1.5.13") {
                     // PBES2 contains two AlgorithmIdentifiers, not arbitrary DER.
                     algorithm.parameters.ok_or_else(|| Tag::Sequence.value_error())?.sequence(
-                        |reader| {
+                        |reader| -> der::Result<()> {
                             let kdf = reader.decode::<pkcs8::AlgorithmIdentifierRef<'_>>()?;
                             kdf_parameters(kdf)?;
                             reader.decode::<pkcs8::AlgorithmIdentifierRef<'_>>()?;
@@ -535,9 +536,9 @@ fn encrypted_pkcs8(bytes: &[u8]) -> bool {
                         },
                     )?;
                 }
-                let ciphertext = reader.decode::<OctetStringRef<'_>>()?;
+                let ciphertext = reader.decode::<&OctetStringRef>()?;
                 if ciphertext.as_bytes().is_empty() {
-                    return Err(Tag::OctetString.value_error());
+                    return Err(Tag::OctetString.value_error().into());
                 }
                 Ok(())
             })
@@ -552,16 +553,16 @@ fn kdf_parameters(algorithm: pkcs8::AlgorithmIdentifierRef<'_>) -> der::Result<(
         return Ok(());
     }
     algorithm.parameters.ok_or_else(|| Tag::Sequence.value_error())?.sequence(|reader| {
-        if pbkdf2 && reader.peek_tag()? == Tag::Sequence {
+        if pbkdf2 && Tag::peek(reader)? == Tag::Sequence {
             reader.decode::<pkcs8::AlgorithmIdentifierRef<'_>>()?; // otherSource salt
         } else {
-            reader.decode::<OctetStringRef<'_>>()?; // specified salt
+            reader.decode::<&OctetStringRef>()?; // specified salt
         }
         // Decode counts only: no work is proportional to attacker-supplied values.
         for _ in 0..if scrypt { 3 } else { 1 } {
             reader.decode::<UintRef<'_>>()?;
         }
-        if !reader.is_finished() && reader.peek_tag()? == Tag::Integer {
+        if !reader.is_finished() && Tag::peek(reader)? == Tag::Integer {
             reader.decode::<UintRef<'_>>()?; // optional key length
         }
         if pbkdf2 && !reader.is_finished() {
@@ -582,13 +583,13 @@ fn ec_key(bytes: &[u8]) -> bool {
         .and_then(|value| {
             value.sequence(|reader| {
                 if reader.decode::<u8>()? != 1
-                    || reader.decode::<OctetStringRef<'_>>()?.as_bytes().is_empty()
+                    || reader.decode::<&OctetStringRef>()?.as_bytes().is_empty()
                 {
-                    return Err(Tag::Sequence.value_error());
+                    return Err(Tag::Sequence.value_error().into());
                 }
                 if !reader.is_finished()
-                    && reader.peek_tag()?
-                        == (Tag::ContextSpecific { constructed: true, number: TagNumber::N0 })
+                    && Tag::peek(reader)?
+                        == (Tag::ContextSpecific { constructed: true, number: TagNumber(0) })
                 {
                     let parameters = reader.decode::<AnyRef<'_>>()?;
                     let value = AnyRef::from_der(parameters.value())?;
@@ -598,7 +599,7 @@ fn ec_key(bytes: &[u8]) -> bool {
                     let public = reader.decode::<AnyRef<'_>>()?;
                     public.tag().assert_eq(Tag::ContextSpecific {
                         constructed: true,
-                        number: TagNumber::N1,
+                        number: TagNumber(1),
                     })?;
                     BitStringRef::from_der(public.value())?;
                 }
@@ -616,14 +617,14 @@ fn ec_parameters(value: AnyRef<'_>) -> der::Result<()> {
         }
         Tag::Null if value.value().is_empty() => Ok(()),
         Tag::Sequence => explicit_ec_parameters(value),
-        _ => Err(Tag::Sequence.value_error()),
+        _ => Err(Tag::Sequence.value_error().into()),
     }
 }
 
 fn explicit_ec_parameters(value: AnyRef<'_>) -> der::Result<()> {
     value.sequence(|reader| {
         if !matches!(reader.decode::<u8>()?, 1..=3) {
-            return Err(Tag::Integer.value_error());
+            return Err(Tag::Integer.value_error().into());
         }
         // FieldID: an OID plus its parameters. Unknown finite-field types remain
         // opaque; prime fields must at least contain a DER unsigned integer.
@@ -632,20 +633,20 @@ fn explicit_ec_parameters(value: AnyRef<'_>) -> der::Result<()> {
         if field.oid == ObjectIdentifier::new_unwrap("1.2.840.10045.1.1") {
             parameters.decode_as::<UintRef<'_>>()?;
         }
-        reader.decode::<AnyRef<'_>>()?.sequence(|reader| {
-            reader.decode::<OctetStringRef<'_>>()?; // curve coefficient a
-            reader.decode::<OctetStringRef<'_>>()?; // curve coefficient b
+        reader.decode::<AnyRef<'_>>()?.sequence(|reader| -> der::Result<()> {
+            reader.decode::<&OctetStringRef>()?; // curve coefficient a
+            reader.decode::<&OctetStringRef>()?; // curve coefficient b
             if !reader.is_finished() {
                 reader.decode::<BitStringRef<'_>>()?;
             } // optional seed
             Ok(())
         })?;
-        if reader.decode::<OctetStringRef<'_>>()?.as_bytes().is_empty() {
+        if reader.decode::<&OctetStringRef>()?.as_bytes().is_empty() {
             // base point
-            return Err(Tag::OctetString.value_error());
+            return Err(Tag::OctetString.value_error().into());
         }
         reader.decode::<UintRef<'_>>()?; // order
-        if !reader.is_finished() && reader.peek_tag()? == Tag::Integer {
+        if !reader.is_finished() && Tag::peek(reader)? == Tag::Integer {
             reader.decode::<UintRef<'_>>()?; // optional cofactor
         }
         if !reader.is_finished() {
@@ -660,7 +661,7 @@ fn dsa_key(bytes: &[u8]) -> bool {
         .and_then(|value| {
             value.sequence(|reader| {
                 if reader.decode::<u8>()? != 0 {
-                    return Err(Tag::Integer.value_error());
+                    return Err(Tag::Integer.value_error().into());
                 }
                 for _ in 0..5 {
                     reader.decode::<UintRef<'_>>()?;
@@ -1001,12 +1002,12 @@ mod tests {
     }
 
     fn pkcs8(oid: &str, inner: &[u8]) -> Vec<u8> {
-        pkcs8::PrivateKeyInfo::new(
+        pkcs8::PrivateKeyInfoRef::new(
             pkcs8::AlgorithmIdentifierRef {
                 oid: ObjectIdentifier::new_unwrap(oid),
                 parameters: None,
             },
-            inner,
+            OctetStringRef::new(inner).unwrap(),
         )
         .to_der()
         .unwrap()

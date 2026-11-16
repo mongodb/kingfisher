@@ -1,5 +1,4 @@
 use clap::{Args, Subcommand, ValueEnum, ValueHint};
-use strum::Display;
 use url::Url;
 
 use crate::cli::commands::output::OutputArgs;
@@ -69,8 +68,7 @@ impl AzureRepoSpecifiers {
     }
 }
 
-#[derive(Copy, Clone, Debug, Display, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-#[strum(serialize_all = "kebab-case")]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum AzureRepoType {
     Source,
     Fork,
@@ -87,8 +85,7 @@ impl From<AzureRepoType> for crate::azure::RepoType {
     }
 }
 
-#[derive(Copy, Clone, Debug, ValueEnum, Display)]
-#[strum(serialize_all = "kebab-case")]
+#[derive(Copy, Clone, Debug, ValueEnum)]
 pub enum AzureOutputFormat {
     Pretty,
     Json,
@@ -96,3 +93,5 @@ pub enum AzureOutputFormat {
     Bson,
     Sarif,
 }
+
+crate::cli::impl_value_enum_display!(AzureRepoType, AzureOutputFormat);

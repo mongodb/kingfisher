@@ -205,7 +205,7 @@ async fn opted_in_endpoints_do_not_start_candidate_searches() {
         let endpoint = serde_json::json!({"name":"Endpoint", "id":helper, "pattern":r"(https://[a-z]+\.invalid)", "min_entropy":0, "visible":false});
         fs::write(
             &rules,
-            serde_yaml::to_string(&serde_json::json!({"rules":[primary,secret,endpoint]})).unwrap(),
+            yaml_serde::to_string(&serde_json::json!({"rules":[primary,secret,endpoint]})).unwrap(),
         )
         .unwrap();
         // Both the credential and endpoint are ambiguous. The endpoint must block
@@ -502,7 +502,7 @@ async fn builtin_http_expressions_try_rejected_then_valid_component() {
         let rules = temp.path().join("rules.yml");
         fs::write(
             &rules,
-            serde_yaml::to_string(&serde_json::json!({"rules":[primary, component]})).unwrap(),
+            yaml_serde::to_string(&serde_json::json!({"rules":[primary, component]})).unwrap(),
         )
         .unwrap();
         let input = temp.path().join("input.txt");

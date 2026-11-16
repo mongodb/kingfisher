@@ -110,7 +110,7 @@ rules:
     id: custom.saas.1
     pattern: '(?P<TOKEN>saas_[A-Za-z0-9]+)'
 "#;
-        let raw: RawRules = serde_yaml::from_str(yaml).expect("custom legacy rules should parse");
+        let raw: RawRules = yaml_serde::from_str(yaml).expect("custom legacy rules should parse");
 
         assert_eq!(raw.rules[0].tls_mode, Some(TlsMode::Lax));
         assert_eq!(raw.rules[1].tls_mode, None);

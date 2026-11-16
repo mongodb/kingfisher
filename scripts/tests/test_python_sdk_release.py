@@ -6,7 +6,6 @@ import os
 import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-import shlex
 import shutil
 import subprocess
 import tarfile
@@ -135,7 +134,24 @@ class PythonSdkReleaseTests(unittest.TestCase):
             sleep.assert_called_once_with(1)
 
 
+def action_string_argv(value):
+    # Exact regex and capture precedence from string-argv 0.3.2, locked by
+    # PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b.
+    # That action passes stringArgv(dockerOptions) directly to docker, not a shell.
+    # https://github.com/PyO3/maturin-action/blob/e83996d129638aa358a18fbd1dfb82f0b0fb5d3b/src/index.ts
+    # https://unpkg.com/string-argv@0.3.2/index.js
+    pattern = r'''([^\s'"]([^\s'"]*(['"])([^\3]*?)\3)+[^\s'"]*)|[^\s'"]+|(['"])([^\5]*?)\5'''
+    return [next(group for group in (match[1], match[6], match[0]) if group is not None)
+            for match in re.finditer(pattern, value, re.IGNORECASE)]
+
+
 class MaturinDownloadTests(unittest.TestCase):
+    def test_action_tokenizer_preserves_quotes_inside_assignments(self):
+        self.assertEqual(action_string_argv('-e CURL_HOME="/workspace/.github/maturin-curl"'),
+                         ['-e', 'CURL_HOME="/workspace/.github/maturin-curl"'])
+        self.assertEqual(action_string_argv('-e "CURL_HOME=/workspace with spaces/curl"'),
+                         ['-e', 'CURL_HOME=/workspace with spaces/curl'])
+
     def container_environment(self, workspace):
         workflow = (ROOT / ".github/workflows/python-sdk.yml").read_text(encoding="utf-8")
         build = workflow.split("      - name: Build portable Linux wheel\n", 1)[1]
@@ -148,7 +164,7 @@ class MaturinDownloadTests(unittest.TestCase):
         folded = re.search(r"(?m)^          docker-options: >-\n((?:            .+\n)+)", build)
         self.assertIsNotNone(folded)
         options = " ".join(line.strip() for line in folded.group(1).splitlines())
-        options = shlex.split(options.replace("${{ github.workspace }}", workspace.as_posix()))
+        options = action_string_argv(options.replace("${{ github.workspace }}", workspace.as_posix()))
         self.assertEqual(options[::2], ["-e"] * 4)
         environment = dict(option.split("=", 1) for option in options[1::2])
         self.assertEqual(environment, {

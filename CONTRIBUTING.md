@@ -121,7 +121,7 @@ make check-notices
 
 The generator derives the **exact locked third-party crate/version union** across
 **all workspace members, features and targets**, including normal/build dependencies
-and proc macros (also optional allocators, GUI and tools). Dev-only dependencies and
+and proc macros (also optional allocators and tools). Dev-only dependencies and
 first-party crates are excluded; stale Cargo entries are removed. Independent
 non-Cargo notices for the project, rule sources and Vectorscan are preserved, and
 the SDK's packaged notices are synchronized. Identical license/evidence texts are

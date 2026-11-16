@@ -1384,8 +1384,10 @@ sdk_encoded_flags=''
 for flag in "${sdk_link_flags[@]}"; do
   sdk_encoded_flags+="${sdk_encoded_flags:+$'\x1f'}$flag"
 done
-CARGO_ENCODED_RUSTFLAGS="$sdk_encoded_flags" CC="$sdk_cc" CXX="$sdk_cxx" \
-  CMAKE_GENERATOR="MinGW Makefiles" \
+# Scope C/C++ selection to the extension target, not Rust's MSVC host dependencies.
+native_target="${sdk_target//-/_}"
+env "CC_$native_target=$sdk_cc" "CXX_$native_target=$sdk_cxx" \
+  CARGO_ENCODED_RUSTFLAGS="$sdk_encoded_flags" CMAKE_GENERATOR="MinGW Makefiles" \
   uv run --no-sync maturin develop --locked --profile dev --target "$sdk_target"
 ```
 
@@ -1425,8 +1427,8 @@ uv run --no-project --python .venv-wheel python -m pytest python/tests -q
 uv run --no-sync maturin sdist --out dist-python
 ```
 
-For Windows wheel builds, use the same `CARGO_ENCODED_RUSTFLAGS`, `CC`, `CXX` and
-`CMAKE_GENERATOR` command prefix as the development build above. On PowerShell,
+For Windows wheel builds, use the same `CARGO_ENCODED_RUSTFLAGS`, target-specific
+`CC`/`CXX`, and `CMAKE_GENERATOR` settings as the development build above. On PowerShell,
 expand wheel paths with `Get-ChildItem` instead of a shell glob.
 Use a clean output directory per build to avoid installing multiple versions.
 Local Linux builds may need `--compatibility linux` for local-only wheels; public
@@ -1436,7 +1438,7 @@ because the prebuilt Linux archives require glibc 2.35.
 The SDK source archive contains a normalized SDK-only Cargo workspace. Standard
 package installation refreshes its workspace lock metadata automatically. For a
 manual `--locked` Maturin build from an unpacked archive, first refresh metadata
-with `cargo metadata --offline`; this prunes CLI/GUI-only lock records. Confirm
+with `cargo metadata --offline`; this prunes CLI-only lock records. Confirm
 the remaining dependency versions are unchanged before the locked build.
 
 Shared Rust revocation tests:

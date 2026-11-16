@@ -720,7 +720,6 @@ validation filters, output formats, scan scope, and command examples.
 | Configure authentication and environment variables | [Environment-variable reference](docs/INTEGRATIONS.md#environment-variables) |
 | Validate or revoke a known credential | [Direct validation](docs/USAGE.md#direct-secret-validation-with-kingfisher-validate), [revocation](docs/REVOCATION_PROVIDERS.md) |
 | Map identity, permissions, and affected resources | [Blast-radius guide](docs/BLAST_RADIUS.md) |
-| Run scans and inspect reports in a native workspace | [Kingfisher wizard](docs/WIZARD.md) |
 | Triage one or more reports visually | [Viewer usage](docs/USAGE.md#report-viewer-local-and-hosted), [hosted guide](https://mongodb.github.io/kingfisher/features/report-viewer/) |
 | Configure CI, pre-commit, or centralized scanning | [Deployment](docs/DEPLOYMENT.md), [advanced configuration](docs/ADVANCED.md) |
 | Send real-time alerts to chat or webhook destinations | [Alert webhooks](docs/ALERTS.md) |
@@ -771,6 +770,7 @@ Follow the [release verification steps](docs/INSTALLATION.md#verifying-release-a
 - **[llms.txt](llms.txt):** compact machine-readable map of the documentation set.
 - **[Cargo publishing](docs/PUBLISHING.md):** prepared rule bundles, provenance, and crate releases.
 - **[Architecture](docs/ARCHITECTURE.md):** codebase layout and data flow.
+- **[Git clone benchmarks](docs/GIT_CLONE_BENCHMARK.md):** native Git versus Kingfisher/gix on MongoDB.
 - **[Changelog](CHANGELOG.md):** release-by-release behavior changes.
 
 ## Project

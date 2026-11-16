@@ -81,7 +81,7 @@ pub(crate) fn json_to_python(py: Python<'_>, value: serde_json::Value) -> PyResu
     }
 }
 
-#[pyclass(module = "kingfisher_sdk._native", name = "Rules", frozen, skip_from_py_object)]
+#[pyclass(module = "kingfisher_sdk._native", name = "Rules", frozen)]
 #[derive(Clone)]
 struct PyRules {
     db: Arc<RulesDatabase>,

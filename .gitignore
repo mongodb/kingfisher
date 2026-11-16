@@ -9,6 +9,7 @@
 !docs/viewer/sample-report.json
 !docs/viewer/investigation-demo.json
 !docs/demos/investigation-demo.json
+!docs/GIT_CLONE_BENCHMARK.json
 !testdata/parsers/context_verifier_golden.json
 !testdata/parsers/scan_findings_baseline.json
 !testdata/parsers/tree_sitter_capture_baseline.json

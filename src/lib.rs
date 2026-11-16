@@ -35,7 +35,9 @@ pub mod direct_validate;
 pub mod entropy;
 pub mod finding_data;
 pub mod findings_store;
+mod formatting;
 pub mod gcs;
+mod git_auth;
 pub mod git_binary;
 mod git_candidate_summaries;
 mod git_candidates;
@@ -43,6 +45,8 @@ pub mod git_commit_metadata;
 pub mod git_host;
 pub mod git_metadata_graph;
 mod git_repo_enumerator;
+#[cfg(test)]
+mod git_test_fixture;
 pub mod git_url;
 pub mod gitea;
 pub mod github;
@@ -84,8 +88,6 @@ pub mod util;
 pub mod validation;
 pub mod validation_body;
 pub mod validation_rate_limit;
-#[cfg(feature = "gui")]
-pub mod wizard;
 
 mod input;
 

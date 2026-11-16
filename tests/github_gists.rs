@@ -1,3 +1,6 @@
+#[path = "../src/git_test_fixture.rs"]
+mod fixture;
+
 use clap::Parser;
 use kingfisher::{
     cli::{
@@ -194,24 +197,23 @@ async fn gist_api_long_rate_limit_is_reported() {
 #[tokio::test(flavor = "multi_thread")]
 async fn enumerated_gist_is_cloned_and_scanned_for_deleted_secrets() -> anyhow::Result<()> {
     use assert_cmd::prelude::*;
-    use git2::{Repository, Signature};
     use predicates::str::contains;
     use std::{fs, path::Path, process::Command};
 
     let temp = tempfile::tempdir()?;
     let repo_dir = temp.path().join("gist");
-    let repo = Repository::init(&repo_dir)?;
-    let sig = Signature::now("tester", "tester@example.com")?;
+    let repo = gix::init(&repo_dir)?;
+    let sig = fixture::signature("tester", "tester@example.com");
     let secret = "issue508_deleted_secret";
     fs::write(repo_dir.join("secret.txt"), secret)?;
-    let mut index = repo.index()?;
-    index.add_path(Path::new("secret.txt"))?;
-    let tree = repo.find_tree(index.write_tree()?)?;
-    let first = repo.commit(Some("HEAD"), &sig, &sig, "add secret", &tree, &[])?;
+    let mut index = fixture::index(&repo)?;
+    fixture::stage(&repo, &mut index, Path::new("secret.txt"))?;
+    let tree = fixture::write_tree(&repo, &index)?;
+    let first = fixture::commit(&repo, Some("HEAD"), &sig, &sig, "add secret", &tree, &[])?;
     fs::remove_file(repo_dir.join("secret.txt"))?;
-    index.remove_path(Path::new("secret.txt"))?;
-    let tree = repo.find_tree(index.write_tree()?)?;
-    repo.commit(Some("HEAD"), &sig, &sig, "remove secret", &tree, &[&repo.find_commit(first)?])?;
+    fixture::unstage(&mut index, Path::new("secret.txt"))?;
+    let tree = fixture::write_tree(&repo, &index)?;
+    fixture::commit(&repo, Some("HEAD"), &sig, &sig, "remove secret", &tree, &[&first])?;
 
     let rules = temp.path().join("rules.yml");
     fs::write(

@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const fs = require('node:fs');
 const path = require('node:path');
 const { checkABI, floors } = require('../scripts/check-linux-abi.cjs');
-const { inventory, dependencies, validate, placeholders, generate, licenses, sha256 } = require('../../scripts/third-party-notices.cjs');
+const { inventory, dependencies, validate, placeholders, generate } = require('../../scripts/third-party-notices.cjs');
 
 const imported = version => `  12: 0000000000000000 0 FUNC GLOBAL DEFAULT UND example@${version} (2)`;
 const needed = libraries => libraries.map(name => ` 0x0000000000000001 (NEEDED) Shared library: [${name}]`).join('\n');
@@ -68,36 +68,29 @@ test('notice inventory rejects stale versions, duplicates, missing dependencies 
   assert.throws(() => validate(entries, expected, {}), /Incomplete\/mismatched license text/);
 });
 
-test('schemafy and Inflector build dependencies retain exact pinned upstream text/provenance', () => {
+test('removed schemafy and Inflector retain neither live overrides nor shipped notices', () => {
   const directory = path.resolve(__dirname, '../../scripts/license-overrides');
   const overrides = JSON.parse(fs.readFileSync(path.join(directory, 'index.json'), 'utf8')).packages;
   const entries = inventory(fs.readFileSync(path.resolve(__dirname, '../../THIRD_PARTY_NOTICES'), 'utf8'));
   for (const key of ['schemafy_core@0.6.0', 'schemafy_lib@0.6.0', 'Inflector@0.11.4']) {
-    const override = overrides[key];
-    assert.match(override.vcsRevision, /^[a-f0-9]{40}$/);
-    for (const source of override.licenses) {
-      const text = fs.readFileSync(path.join(directory, source.file), 'utf8');
-      assert.equal(sha256(text), source.sha256);
-      assert.ok(licenses(entries.get(key)).some(record => record.license === source.license && record.text === text));
-      assert.ok(entries.get(key).includes(source.source));
-      assert.ok(source.source.includes(override.vcsRevision));
-    }
-    assert.deepEqual(placeholders(new Map([[key, entries.get(key)]]), new Map([[key, {}]])), { all: 0, current: 0 });
+    assert.ok(!Object.hasOwn(overrides, key), `Removed dependency must not retain an override: ${key}`);
+    assert.ok(!entries.has(key), `Removed dependency must not retain a shipped notice: ${key}`);
   }
 });
 
-test('notice checks reject historical placeholder retention and prune it without losing current napi text', () => {
-  const directory = path.resolve(__dirname, '../../scripts/license-overrides');
-  const override = JSON.parse(fs.readFileSync(path.join(directory, 'index.json'), 'utf8')).packages['napi@3.16.1'];
-  const text = fs.readFileSync(path.join(directory, override.licenses[0].file), 'utf8');
-  const expected = new Map([['napi@3.16.1', { name: 'napi', version: '3.16.1', license: 'MIT' }]]);
-  const entries = inventory(document(block('napi', '3.16.1', text), block('legacy', '1.0.0', 'NOT FOUND')));
+test('notice checks prune historical placeholders without losing current license text', () => {
+  // Keep this unit fixture independent of removed dependency versions/archives.
+  const expected = new Map([['current@1.0.0', { name: 'current', version: '1.0.0', license: 'MIT' }]]);
+  const entries = inventory(document(block('current'), block('legacy', '1.0.0', 'NOT FOUND')));
+  const current = entries.get('current@1.0.0');
   assert.throws(() => validate(entries, expected, {}), /Stale\/first-party/);
   assert.deepEqual(placeholders(entries, expected), { all: 1, current: 0 });
   generate(entries, expected, { overrides: {}, generateMissing: () => { throw new Error('Complete current license must not be refreshed'); } });
   validate(entries, expected, {});
+  assert.equal(entries.get('current@1.0.0'), current);
+  assert.throws(() => validate(entries, expected, { 'legacy@1.0.0': {} }), /Stale license overrides/);
   assert.deepEqual(placeholders(entries, expected), { all: 0, current: 0 });
-  entries.set('napi@3.16.1', block('napi', '3.16.1', 'NOT FOUND'));
+  entries.set('current@1.0.0', block('current', '1.0.0', 'NOT FOUND'));
   assert.throws(() => validate(entries, expected, {}), /Incomplete\/mismatched license text/);
   assert.deepEqual(placeholders(entries, expected), { all: 1, current: 1 });
 });

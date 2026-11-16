@@ -619,6 +619,7 @@ pub(crate) fn make_test_record(
             validate_command: None,
             revoke_command: None,
             blast_radius_command: None,
+            source_region: Default::default(),
         },
     }
 }
@@ -867,6 +868,7 @@ mod tests {
                 validate_command: None,
                 revoke_command: None,
                 blast_radius_command: None,
+                source_region: Default::default(),
             },
         }
     }

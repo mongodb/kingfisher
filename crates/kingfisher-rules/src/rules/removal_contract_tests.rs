@@ -34,7 +34,7 @@ fn definition(id: &str, name: &str) -> Value {
 }
 
 fn document(rules: Vec<Value>) -> String {
-    serde_yaml::to_string(&json!({"rules": rules})).unwrap()
+    yaml_serde::to_string(&json!({"rules": rules})).unwrap()
 }
 
 fn parse(document: &str, confidence: Confidence) -> Rules {
@@ -110,7 +110,7 @@ fn update_keeps_prefilters_left_associated_and_preserves_rule_replacement() {
 #[test]
 fn yaml_file_and_memory_loading_have_identical_rules_and_prefilters() {
     let directory = RuleDirectory::new();
-    let yaml = serde_yaml::to_string(&json!({
+    let yaml = yaml_serde::to_string(&json!({
         "betterleaks_prefilter": {"kind": "bool", "value": true},
         "rules": [definition("acme.equivalence", "Equivalence")],
     }))
@@ -249,7 +249,7 @@ fn standalone_syntax_loader_accepts_sequence_and_mapping_without_collapsing_dupl
     let directory = RuleDirectory::new();
     let rules = vec![definition("acme.same", "First"), definition("acme.same", "Last")];
     for (name, yaml) in [
-        ("sequence.yml", serde_yaml::to_string(&rules).unwrap()),
+        ("sequence.yml", yaml_serde::to_string(&rules).unwrap()),
         ("mapping.yml", document(rules.clone())),
     ] {
         let path = directory.write(name, &yaml);
@@ -269,9 +269,9 @@ fn empty_and_fully_filtered_documents_keep_left_associated_prefilters() {
     let mut filtered = definition("acme.filtered-prefilter", "Filtered");
     filtered["confidence"] = json!("low");
     let documents = [
-        serde_yaml::to_string(&json!({"betterleaks_prefilter": a, "rules": []})).unwrap(),
-        serde_yaml::to_string(&json!({"betterleaks_prefilter": b, "rules": [filtered]})).unwrap(),
-        serde_yaml::to_string(&json!({"betterleaks_prefilter": c, "rules": []})).unwrap(),
+        yaml_serde::to_string(&json!({"betterleaks_prefilter": a, "rules": []})).unwrap(),
+        yaml_serde::to_string(&json!({"betterleaks_prefilter": b, "rules": [filtered]})).unwrap(),
+        yaml_serde::to_string(&json!({"betterleaks_prefilter": c, "rules": []})).unwrap(),
     ];
     let paths = [
         directory.write("empty-a.yml", &documents[0]),
@@ -404,7 +404,7 @@ fn confidence_filter_does_not_bypass_serde_revocation_security_checks() {
             "response_matcher": [{"type": "StatusMatch", "status": [204]}]},
     }});
     let yaml = document(vec![forbidden]);
-    let raw_error = serde_yaml::from_str::<RawRules>(&yaml).err().unwrap().to_string();
+    let raw_error = yaml_serde::from_str::<RawRules>(&yaml).err().unwrap().to_string();
     assert!(raw_error.contains("OAuth2 auth is supported for validation only"));
     let path = directory.write("forbidden-auth.yml", &yaml);
     let memory =

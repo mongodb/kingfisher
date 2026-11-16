@@ -1,3 +1,6 @@
+#[path = "../src/git_test_fixture.rs"]
+mod fixture;
+
 //
 // Integration tests that exercise `kingfisher scan` against Git branches and commit
 // references using locally constructed repositories. These ensure that the
@@ -9,7 +12,6 @@ use std::path::Path;
 
 use anyhow::Result;
 use assert_cmd::Command;
-use git2::{BranchType, Repository, Signature, build::CheckoutBuilder};
 use predicates::{prelude::PredicateBooleanExt, str::contains};
 use tempfile::{TempDir, tempdir};
 
@@ -30,20 +32,20 @@ const STRIPE_SECRET_LINE: &str = concat!(
 );
 
 #[test]
-fn staged_scan_uses_git_executable_override() -> Result<()> {
+fn staged_scan_does_not_require_a_git_executable() -> Result<()> {
     let temp = tempdir()?;
     let repo_dir = temp.path().join("repository with spaces");
-    let repo = Repository::init(&repo_dir)?;
-    repo.config()?.set_str("user.name", "Kingfisher Test")?;
-    repo.config()?.set_str("user.email", "kingfisher@example.invalid")?;
-    let signature = Signature::now("Kingfisher Test", "kingfisher@example.invalid")?;
-    let empty_tree = repo.find_tree(repo.treebuilder(None)?.write()?)?;
-    repo.commit(Some("HEAD"), &signature, &signature, "initial", &empty_tree, &[])?;
+    let repo = gix::init(&repo_dir)?;
+    fixture::config(&repo, "user.name", "Kingfisher Test")?;
+    fixture::config(&repo, "user.email", "kingfisher@example.invalid")?;
+    let signature = fixture::signature("Kingfisher Test", "kingfisher@example.invalid");
+    let empty_tree = repo.empty_tree().edit()?.write()?.detach();
+    fixture::commit(&repo, Some("HEAD"), &signature, &signature, "initial", &empty_tree, &[])?;
     fs::write(repo_dir.join("secret.txt"), GITHUB_TOKEN_LINE)?;
     {
-        let mut index = repo.index()?;
-        index.add_path(Path::new("secret.txt"))?;
-        index.write()?;
+        let mut index = fixture::index(&repo)?;
+        fixture::stage(&repo, &mut index, Path::new("secret.txt"))?;
+        index.write(Default::default())?;
     }
     Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
         .arg("scan")
@@ -53,24 +55,207 @@ fn staged_scan_uses_git_executable_override() -> Result<()> {
         .code(200)
         .stdout(contains(GITHUB_TOKEN_VALUE));
 
+    for executable in
+        [None, Some(temp.path().join("missing git.exe")), Some(std::env::current_exe()?)]
+    {
+        let mut command = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"));
+        command
+            .arg("scan")
+            .arg(&repo_dir)
+            .args(["--staged", "--no-validate", "--no-update-check", "--format", "toon"])
+            .env("PATH", temp.path().join("missing executables"));
+        if let Some(executable) = executable {
+            command.env("KF_GIT_BINARY", executable);
+        } else {
+            command.env_remove("KF_GIT_BINARY");
+        }
+        command.assert().code(200).stdout(contains(GITHUB_TOKEN_VALUE));
+    }
+    Ok(())
+}
+
+#[test]
+fn staged_scan_path_filters_use_index_content() -> Result<()> {
+    let temp = tempdir()?;
+    let repo_dir = temp.path().join("repository with spaces");
+    let repo = gix::init(&repo_dir)?;
+    let signature = fixture::signature("tester", "tester@example.com");
+    let empty_tree = repo.empty_tree().edit()?.write()?.detach();
+    fixture::commit(&repo, Some("HEAD"), &signature, &signature, "initial", &empty_tree, &[])?;
+    let selected = "staged_A1b2C3d4E5f6G7h8";
+    let skipped = "staged_J1k2L3m4N5o6P7q8";
+    let selected_path = "selected/秘密 !.env";
+    let mut index = fixture::index(&repo)?;
+    for name in [
+        selected_path,
+        "selected/skipped/key.env",
+        "selected/excluded.env",
+        "selected/key.bin",
+        "outside.env",
+    ] {
+        let path = repo_dir.join(name);
+        fs::create_dir_all(path.parent().unwrap())?;
+        fs::write(path, if name == selected_path { selected } else { skipped })?;
+        fixture::stage(&repo, &mut index, Path::new(name))?;
+    }
+    index.write(Default::default())?;
+    fs::write(repo_dir.join(selected_path), skipped)?;
+    fs::write(repo_dir.join("selected/untracked.env"), skipped)?;
+    let rules = temp.path().join("rules.yml");
+    fs::write(
+        &rules,
+        "rules:\n  - id: acme.staged-regression\n    name: Staged regression fixture\n    pattern: '(staged_[A-Za-z0-9]{16})'\n    min_entropy: 0\n    confidence: high\n",
+    )?;
+    let output = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+        .arg("scan")
+        .arg(&repo_dir)
+        .arg("--rules-path")
+        .arg(&rules)
+        .args([
+            "--staged",
+            "--load-builtins=false",
+            "--no-validate",
+            "--no-update-check",
+            "--format",
+            "json",
+            "--path-prefix",
+            "selected/",
+            "--skip-path-prefix",
+            "selected/skipped/",
+            "--file-extension",
+            "env",
+            "--exclude",
+            "**/excluded.env",
+        ])
+        .assert()
+        .code(200)
+        .get_output()
+        .stdout
+        .clone();
+    let reports = serde_json::Deserializer::from_slice(&output)
+        .into_iter::<serde_json::Value>()
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let findings: Vec<_> =
+        reports.iter().filter_map(|report| report["findings"].as_array()).flatten().collect();
+    assert_eq!(findings.len(), 1, "only the selected indexed file is scanned");
+    assert_eq!(findings[0]["finding"]["snippet"], selected);
+    assert_eq!(findings[0]["finding"]["path"], selected_path);
+    Ok(())
+}
+
+#[test]
+fn staged_scan_uses_linked_worktree_index_and_head() -> Result<()> {
+    let temp = tempdir()?;
+    let main_dir = temp.path().join("main repository");
+    let linked_dir = temp.path().join("linked worktree");
+    let repo = gix::init(&main_dir)?;
+    let signature = fixture::signature("tester", "tester@example.com");
+    let empty = repo.empty_tree().edit()?.write()?.detach();
+    let main_head =
+        fixture::commit(&repo, Some("HEAD"), &signature, &signature, "main", &empty, &[])?;
+    let old_secret = repo.write_blob(GCP_API_KEY_LINE)?.detach();
+    let mut tree = repo.empty_tree().edit()?;
+    fixture::insert(&mut tree, "committed.txt", old_secret, 0o100644)?;
+    let linked_tree = tree.write()?.detach();
+    fixture::commit(
+        &repo,
+        Some("refs/heads/linked"),
+        &signature,
+        &signature,
+        "linked",
+        &linked_tree,
+        &[&main_head],
+    )?;
+    fs::write(main_dir.join("main.txt"), SLACK_TOKEN_LINE)?;
+    let mut main_index = fixture::index(&repo)?;
+    fixture::stage(&repo, &mut main_index, Path::new("main.txt"))?;
+    main_index.write(Default::default())?;
+
+    // These are the standard linked-worktree control files. Objects, refs and
+    // indexes are still created by gix; no fixture subprocess is necessary.
+    let admin = repo.git_dir().join("worktrees").join("linked");
+    fs::create_dir_all(&admin)?;
+    fs::create_dir_all(&linked_dir)?;
+    let git_path = |path: &Path| path.to_string_lossy().replace('\\', "/");
+    fs::write(linked_dir.join(".git"), format!("gitdir: {}\n", git_path(&admin)))?;
+    fs::write(admin.join("commondir"), "../..\n")?;
+    fs::write(admin.join("gitdir"), format!("{}\n", git_path(&linked_dir.join(".git"))))?;
+    fs::write(admin.join("HEAD"), "ref: refs/heads/linked\n")?;
+    let linked = gix::open(&linked_dir)?;
+    let mut index = linked.index_from_tree(&linked_tree)?;
+    fs::write(linked_dir.join("staged.txt"), GITHUB_TOKEN_LINE)?;
+    fixture::stage(&linked, &mut index, Path::new("staged.txt"))?;
+    index.write(Default::default())?;
+    fs::write(linked_dir.join("staged.txt"), b"unstaged worktree content")?;
+
     Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+        .arg("scan")
+        .arg(&linked_dir)
+        .args(["--staged", "--no-validate", "--no-update-check", "--format", "toon"])
+        .assert()
+        .code(200)
+        .stdout(
+            contains(GITHUB_TOKEN_VALUE)
+                .and(contains(GCP_API_KEY_VALUE).not())
+                .and(contains(SLACK_TOKEN_VALUE).not()),
+        );
+    assert_eq!(repo.head_id()?.detach(), main_head);
+    Ok(())
+}
+
+#[test]
+fn staged_scan_supports_unborn_head_and_alternate_index() -> Result<()> {
+    let temp = tempdir()?;
+    let repo_dir = temp.path().join("unborn repository");
+    let repo = gix::init(&repo_dir)?;
+    let head = fs::read(repo.git_dir().join("HEAD"))?;
+    let mut empty_command = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"));
+    empty_command
         .arg("scan")
         .arg(&repo_dir)
         .args(["--staged", "--no-validate", "--no-update-check", "--format", "toon"])
         .env("KF_GIT_BINARY", temp.path().join("missing git.exe"))
-        .assert()
-        .stderr(contains("KF_GIT_BINARY"));
+        .env("PATH", temp.path().join("missing executables"))
+        .env("GIT_CONFIG_GLOBAL", temp.path().join("no global gitconfig"))
+        .env("GIT_CONFIG_NOSYSTEM", "1");
+    for name in [
+        "GIT_AUTHOR_NAME",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_DATE",
+        "GIT_COMMITTER_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_DATE",
+        "EMAIL",
+        "GIT_INDEX_FILE",
+    ] {
+        empty_command.env_remove(name);
+    }
+    empty_command.assert().code(0);
+    assert!(!repo.index_path().exists(), "a missing index is not synthesized from HEAD or saved");
 
-    // A real executable that rejects Git arguments reports a nonzero child exit.
-    // Some emulator/interpreter failures use this path even for a missing binary.
-    Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+    let alternate_path = repo_dir.join("alternate.index");
+    let mut alternate = fixture::index(&repo)?;
+    alternate.set_path(&alternate_path);
+    fs::write(repo_dir.join("staged.txt"), GITHUB_TOKEN_LINE)?;
+    fixture::stage(&repo, &mut alternate, Path::new("staged.txt"))?;
+    alternate.write(Default::default())?;
+    let before = fs::read(&alternate_path)?;
+    fs::write(repo_dir.join("staged.txt"), SLACK_TOKEN_LINE)?;
+    let mut command = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"));
+    command
         .arg("scan")
         .arg(&repo_dir)
         .args(["--staged", "--no-validate", "--no-update-check", "--format", "toon"])
-        .env("KF_GIT_BINARY", std::env::current_exe()?)
+        .env("GIT_INDEX_FILE", "alternate.index")
+        .env("KF_GIT_BINARY", temp.path().join("missing git.exe"))
+        .env("PATH", temp.path().join("missing executables"));
+    command
         .assert()
-        .stdout(contains("scan_partial: 1"))
-        .stderr(contains("Git command failed").and(contains("KF_GIT_BINARY")));
+        .code(200)
+        .stdout(contains(GITHUB_TOKEN_VALUE).and(contains(SLACK_TOKEN_VALUE).not()));
+    assert_eq!(fs::read(&alternate_path)?, before);
+    assert_eq!(fs::read(repo.git_dir().join("HEAD"))?, head);
+    assert!(repo.head()?.is_unborn());
     Ok(())
 }
 
@@ -78,8 +263,8 @@ fn staged_scan_uses_git_executable_override() -> Result<()> {
 fn scan_by_commit_and_branch_diff() -> anyhow::Result<()> {
     let dir = tempdir()?;
     let repo_dir = dir.path().join("repo");
-    let repo = Repository::init(&repo_dir)?;
-    let signature = Signature::now("tester", "tester@exmple.com")?;
+    let repo = gix::init(&repo_dir)?;
+    let signature = fixture::signature("tester", "tester@exmple.com");
 
     // Commit an initial config file packed with known test secrets. We'll scan
     // this commit directly via `--branch <commit-hash>` in the first assertion.
@@ -92,28 +277,40 @@ GOOGLE_API_KEY = 'AIzaSyBUPHAjZl3n8Eza66ka6B78iVyPteC5MgM'
     fs::create_dir_all(config_path.parent().unwrap())?;
     fs::write(&config_path, config_contents)?;
 
-    let mut index = repo.index()?;
-    index.add_path(Path::new("config.py"))?;
-    let tree_id = index.write_tree()?;
-    let tree = repo.find_tree(tree_id)?;
+    let mut index = fixture::index(&repo)?;
+    fixture::stage(&repo, &mut index, Path::new("config.py"))?;
+    let tree_id = fixture::write_tree(&repo, &index)?;
+    let tree = tree_id;
     let initial_commit_id =
-        repo.commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[])?;
-    let initial_commit = repo.find_commit(initial_commit_id)?;
+        fixture::commit(&repo, Some("HEAD"), &signature, &signature, "initial", &tree, &[])?;
+    let initial_commit = initial_commit_id;
     let initial_commit_hex = initial_commit_id.to_string();
 
     // Create a "main" branch pointing at the initial commit to mirror the
     // documented example, but keep the default branch checkout untouched. Some
     // Git installations already default to `main`, so only create the branch
     // if it does not exist yet.
-    if repo.find_branch("main", BranchType::Local).is_err() {
-        repo.branch("main", &initial_commit, false)?;
+    if repo.find_reference("refs/heads/main").is_err() {
+        fixture::reference(
+            &repo,
+            &format!("refs/heads/{}", "main"),
+            initial_commit,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "branch",
+        )?;
     }
 
     // Create a feature branch that introduces a new secret file. The diff based
     // scan later on should report only this file when paired with --since-commit.
-    repo.branch("feature-1", &initial_commit, true)?;
-    repo.set_head("refs/heads/feature-1")?;
-    repo.checkout_head(Some(CheckoutBuilder::new().force()))?;
+    fixture::reference(
+        &repo,
+        &format!("refs/heads/{}", "feature-1"),
+        initial_commit,
+        gix::refs::transaction::PreviousValue::Any,
+        "branch",
+    )?;
+    fixture::set_head(&repo, "refs/heads/feature-1")?;
+    // Both branches have the same tree; switching HEAD needs no checkout.
 
     let canary_path = repo_dir.join("canary-token");
     let canary_contents = r"[default]
@@ -122,13 +319,14 @@ aws_secret_access_key = efnegoUp/WXc3XwlL77dXu1aKIICzvz+n+7Sz88i
 ";
     fs::write(&canary_path, canary_contents)?;
 
-    let mut index = repo.index()?;
-    index.add_path(Path::new("config.py"))?;
-    index.add_path(Path::new("canary-token"))?;
-    let tree_id = index.write_tree()?;
-    let tree = repo.find_tree(tree_id)?;
-    let parent_commit = repo.head()?.peel_to_commit()?;
-    repo.commit(
+    let mut index = fixture::index(&repo)?;
+    fixture::stage(&repo, &mut index, Path::new("config.py"))?;
+    fixture::stage(&repo, &mut index, Path::new("canary-token"))?;
+    let tree_id = fixture::write_tree(&repo, &index)?;
+    let tree = tree_id;
+    let parent_commit = repo.head_id()?.detach();
+    fixture::commit(
+        &repo,
         Some("HEAD"),
         &signature,
         &signature,
@@ -181,24 +379,24 @@ aws_secret_access_key = efnegoUp/WXc3XwlL77dXu1aKIICzvz+n+7Sz88i
 
 /// Create a repository with five commits appending synthetic secrets to one file.
 /// Return the repository directory and commit IDs from oldest to newest.
-fn setup_linear_repo_with_secrets() -> Result<(TempDir, std::path::PathBuf, Vec<git2::Oid>)> {
+fn setup_linear_repo_with_secrets() -> Result<(TempDir, std::path::PathBuf, Vec<gix::ObjectId>)> {
     let dir = tempdir()?;
     let repo_dir = dir.path().join("repo");
-    let repo = Repository::init(&repo_dir)?;
-    let sig = Signature::now("tester", "tester@exmple.com")?;
+    let repo = gix::init(&repo_dir)?;
+    let sig = fixture::signature("tester", "tester@exmple.com");
 
     let secrets_path = repo_dir.join("secrets.txt");
 
     // Commit #1 — GitHub
     fs::write(&secrets_path, GITHUB_TOKEN_LINE)?;
-    let mut index = repo.index()?;
-    index.add_path(Path::new("secrets.txt"))?;
-    let tree_id = index.write_tree()?;
-    let tree = repo.find_tree(tree_id)?;
+    let mut index = fixture::index(&repo)?;
+    fixture::stage(&repo, &mut index, Path::new("secrets.txt"))?;
+    let tree_id = fixture::write_tree(&repo, &index)?;
+    let tree = tree_id;
     let mut commits = Vec::new();
-    let c1 = repo.commit(Some("HEAD"), &sig, &sig, "Add GitHub token", &tree, &[])?;
+    let c1 = fixture::commit(&repo, Some("HEAD"), &sig, &sig, "Add GitHub token", &tree, &[])?;
     commits.push(c1);
-    let mut parent_commit = repo.find_commit(c1)?;
+    let mut parent_commit = c1;
     let mut contents = String::from(GITHUB_TOKEN_LINE);
 
     // Append one provider-specific secret per commit.
@@ -213,17 +411,24 @@ fn setup_linear_repo_with_secrets() -> Result<(TempDir, std::path::PathBuf, Vec<
         contents.push_str(line);
         fs::write(&secrets_path, &contents)?;
 
-        let mut index = repo.index()?;
-        index.add_path(Path::new("secrets.txt"))?;
-        let tree_id = index.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        let oid = repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent_commit])?;
+        let mut index = fixture::index(&repo)?;
+        fixture::stage(&repo, &mut index, Path::new("secrets.txt"))?;
+        let tree_id = fixture::write_tree(&repo, &index)?;
+        let tree = tree_id;
+        let oid =
+            fixture::commit(&repo, Some("HEAD"), &sig, &sig, message, &tree, &[&parent_commit])?;
         commits.push(oid);
-        parent_commit = repo.find_commit(oid)?;
+        parent_commit = oid;
     }
 
     // Create a named branch to mirror long-lived branch workflows.
-    repo.branch("long-lived", &parent_commit, true)?;
+    fixture::reference(
+        &repo,
+        &format!("refs/heads/{}", "long-lived"),
+        parent_commit,
+        gix::refs::transaction::PreviousValue::Any,
+        "branch",
+    )?;
 
     Ok((dir, repo_dir, commits))
 }
@@ -323,34 +528,37 @@ fn scan_branch_tip_with_branch_root_commit() -> Result<()> {
 fn scan_branch_history_finds_deleted_secrets_only_in_reachable_commits() -> Result<()> {
     let dir = tempdir()?;
     let repo_dir = dir.path().join("repo");
-    let repo = Repository::init(&repo_dir)?;
-    let sig = Signature::now("tester", "tester@example.com")?;
-    let mut index = repo.index()?;
-    index.clear()?;
-    let empty_tree = repo.find_tree(index.write_tree()?)?;
-    let root_id = repo.commit(Some("HEAD"), &sig, &sig, "root", &empty_tree, &[])?;
-    let root = repo.find_commit(root_id)?;
+    let repo = gix::init(&repo_dir)?;
+    let sig = fixture::signature("tester", "tester@example.com");
+    let mut index = fixture::index(&repo)?;
+    index.remove_entries(|_, _, _| true);
+    let empty_tree = fixture::write_tree(&repo, &index)?;
+    let root_id = fixture::commit(&repo, Some("HEAD"), &sig, &sig, "root", &empty_tree, &[])?;
+    let root = root_id;
 
     // The checked-out branch stays clean. The selected branch introduces a secret,
     // then removes the file entirely.
     fs::write(repo_dir.join("deleted.txt"), GITHUB_TOKEN_LINE)?;
-    index.add_path(Path::new("deleted.txt"))?;
-    let secret_tree = repo.find_tree(index.write_tree()?)?;
-    let secret_id = repo.commit(None, &sig, &sig, "secret", &secret_tree, &[&root])?;
-    let secret = repo.find_commit(secret_id)?;
-    let removed_id = repo.commit(None, &sig, &sig, "remove secret", &empty_tree, &[&secret])?;
-    let removed = repo.find_commit(removed_id)?;
+    fixture::stage(&repo, &mut index, Path::new("deleted.txt"))?;
+    let secret_tree = fixture::write_tree(&repo, &index)?;
+    let secret_id = fixture::commit(&repo, None, &sig, &sig, "secret", &secret_tree, &[&root])?;
+    let secret = secret_id;
+    let removed_id =
+        fixture::commit(&repo, None, &sig, &sig, "remove secret", &empty_tree, &[&secret])?;
+    let removed = removed_id;
 
     // A merged side branch also deletes its secret before the merge. Traversing
     // only first parents would miss it.
     fs::write(repo_dir.join("deleted.txt"), GCP_API_KEY_LINE)?;
-    index.add_path(Path::new("deleted.txt"))?;
-    let side_tree = repo.find_tree(index.write_tree()?)?;
-    let side_id = repo.commit(None, &sig, &sig, "side secret", &side_tree, &[&root])?;
-    let side = repo.find_commit(side_id)?;
-    let side_removed_id = repo.commit(None, &sig, &sig, "remove side", &empty_tree, &[&side])?;
-    let side_removed = repo.find_commit(side_removed_id)?;
-    let merge_id = repo.commit(
+    fixture::stage(&repo, &mut index, Path::new("deleted.txt"))?;
+    let side_tree = fixture::write_tree(&repo, &index)?;
+    let side_id = fixture::commit(&repo, None, &sig, &sig, "side secret", &side_tree, &[&root])?;
+    let side = side_id;
+    let side_removed_id =
+        fixture::commit(&repo, None, &sig, &sig, "remove side", &empty_tree, &[&side])?;
+    let side_removed = side_removed_id;
+    let merge_id = fixture::commit(
+        &repo,
         Some("refs/heads/selected"),
         &sig,
         &sig,
@@ -361,12 +569,41 @@ fn scan_branch_history_finds_deleted_secrets_only_in_reachable_commits() -> Resu
 
     // Neither an unrelated branch nor the working tree belongs to this scan.
     fs::write(repo_dir.join("deleted.txt"), SLACK_TOKEN_LINE)?;
-    index.add_path(Path::new("deleted.txt"))?;
-    let unrelated_tree = repo.find_tree(index.write_tree()?)?;
-    repo.commit(Some("refs/heads/unrelated"), &sig, &sig, "unrelated", &unrelated_tree, &[&root])?;
+    fixture::stage(&repo, &mut index, Path::new("deleted.txt"))?;
+    let unrelated_tree = fixture::write_tree(&repo, &index)?;
+    fixture::commit(
+        &repo,
+        Some("refs/heads/unrelated"),
+        &sig,
+        &sig,
+        "unrelated",
+        &unrelated_tree,
+        &[&root],
+    )?;
 
     let bare_dir = dir.path().join("bare.git");
-    git2::build::RepoBuilder::new().bare(true).clone(repo_dir.to_str().unwrap(), &bare_dir)?;
+    {
+        use gix::prelude::Write;
+        let bare = gix::init_bare(&bare_dir)?;
+        // Copy this fixture's native object/ref graph, without introducing a
+        // transport feature or an executable requirement just for test setup.
+        for id in repo.objects.iter()? {
+            let object = repo.find_object(id?)?;
+            bare.objects.write_buf(object.kind, &object.data)?;
+        }
+        for reference in repo.references()?.all()? {
+            let reference = reference?;
+            fixture::reference(
+                &bare,
+                std::str::from_utf8(reference.name().as_bstr())?,
+                reference.target().to_owned(),
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "copy fixture",
+            )?;
+        }
+        let head = repo.head_name()?.expect("fixture has a symbolic HEAD");
+        fixture::set_head(&bare, std::str::from_utf8(head.as_bstr())?)?;
+    }
     for path in [&repo_dir, &bare_dir] {
         for extra_args in [
             vec![],
@@ -455,15 +692,16 @@ fn scan_branch_history_finds_deleted_secrets_only_in_reachable_commits() -> Resu
 fn scan_preserves_original_author_separately_from_committer() -> Result<()> {
     let dir = tempdir()?;
     let repo_dir = dir.path().join("repository with spaces");
-    let repo = Repository::init(&repo_dir)?;
-    let author = Signature::now("Original Author", "author@example.invalid")?;
-    let committer = Signature::now("Commit Bot", "bot@example.invalid")?;
+    let repo = gix::init(&repo_dir)?;
+    let author = fixture::signature("Original Author", "author@example.invalid");
+    let committer = fixture::signature("Commit Bot", "bot@example.invalid");
     fs::write(repo_dir.join("config.py"), GITHUB_TOKEN_LINE)?;
-    let mut index = repo.index()?;
-    index.add_path(Path::new("config.py"))?;
-    let tree_id = index.write_tree()?;
-    let tree = repo.find_tree(tree_id)?;
-    let commit_id = repo.commit(Some("HEAD"), &author, &committer, "fixture", &tree, &[])?;
+    let mut index = fixture::index(&repo)?;
+    fixture::stage(&repo, &mut index, Path::new("config.py"))?;
+    let tree_id = fixture::write_tree(&repo, &index)?;
+    let tree = tree_id;
+    let commit_id =
+        fixture::commit(&repo, Some("HEAD"), &author, &committer, "fixture", &tree, &[])?;
     let commit_id = commit_id.to_string();
 
     // Retain both the working-tree and historical occurrences so the test inspects
@@ -555,40 +793,59 @@ fn remote_branch_scans_use_narrow_caches_separate_from_full_clones() -> Result<(
         fs::read_dir(cache.join(".branch-clones"))?.collect::<std::io::Result<_>>()?;
     assert_eq!(selected.len(), 1, "equivalent selectors should reuse one narrow cache");
     {
-        let clone = Repository::open_bare(selected[0].path())?;
+        let clone = gix::open(selected[0].path())?;
         let branches: Vec<_> =
-            clone.branches(Some(BranchType::Local))?.collect::<Result<Vec<_>, _>>()?;
+            clone.references()?.local_branches()?.collect::<Result<Vec<_>, _>>()?;
         assert_eq!(branches.len(), 1);
-        assert_eq!(clone.head()?.target(), commits.last().copied());
+        assert_eq!(Some(clone.head_id()?.detach()), commits.last().copied());
         for commit in &commits {
             assert!(clone.find_commit(*commit).is_ok());
         }
     }
     // A subsequent unrestricted scan must get its own complete clone.
     run(&[]);
-    let full = Repository::open_bare(cache.join(url.replace(['/', ':'], "_")))?;
-    assert!(full.branches(Some(BranchType::Local))?.count() >= 2);
+    let full = gix::open(cache.join(url.replace(['/', ':'], "_")))?;
+    assert!(full.references()?.local_branches()?.count() >= 2);
     Ok(())
 }
 
 #[test]
 fn since_commit_excludes_baseline_ancestry_and_keeps_intermediate_changes() -> Result<()> {
     let temp = tempdir()?;
-    let repo = Repository::init_bare(temp.path())?;
-    let sig = Signature::now("tester", "tester@example.com")?;
-    let mut builder = repo.treebuilder(None)?;
-    builder.insert("baseline.txt", repo.blob(GCP_API_KEY_LINE.as_bytes())?, 0o100644)?;
-    let baseline_tree = repo.find_tree(builder.write()?)?;
-    let root_id = repo.commit(None, &sig, &sig, "root", &baseline_tree, &[])?;
-    let root = repo.find_commit(root_id)?;
+    let repo = gix::init_bare(temp.path())?;
+    let sig = fixture::signature("tester", "tester@example.com");
+    let mut builder = repo.empty_tree().edit()?;
+    fixture::insert(
+        &mut builder,
+        "baseline.txt",
+        repo.write_blob(GCP_API_KEY_LINE.as_bytes()).map(gix::Id::detach)?,
+        0o100644,
+    )?;
+    let baseline_tree = builder.write()?.detach();
+    let root_id = fixture::commit(&repo, None, &sig, &sig, "root", &baseline_tree, &[])?;
+    let root = root_id;
     // The baseline diverges from HEAD, so excluding only the baseline commit
     // (instead of its ancestry) would report the unchanged GCP secret.
-    repo.commit(Some("refs/heads/baseline"), &sig, &sig, "baseline", &baseline_tree, &[&root])?;
-    builder.insert("temporary.txt", repo.blob(GITHUB_TOKEN_LINE.as_bytes())?, 0o100644)?;
-    let secret_tree = repo.find_tree(builder.write()?)?;
-    let secret_id = repo.commit(None, &sig, &sig, "add secret", &secret_tree, &[&root])?;
-    let secret = repo.find_commit(secret_id)?;
-    repo.commit(
+    fixture::commit(
+        &repo,
+        Some("refs/heads/baseline"),
+        &sig,
+        &sig,
+        "baseline",
+        &baseline_tree,
+        &[&root],
+    )?;
+    fixture::insert(
+        &mut builder,
+        "temporary.txt",
+        repo.write_blob(GITHUB_TOKEN_LINE.as_bytes()).map(gix::Id::detach)?,
+        0o100644,
+    )?;
+    let secret_tree = builder.write()?.detach();
+    let secret_id = fixture::commit(&repo, None, &sig, &sig, "add secret", &secret_tree, &[&root])?;
+    let secret = secret_id;
+    fixture::commit(
+        &repo,
         Some("refs/heads/selected"),
         &sig,
         &sig,
@@ -596,13 +853,13 @@ fn since_commit_excludes_baseline_ancestry_and_keeps_intermediate_changes() -> R
         &baseline_tree,
         &[&secret],
     )?;
-    repo.set_head("refs/heads/selected")?;
-    repo.tag(
+    fixture::set_head(&repo, "refs/heads/selected")?;
+    fixture::tag(
+        &repo,
         "baseline-tag",
-        repo.find_reference("refs/heads/baseline")?.peel_to_commit()?.as_object(),
+        repo.find_reference("refs/heads/baseline")?.id().detach(),
         &sig,
         "baseline",
-        false,
     )?;
 
     for baseline in ["baseline", "baseline-tag", &root_id.to_string()] {
@@ -646,21 +903,40 @@ fn since_commit_excludes_baseline_ancestry_and_keeps_intermediate_changes() -> R
 #[test]
 fn since_commit_without_branch_scans_all_refs() -> Result<()> {
     let temp = tempdir()?;
-    let repo = Repository::init_bare(temp.path())?;
-    let sig = Signature::now("tester", "tester@example.com")?;
-    let mut builder = repo.treebuilder(None)?;
-    builder.insert("baseline.txt", repo.blob(GCP_API_KEY_LINE.as_bytes())?, 0o100644)?;
-    let baseline_tree = repo.find_tree(builder.write()?)?;
-    let baseline_id =
-        repo.commit(Some("refs/heads/main"), &sig, &sig, "baseline", &baseline_tree, &[])?;
-    let baseline = repo.find_commit(baseline_id)?;
-    repo.set_head("refs/heads/main")?;
-    builder.insert("secret.txt", repo.blob(GITHUB_TOKEN_LINE.as_bytes())?, 0o100644)?;
-    let secret_tree = repo.find_tree(builder.write()?)?;
-    let secret_id = repo.commit(None, &sig, &sig, "add secret", &secret_tree, &[&baseline])?;
-    let secret = repo.find_commit(secret_id)?;
+    let repo = gix::init_bare(temp.path())?;
+    let sig = fixture::signature("tester", "tester@example.com");
+    let mut builder = repo.empty_tree().edit()?;
+    fixture::insert(
+        &mut builder,
+        "baseline.txt",
+        repo.write_blob(GCP_API_KEY_LINE.as_bytes()).map(gix::Id::detach)?,
+        0o100644,
+    )?;
+    let baseline_tree = builder.write()?.detach();
+    let baseline_id = fixture::commit(
+        &repo,
+        Some("refs/heads/main"),
+        &sig,
+        &sig,
+        "baseline",
+        &baseline_tree,
+        &[],
+    )?;
+    let baseline = baseline_id;
+    fixture::set_head(&repo, "refs/heads/main")?;
+    fixture::insert(
+        &mut builder,
+        "secret.txt",
+        repo.write_blob(GITHUB_TOKEN_LINE.as_bytes()).map(gix::Id::detach)?,
+        0o100644,
+    )?;
+    let secret_tree = builder.write()?.detach();
+    let secret_id =
+        fixture::commit(&repo, None, &sig, &sig, "add secret", &secret_tree, &[&baseline])?;
+    let secret = secret_id;
     // No local branch reaches this history, and the secret is gone at its tip.
-    repo.commit(
+    fixture::commit(
+        &repo,
         Some("refs/remotes/origin/feature"),
         &sig,
         &sig,
@@ -717,23 +993,48 @@ fn since_commit_without_branch_scans_all_refs() -> Result<()> {
 fn since_hours_scans_remote_history_with_one_window_for_all_repositories() -> Result<()> {
     let temp = tempdir()?;
     let now = chrono::Utc::now().timestamp();
-    let old = Signature::new("tester", "tester@example.com", &git2::Time::new(now - 172800, 0))?;
-    let recent = Signature::new("tester", "tester@example.com", &git2::Time::new(now - 3600, 0))?;
+    let old = gix::actor::Signature {
+        time: gix::date::Time::new(now - 172800, 0),
+        ..fixture::signature("tester", "tester@example.com")
+    };
+    let recent = gix::actor::Signature {
+        time: gix::date::Time::new(now - 3600, 0),
+        ..fixture::signature("tester", "tester@example.com")
+    };
     let paths = [temp.path().join("first.git"), temp.path().join("second.git")];
     for path in &paths {
-        let repo = Repository::init_bare(path)?;
-        let mut builder = repo.treebuilder(None)?;
-        builder.insert("baseline.txt", repo.blob(GCP_API_KEY_LINE.as_bytes())?, 0o100644)?;
-        let baseline_tree = repo.find_tree(builder.write()?)?;
-        let baseline_id =
-            repo.commit(Some("refs/heads/main"), &recent, &old, "old", &baseline_tree, &[])?;
-        let baseline = repo.find_commit(baseline_id)?;
-        repo.set_head("refs/heads/main")?;
-        builder.insert("temporary.txt", repo.blob(GITHUB_TOKEN_LINE.as_bytes())?, 0o100644)?;
-        let secret_tree = repo.find_tree(builder.write()?)?;
-        let secret_id = repo.commit(None, &old, &recent, "recent", &secret_tree, &[&baseline])?;
-        let secret = repo.find_commit(secret_id)?;
-        repo.commit(
+        let repo = gix::init_bare(path)?;
+        let mut builder = repo.empty_tree().edit()?;
+        fixture::insert(
+            &mut builder,
+            "baseline.txt",
+            repo.write_blob(GCP_API_KEY_LINE.as_bytes()).map(gix::Id::detach)?,
+            0o100644,
+        )?;
+        let baseline_tree = builder.write()?.detach();
+        let baseline_id = fixture::commit(
+            &repo,
+            Some("refs/heads/main"),
+            &recent,
+            &old,
+            "old",
+            &baseline_tree,
+            &[],
+        )?;
+        let baseline = baseline_id;
+        fixture::set_head(&repo, "refs/heads/main")?;
+        fixture::insert(
+            &mut builder,
+            "temporary.txt",
+            repo.write_blob(GITHUB_TOKEN_LINE.as_bytes()).map(gix::Id::detach)?,
+            0o100644,
+        )?;
+        let secret_tree = builder.write()?.detach();
+        let secret_id =
+            fixture::commit(&repo, None, &old, &recent, "recent", &secret_tree, &[&baseline])?;
+        let secret = secret_id;
+        fixture::commit(
+            &repo,
             Some("refs/remotes/origin/feature"),
             &recent,
             &old,

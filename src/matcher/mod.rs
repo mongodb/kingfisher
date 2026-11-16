@@ -1274,7 +1274,6 @@ fn maybe_apply_markup_context_gate<'a>(
 mod test {
     use std::{collections::BTreeMap, path::PathBuf};
 
-    use pretty_assertions::assert_eq;
     // ---------------------------------------------------------------------
     // proptest: raw-match dedup + entropy gate
     // ---------------------------------------------------------------------

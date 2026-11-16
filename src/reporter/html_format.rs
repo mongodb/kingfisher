@@ -931,6 +931,7 @@ mod tests {
                 blast_radius_command: Some(
                     "kingfisher blast-radius --rule custom.test 'example'".to_string(),
                 ),
+                source_region: Default::default(),
             },
         }
     }

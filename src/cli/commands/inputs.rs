@@ -29,11 +29,12 @@ const DEFAULT_POSTMAN_API_URL: &str = "https://api.getpostman.com/";
 // -----------------------------------------------------------------------------
 #[derive(Args, Debug, Clone)]
 pub struct InputSpecifierArgs {
-    /// Scan this file, directory, or local Git repository
+    /// Scan a file, directory, local Git repository, or HTTP(S)/SSH repository URL
     #[arg(num_args = 0.., value_hint = ValueHint::AnyPath)]
     pub path_inputs: Vec<PathBuf>,
 
-    /// Deprecated: clone and scan a Git repository URL. Prefer positional targets: `kingfisher scan github.com/org/repo`
+    /// Deprecated: clone an HTTP(S) or SSH repository URL. Prefer positional targets.
+    /// SSH accepts ssh:// or git@host:path and requires OpenSSH with configured keys/agent.
     #[arg(long = "git-url", value_hint = ValueHint::Url)]
     pub git_url: Vec<GitUrl>,
 

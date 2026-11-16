@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write,
+    path::PathBuf,
     sync::{Arc, Mutex},
 };
 
@@ -829,6 +830,17 @@ impl DetailsReporter {
             .or_else(|| self.git_object_fallback_path(rm))
             .unwrap_or_else(|| format!("blob:{}", rm.blob_metadata.id.hex()));
 
+        // Only a match read directly from a plain file can be mapped back to its source line;
+        // decoded (base64), git-history, and extracted-archive content cannot.
+        let local_file = if rm.m.is_base64 {
+            None
+        } else {
+            rm.origin.iter().find_map(|origin| match origin {
+                Origin::File(e) => Some(e.path.as_ref().clone()),
+                _ => None,
+            })
+        };
+
         // Generate validate/revoke/blast-radius commands only if not redacting (they contain the secret)
         let (validate_command, revoke_command, blast_radius_command) = if args.redact
             || !rm.m.ambiguous_dependencies.is_empty()
@@ -998,6 +1010,11 @@ impl DetailsReporter {
                 validate_command,
                 revoke_command,
                 blast_radius_command,
+                source_region: SourceRegionHint {
+                    line_end: source_span.end.line as u32,
+                    local_file,
+                    matched_value: raw_snippet,
+                },
             },
         }
     }
@@ -1629,6 +1646,25 @@ pub struct FindingRecordData {
     pub revoke_command: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blast_radius_command: Option<String>,
+    /// Extra location details used only by the SARIF writer; never serialized, so the
+    /// JSON/TOON/BSON wire formats are unchanged.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub source_region: SourceRegionHint,
+}
+
+/// Location details that SARIF needs but the 2.x wire formats do not carry.
+#[derive(Clone, Debug, Default)]
+pub struct SourceRegionHint {
+    /// 1-based line on which the match ends (`column_end` is on this line).
+    /// Zero means "same as `line`".
+    pub line_end: u32,
+    /// A plain on-disk file holding the scanned bytes, when the finding came straight
+    /// from one. SARIF uses it to convert byte columns to UTF-16 code units.
+    pub local_file: Option<PathBuf>,
+    /// The reported (unredacted) value, used to confirm `local_file` still holds the
+    /// scanned bytes before trusting it.
+    pub matched_value: String,
 }
 
 impl From<finding_data::FindingDataEntry> for ReportMatch {
@@ -1662,6 +1698,8 @@ impl From<finding_data::FindingDataEntry> for ReportMatch {
 
 #[cfg(test)]
 mod tests {
+    use crate::git_test_fixture as fixture;
+
     use super::*;
     use crate::{
         blob::{BlobId, BlobMetadata},
@@ -2556,8 +2594,8 @@ mod tests {
     fn repository_metadata_without_commits_omits_remote_credentials() {
         let directory = tempdir().unwrap();
         let repo_path = directory.path().join("repository.git");
-        let repo = git2::Repository::init_bare(&repo_path).unwrap();
-        repo.remote("origin", "https://clone-user:synthetic-token@gitlab.example.com/acme/repo.git?token=synthetic-query#synthetic-fragment").unwrap();
+        let repo = gix::init_bare(&repo_path).unwrap();
+        fixture::origin(&repo, "https://clone-user:synthetic-token@gitlab.example.com/acme/repo.git?token=synthetic-query#synthetic-fragment").unwrap();
         drop(repo);
         let reporter = DetailsReporter {
             datastore: Arc::new(Mutex::new(findings_store::FindingsStore::new(
@@ -2583,7 +2621,7 @@ mod tests {
     fn repository_metadata_does_not_invent_urls_for_local_repositories() {
         let directory = tempdir().unwrap();
         let repo_path = directory.path().join("repository.git");
-        let repo = git2::Repository::init_bare(&repo_path).unwrap();
+        let repo = gix::init_bare(&repo_path).unwrap();
         let reporter = DetailsReporter {
             datastore: Arc::new(Mutex::new(findings_store::FindingsStore::new(
                 directory.path().to_path_buf(),
@@ -2602,7 +2640,7 @@ mod tests {
             Some(Url::from_directory_path(directory.path()).unwrap().to_string()),
         ] {
             if let Some(remote) = remote {
-                repo.remote("origin", &remote).unwrap();
+                fixture::origin(&repo, &remote).unwrap();
             }
             let origin =
                 GitRepoOrigin { repo_path: Arc::new(repo_path.clone()), first_commit: None };
@@ -2627,9 +2665,11 @@ mod tests {
             assert!(metadata["file"].get("url").is_none());
             assert_eq!(metadata["file"]["path"], "secret.txt");
             assert_eq!(metadata["commit"]["id"], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-            if repo.find_remote("origin").is_ok() {
-                repo.remote_delete("origin").unwrap();
-            }
+            let mut config = repo
+                .config_file_mut(repo.config_path(gix::config::Source::Local).unwrap())
+                .unwrap();
+            config.remove_section("remote", "origin");
+            config.commit().unwrap();
         }
     }
 

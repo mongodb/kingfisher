@@ -1,13 +1,13 @@
 use crate::{ScanControl, archive::limits::ResourceLimits};
 use std::{
     cell::Cell,
+    collections::BTreeMap,
     fs,
     io::{BufReader, Read, Write},
     path::{Component, Path, PathBuf},
 };
 
 use anyhow::Result;
-use asar::AsarReader;
 use bzip2_rs::DecoderReader;
 use cfb::CompoundFile;
 use flate2::read::{DeflateDecoder, GzDecoder, ZlibDecoder};
@@ -797,6 +797,39 @@ fn handle_asar_archive_in_memory(
     resources: ResourceLimits,
     budget: Option<&ArchiveBudget<'_>>,
 ) -> Result<CompressedContent> {
+    // ASAR members are stored uncompressed and never overlap in a well-formed
+    // archive, so their sizes cannot sum past the payload that follows the index.
+    // Charging against that length bounds aliased offsets (one payload range listed
+    // many times) without truncating legitimate archives of any size.
+    // An invalid layout is reported by the index reader, which checks the declared
+    // header size against its cap first.
+    let payload_len = super::asar::payload_len(buffer).unwrap_or(0);
+    handle_asar_archive_with_total_cap(buffer, archive_path, resources, budget, payload_len as u64)
+}
+
+/// Reports whether any two non-empty members share payload bytes. Members are
+/// slices of `buffer`, so their offsets are recovered from the slice addresses.
+fn asar_members_overlap(buffer: &[u8], members: &BTreeMap<PathBuf, &[u8]>) -> bool {
+    let base = buffer.as_ptr() as usize;
+    let mut ranges: Vec<(usize, usize)> = members
+        .values()
+        .filter(|data| !data.is_empty())
+        .map(|data| {
+            let start = data.as_ptr() as usize - base;
+            (start, start + data.len())
+        })
+        .collect();
+    ranges.sort_unstable();
+    ranges.windows(2).any(|pair| pair[1].0 < pair[0].1)
+}
+
+fn handle_asar_archive_with_total_cap(
+    buffer: &[u8],
+    archive_path: &Path,
+    resources: ResourceLimits,
+    budget: Option<&ArchiveBudget<'_>>,
+    payload_byte_cap: u64,
+) -> Result<CompressedContent> {
     // Per-entry cap: ASAR files have an index listing arbitrary sizes, and
     // a malformed or hostile archive could claim a single multi-GB entry.
     // We cap each entry independently even though the outer buffer is
@@ -804,48 +837,73 @@ fn handle_asar_archive_in_memory(
     // nosemgrep: this is the defensive cap — do not flag for missing-limit rules.
     const MAX_ASAR_ENTRY_BYTES: usize = 512 * 1024 * 1024;
 
-    match AsarReader::new(buffer, None) {
-        Ok(reader) => {
-            let mut contents = Vec::new();
-            let mut total = 0u64;
-            for (index, (path_in_asar, file)) in reader.files().iter().enumerate() {
-                if let Some(budget) = budget {
-                    budget.check_entry(index)?;
-                }
-                let inner_path = path_in_asar.to_string_lossy().replace('\\', "/");
-                if !is_safe_extract_path(Path::new(&inner_path)) {
-                    if budget.is_some() {
-                        anyhow::bail!("archive contains an unsafe ASAR member path");
-                    }
-                    tracing::debug!("unsafe asar path: {inner_path}");
-                    continue;
-                }
-
-                let logical_path = format!("{}!{}", archive_path.display(), inner_path);
-                let data = file.data();
-                if let Some(budget) = budget
-                    && data.len() as u64 > budget.bytes.saturating_sub(total)
-                {
-                    anyhow::bail!("archive exceeds max_bytes budget");
-                }
-                let take = resources.cap(data.len(), MAX_ASAR_ENTRY_BYTES);
-                if budget.is_some() && take < data.len() {
-                    anyhow::bail!("archive exceeds max_bytes budget");
-                }
-                total += take as u64;
-                if take < data.len() {
-                    tracing::debug!(
-                        "asar entry {} exceeded {} byte cap; truncating",
-                        inner_path,
-                        MAX_ASAR_ENTRY_BYTES
-                    );
-                }
-                contents.push((logical_path, data[..take].to_vec()));
-            }
-            Ok(CompressedContent::Archive(contents))
-        }
-        Err(e) => Err(e.into()),
+    let files = super::asar::files(
+        buffer,
+        budget.map(|budget| budget.control),
+        budget.map(|budget| budget.entries),
+        resources.limit(super::asar::MAX_HEADER_BYTES),
+        resources.limit(super::asar::MAX_INDEX_ENTRIES),
+        resources.limit(super::asar::MAX_INDEX_PATH_BYTES),
+    )?;
+    // Overlap is a format-validity check, not a resource limit, so strict
+    // extraction rejects it even under `--no-limits`, however small the overlap.
+    if budget.is_some() && asar_members_overlap(buffer, &files) {
+        anyhow::bail!("ASAR members share payload bytes (overlapping member offsets)");
     }
+    // Best-effort extraction charges members against the payload size instead, so
+    // aliases can never expand past the archive's own bytes.
+    let format_cap = payload_byte_cap;
+    let aggregate_cap = budget.map_or(format_cap, |budget| format_cap.min(budget.bytes));
+    let mut contents = Vec::new();
+    let mut total = 0u64;
+    let mut skipped_overlap = false;
+    for (index, (path_in_asar, data)) in files.iter().enumerate() {
+        if let Some(budget) = budget {
+            budget.check_entry(index)?;
+        }
+        let inner_path = path_in_asar.to_string_lossy().replace('\\', "/");
+        if !is_safe_extract_path(Path::new(&inner_path)) {
+            if budget.is_some() {
+                anyhow::bail!("archive contains an unsafe ASAR member path");
+            }
+            tracing::debug!("unsafe asar path: {inner_path}");
+            continue;
+        }
+
+        let logical_path = format!("{}!{}", archive_path.display(), inner_path);
+        let remaining = aggregate_cap.saturating_sub(total);
+        if budget.is_some() && data.len() as u64 > remaining {
+            anyhow::bail!("archive exceeds max_bytes budget");
+        }
+        let entry_cap = resources.limit(MAX_ASAR_ENTRY_BYTES).unwrap_or(usize::MAX);
+        if budget.is_none() && data.len().min(entry_cap) as u64 > remaining {
+            // Skip the whole member rather than copying part of it: a partial copy
+            // can split a secret so it is neither reported nor cleanly skipped.
+            skipped_overlap = true;
+            continue;
+        }
+        let take = data.len().min(entry_cap);
+        if budget.is_some() && take < data.len() {
+            anyhow::bail!("archive exceeds max_bytes budget");
+        }
+        total += take as u64;
+        if take < data.len() {
+            tracing::debug!(
+                "asar entry {} exceeded {} byte cap; truncating",
+                inner_path,
+                entry_cap
+            );
+        }
+        contents.push((logical_path, data[..take].to_vec()));
+    }
+    if skipped_overlap {
+        tracing::debug!(
+            "asar archive {} members exceed the archive size (overlapping member offsets); \
+             skipped members that did not fit",
+            archive_path.display()
+        );
+    }
+    Ok(CompressedContent::Archive(contents))
 }
 
 fn materialize_in_memory_archive_entries(
@@ -2309,26 +2367,747 @@ mod tests {
         Ok(())
     }
 
+    /// ASAR stores a JSON string in a Chromium Pickle, followed by uncompressed
+    /// file bytes. Keep fixtures independent of the reader and any archive writer.
+    fn asar_fixture(header: serde_json::Value, payload: &[u8]) -> Vec<u8> {
+        let json = serde_json::to_vec(&header).unwrap();
+        let aligned = (json.len() + 3) & !3;
+        let mut archive = Vec::new();
+        for word in [4, (aligned + 8) as u32, (aligned + 4) as u32, json.len() as u32] {
+            archive.extend_from_slice(&word.to_le_bytes());
+        }
+        archive.extend_from_slice(&json);
+        archive.resize(16 + aligned, 0);
+        archive.extend_from_slice(payload);
+        archive
+    }
+
+    fn asar_entries(
+        archive: &[u8],
+        budget: Option<&super::ArchiveBudget<'_>>,
+    ) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
+        let CompressedContent::Archive(entries) = super::handle_asar_archive_in_memory(
+            archive,
+            Path::new("fixture.asar"),
+            super::ResourceLimits::default(),
+            budget,
+        )?
+        else {
+            anyhow::bail!("expected in-memory ASAR members");
+        };
+        Ok(entries)
+    }
+
+    #[test]
+    fn asar_overlapping_offsets_obey_aggregate_cap_and_user_budget() -> anyhow::Result<()> {
+        // Three aliases of only four payload bytes must be charged three times.
+        let archive = asar_fixture(
+            serde_json::json!({"files": {
+                "a": {"size": 4, "offset": "0"},
+                "b": {"size": 4, "offset": "0"},
+                "c": {"size": 4, "offset": "0"}
+            }}),
+            b"data",
+        );
+        let expand = |resources, budget: Option<&super::ArchiveBudget<'_>>| {
+            super::handle_asar_archive_with_total_cap(
+                &archive,
+                Path::new("fixture.asar"),
+                resources,
+                budget,
+                6,
+            )
+        };
+        // Best effort keeps whole members only: "b" and "c" do not fit in the
+        // remaining two bytes and are skipped, never sliced.
+        let CompressedContent::Archive(entries) = expand(super::ResourceLimits::default(), None)?
+        else {
+            panic!("expected ASAR members");
+        };
+        assert_eq!(entries, vec![("fixture.asar!a".to_string(), b"data".to_vec())]);
+        // --no-limits disables resource caps, not format validation: aliases are
+        // still charged against the archive size.
+        let CompressedContent::Archive(unlimited) =
+            expand(super::ResourceLimits { unlimited: true }, None)?
+        else {
+            panic!("expected ASAR members");
+        };
+        assert_eq!(unlimited, entries);
+        let control = crate::ScanControl::default();
+        for bytes in [3, 6, 12, u64::MAX] {
+            let budget = super::ArchiveBudget {
+                bytes,
+                entries: 3,
+                control: &control,
+                inspected: std::cell::Cell::new(0),
+            };
+            // Strict extraction rejects any overlap, whatever the byte budget.
+            for resources in
+                [super::ResourceLimits::default(), super::ResourceLimits { unlimited: true }]
+            {
+                let error = expand(resources, Some(&budget)).unwrap_err();
+                assert!(
+                    error.to_string().contains("overlapping member offsets"),
+                    "{bytes}: {error:#}"
+                );
+            }
+        }
+        // Through the real entry point the cap is the 4-byte payload, not the
+        // archive (which also holds the JSON index).
+        assert_eq!(asar_entries(&archive, None)?, entries);
+        let budget = super::ArchiveBudget {
+            bytes: 12,
+            entries: 3,
+            control: &control,
+            inspected: std::cell::Cell::new(0),
+        };
+        let error = asar_entries(&archive, Some(&budget)).unwrap_err();
+        assert!(error.to_string().contains("overlapping member offsets"), "{error:#}");
+        Ok(())
+    }
+
+    #[test]
+    fn asar_partial_overlap_is_detected_and_adjacent_members_are_not() -> anyhow::Result<()> {
+        let control = crate::ScanControl::default();
+        let budget = || super::ArchiveBudget {
+            bytes: u64::MAX,
+            entries: 8,
+            control: &control,
+            inspected: std::cell::Cell::new(0),
+        };
+        let overlapping = asar_fixture(
+            serde_json::json!({"files": {
+                "a": {"size": 4, "offset": "0"},
+                "b": {"size": 4, "offset": "3"},
+                "empty": {"size": 0, "offset": "0"}
+            }}),
+            b"abcdefgh",
+        );
+        assert!(asar_entries(&overlapping, Some(&budget())).is_err());
+        let adjacent = asar_fixture(
+            serde_json::json!({"files": {
+                "a": {"size": 4, "offset": "0"},
+                "b": {"size": 4, "offset": "4"},
+                "empty": {"size": 0, "offset": "4"}
+            }}),
+            b"abcdefgh",
+        );
+        assert_eq!(asar_entries(&adjacent, Some(&budget()))?.len(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn asar_byte_cap_is_the_archive_size_not_a_fixed_total() -> anyhow::Result<()> {
+        // Non-overlapping members always fit within the archive, so a well-formed
+        // archive is extracted completely, in default and strict modes alike.
+        let payload: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
+        let files: serde_json::Map<String, serde_json::Value> = (0..4)
+            .map(|i| {
+                (
+                    format!("part-{i}"),
+                    serde_json::json!({"size": 1024, "offset": (i * 1024).to_string()}),
+                )
+            })
+            .collect();
+        let archive = asar_fixture(serde_json::json!({"files": files}), &payload);
+        let entries = asar_entries(&archive, None)?;
+        assert_eq!(entries.iter().map(|(_, bytes)| bytes.len()).sum::<usize>(), payload.len());
+        let control = crate::ScanControl::default();
+        let budget = super::ArchiveBudget {
+            bytes: payload.len() as u64,
+            entries: 4,
+            control: &control,
+            inspected: std::cell::Cell::new(0),
+        };
+        assert_eq!(asar_entries(&archive, Some(&budget))?, entries);
+
+        // Aliasing the whole payload eight times is charged against the archive
+        // size: default mode stops there, and strict mode reports the overlap.
+        let files: serde_json::Map<String, serde_json::Value> = (0..8)
+            .map(|i| (format!("alias-{i}"), serde_json::json!({"size": 4096, "offset": "0"})))
+            .collect();
+        let archive = asar_fixture(serde_json::json!({"files": files}), &payload);
+        assert!(8 * payload.len() > archive.len());
+        let entries = asar_entries(&archive, None)?;
+        assert_eq!(entries.len(), 1, "only one whole alias fits in the payload");
+        assert_eq!(entries.iter().map(|(_, bytes)| bytes.len()).sum::<usize>(), payload.len());
+        let budget = super::ArchiveBudget {
+            bytes: u64::MAX,
+            entries: 8,
+            control: &control,
+            inspected: std::cell::Cell::new(0),
+        };
+        let error = asar_entries(&archive, Some(&budget)).unwrap_err();
+        assert!(error.to_string().contains("overlapping member offsets"), "{error:#}");
+        Ok(())
+    }
+
+    #[test]
+    fn asar_guards_headers_and_index_before_materializing_values() {
+        // Reject the declared oversized header before even slicing or parsing it.
+        let mut archive = asar_fixture(serde_json::json!({"files": {}}), b"");
+        archive[4..8]
+            .copy_from_slice(&((super::super::asar::MAX_HEADER_BYTES + 1) as u32).to_le_bytes());
+        let error = asar_entries(&archive, None).unwrap_err();
+        assert!(error.to_string().contains("header byte cap"));
+
+        let archive = asar_fixture(
+            serde_json::json!({"files": {
+                "a": {"size": 0, "offset": "0"},
+                "b": {"size": 0, "offset": "0"}
+            }}),
+            b"",
+        );
+        let error =
+            super::super::asar::files(&archive, None, Some(1), None, None, None).unwrap_err();
+        assert!(format!("{error:#}").contains("max_entries budget"));
+        let error =
+            super::super::asar::files(&archive, None, None, None, Some(1), None).unwrap_err();
+        assert!(format!("{error:#}").contains("index entry cap"));
+        assert_eq!(
+            super::super::asar::files(&archive, None, Some(2), None, Some(2), None).unwrap().len(),
+            2
+        );
+        let header_size = archive.len() - 8;
+        assert!(
+            super::super::asar::files(&archive, None, None, Some(header_size), None, None).is_ok()
+        );
+        assert!(
+            super::super::asar::files(&archive, None, None, Some(header_size - 1), None, None)
+                .is_err()
+        );
+        // Malform the second member. A Value-first implementation would report
+        // JSON syntax, whereas the streaming guard must stop at its name first.
+        let mut malformed = archive.clone();
+        let second = malformed.windows(4).position(|bytes| bytes == b"\"b\":").unwrap() + 4;
+        malformed[second] = b'?';
+        let error =
+            super::super::asar::files(&malformed, None, None, None, Some(1), None).unwrap_err();
+        assert!(format!("{error:#}").contains("index entry cap"));
+        let mut malformed = archive.clone();
+        let second_size =
+            malformed.windows(7).rposition(|bytes| bytes == b"\"size\":").unwrap() + 7;
+        malformed[second_size] = b'?';
+        let error =
+            super::super::asar::files(&malformed, None, Some(1), None, None, None).unwrap_err();
+        assert!(format!("{error:#}").contains("max_entries budget"));
+
+        // Empty directories and links consume index memory even though they are
+        // not file entries and do not consume strict output/entry budgets.
+        let archive = asar_fixture(
+            serde_json::json!({"files": {
+                "a": {"files": {}}, "b": {"link": "a"}
+            }}),
+            b"",
+        );
+        assert!(super::super::asar::files(&archive, None, Some(0), None, Some(1), None).is_err());
+        assert!(
+            super::super::asar::files(&archive, None, Some(0), None, Some(2), None)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn asar_index_path_cap_counts_repeated_directory_prefixes() {
+        let prefix = "x".repeat(256);
+        let archive = asar_fixture(
+            serde_json::json!({"files": {(prefix.clone()): {"files": {
+                "a": {"size": 0, "offset": "0"},
+                "b": {"size": 0, "offset": "0"}
+            }}}}),
+            b"",
+        );
+        // The compact header contains the prefix once, but the index retains it
+        // once for the directory and again for each empty child file.
+        let path_bytes = prefix.len() + 2 * (prefix.len() + 2);
+        let index = |cap| super::super::asar::files(&archive, None, Some(2), None, Some(3), cap);
+        assert_eq!(index(Some(path_bytes)).unwrap().len(), 2);
+        let error = index(Some(path_bytes - 1)).unwrap_err();
+        assert!(error.to_string().contains("index path byte cap"));
+        assert_eq!(
+            index(super::ResourceLimits { unlimited: true }.limit(path_bytes - 1)).unwrap().len(),
+            2
+        );
+        assert_eq!(asar_entries(&archive, None).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn asar_index_path_cap_counts_directories_before_empty_files() {
+        let prefix = "x".repeat(256);
+        let archive = asar_fixture(
+            serde_json::json!({"files": {(prefix.clone()): {"files": {
+                "nested": {"files": {"empty": {"size": 0, "offset": "0"}}}
+            }}}}),
+            b"",
+        );
+        let nested_bytes = prefix.len() + 1 + "nested".len();
+        let file_bytes = nested_bytes + 1 + "empty".len();
+        let path_bytes = prefix.len() + nested_bytes + file_bytes;
+        let index = |cap| super::super::asar::files(&archive, None, Some(1), None, Some(3), cap);
+        // Even a one-entry, zero-payload archive can amplify long prefixes on the
+        // directory stack. A file-only charge would wrongly accept this cap.
+        let error = index(Some(file_bytes)).unwrap_err();
+        assert!(error.to_string().contains("index path byte cap"));
+        let files = index(Some(path_bytes)).unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files.values().all(|bytes| bytes.is_empty()));
+    }
+
+    #[test]
+    fn asar_default_index_cap_rejects_wide_empty_indexes() {
+        let files: serde_json::Map<String, serde_json::Value> = (0
+            ..=super::super::asar::MAX_INDEX_ENTRIES)
+            .map(|i| (format!("empty-{i}"), serde_json::json!({"files": {}})))
+            .collect();
+        let archive = asar_fixture(serde_json::json!({"files": files}), b"");
+        let error = asar_entries(&archive, None).unwrap_err();
+        assert!(format!("{error:#}").contains("index entry cap"));
+        let content = super::handle_asar_archive_in_memory(
+            &archive,
+            Path::new("fixture.asar"),
+            super::ResourceLimits { unlimited: true },
+            None,
+        )
+        .unwrap();
+        assert!(matches!(content, CompressedContent::Archive(entries) if entries.is_empty()));
+    }
+
+    #[test]
+    fn asar_reads_fixed_electron_pickle_with_integrity_metadata() -> anyhow::Result<()> {
+        // Independently framed standard ASAR bytes, not an asar_fixture roundtrip:
+        // size Pickle = 4, header Pickle = 520, JSON = 509 bytes + 3 padding bytes.
+        // The SHA256 metadata describes "abc"; Kingfisher reads bytes, not hashes.
+        let archive = [
+            b"\x04\x00\x00\x00\x08\x02\x00\x00\x04\x02\x00\x00\xfd\x01\x00\x00".as_slice(),
+            concat!(
+                r#"{"files":{"z.txt":{"size":1,"offset":"0"},"nested":{"files":{"données.js":{"size":3,"#,
+                r#""offset":"1","executable":true,"integrity":{"algorithm":"SHA256","hash":"#,
+                r#""ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad","blockSize":4194304,"blocks":["#,
+                r#""ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"]}},"empty.txt":{"size":0,"offset":"4"}}},"#,
+                r#""native":{"unpacked":true,"files":{"external.node":{"size":4096,"unpacked":true}}},"#,
+                r#""alias":{"link":"nested/données.js"},"empty-dir":{"files":{}}}}"#,
+            )
+            .as_bytes(),
+            b"\0\0\0zabc".as_slice(),
+        ]
+        .concat();
+        assert_eq!(archive.len(), 532);
+        // Index order, payload order and member order are deliberately different.
+        assert_eq!(
+            asar_entries(&archive, None)?,
+            vec![
+                ("fixture.asar!native/external.node".to_string(), Vec::new()),
+                ("fixture.asar!nested/données.js".to_string(), b"abc".to_vec()),
+                ("fixture.asar!nested/empty.txt".to_string(), Vec::new()),
+                ("fixture.asar!z.txt".to_string(), b"z".to_vec()),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn asar_index_keeps_only_scan_fields_with_value_semantics() -> anyhow::Result<()> {
+        // Large or oddly typed metadata is skipped rather than materialized.
+        let archive = asar_fixture(
+            serde_json::json!({"files": {
+                "a.txt": {"size": 2, "offset": "0", "x": [{}],
+                          "integrity": {"blocks": vec![0u8; 50_000]}}
+            }}),
+            b"ok",
+        );
+        assert_eq!(
+            asar_entries(&archive, None)?,
+            vec![("fixture.asar!a.txt".into(), b"ok".to_vec())]
+        );
+
+        // Duplicate keys keep serde_json::Value semantics: the last value wins.
+        // Frame raw JSON here because serde_json::Value would fold duplicates.
+        let raw = concat!(
+            r#"{"files":{"c.txt":{"size":1,"offset":"0","size":2},"#,
+            r#""c.txt":{"size":1,"offset":"1"}}}"#
+        );
+        let aligned = (raw.len() + 3) & !3;
+        let mut archive = Vec::new();
+        for word in [4, (aligned + 8) as u32, (aligned + 4) as u32, raw.len() as u32] {
+            archive.extend_from_slice(&word.to_le_bytes());
+        }
+        archive.extend_from_slice(raw.as_bytes());
+        archive.resize(16 + aligned, 0);
+        archive.extend_from_slice(b"ok");
+        assert_eq!(
+            asar_entries(&archive, None)?,
+            vec![("fixture.asar!c.txt".into(), b"k".to_vec())]
+        );
+
+        // A non-integer size is neither a file nor a link, so the index is invalid.
+        let invalid = asar_fixture(
+            serde_json::json!({"files": {"b.txt": {"size": "1", "offset": "0"}}}),
+            b"ok",
+        );
+        assert!(asar_entries(&invalid, None).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn asar_never_reads_adjacent_unpacked_files_or_follows_links() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("fixture.asar");
+        let unpacked = path.with_extension("asar.unpacked");
+        std::fs::create_dir(&unpacked)?;
+        for name in ["unpacked.txt", "legacy-unpacked.txt", "packed.txt"] {
+            std::fs::write(unpacked.join(name), b"external credential bytes")?;
+        }
+        let archive = asar_fixture(
+            serde_json::json!({"files": {
+                // Offset takes precedence over unpacked, matching asar 0.3.0.
+                "packed.txt": {"size": 6, "offset": "0", "unpacked": true},
+                "unpacked.txt": {"size": 25, "unpacked": true},
+                "legacy-unpacked.txt": {"size": 25, "unpacked": false},
+                "alias.txt": {"link": "packed.txt"},
+                "external-link.txt": {"link": "../outside.txt"}
+            }}),
+            b"packed",
+        );
+        std::fs::write(&path, archive)?;
+        let (CompressedContent::Archive(entries), _tmp) = decompress_file_to_temp(&path)? else {
+            anyhow::bail!("expected in-memory ASAR members");
+        };
+        let members: std::collections::BTreeMap<_, _> = entries
+            .into_iter()
+            .map(|(name, bytes)| (name.rsplit_once('!').unwrap().1.to_string(), bytes))
+            .collect();
+        assert_eq!(members.len(), 3);
+        assert_eq!(members["packed.txt"], b"packed");
+        assert!(members["unpacked.txt"].is_empty());
+        assert!(members["legacy-unpacked.txt"].is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn asar_rejects_absolute_unc_and_backslash_parent_members() -> anyhow::Result<()> {
+        for name in [
+            "/absolute/secret.txt",
+            r"\rooted\secret.txt",
+            "//server/share/secret.txt",
+            r"\\server\share\secret.txt",
+            r"\\?\C:\secret.txt",
+            "../escape.txt",
+            r"..\escape.txt",
+            r"safe\..\escape.txt",
+        ] {
+            let archive = asar_fixture(
+                serde_json::json!({"files": {
+                    "safe.txt": {"size": 4, "offset": "0"},
+                    (name): {"size": 3, "offset": "4"}
+                }}),
+                b"safebad",
+            );
+            assert_eq!(
+                asar_entries(&archive, None)?,
+                vec![("fixture.asar!safe.txt".to_string(), b"safe".to_vec())],
+                "best-effort extraction accepted {name:?}"
+            );
+            let control = crate::ScanControl::default();
+            let budget = super::ArchiveBudget {
+                bytes: 7,
+                entries: 2,
+                control: &control,
+                inspected: std::cell::Cell::new(0),
+            };
+            let error = asar_entries(&archive, Some(&budget)).unwrap_err();
+            assert!(error.to_string().contains("unsafe ASAR"), "{name:?}: {error:#}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn asar_drive_prefixes_keep_native_platform_safety_semantics() -> anyhow::Result<()> {
+        for name in [r"C:\secret.txt", "C:/secret.txt", "C:secret.txt"] {
+            let archive = asar_fixture(
+                serde_json::json!({"files": {(name): {"size": 1, "offset": "0"}}}),
+                b"x",
+            );
+            let control = crate::ScanControl::default();
+            let budget = super::ArchiveBudget {
+                bytes: 1,
+                entries: 1,
+                control: &control,
+                inspected: std::cell::Cell::new(0),
+            };
+            // Windows drive prefixes must never escape the extraction root.
+            // On Unix, a colon is a literal relative filename, as in the old reader.
+            if cfg!(windows) {
+                assert!(asar_entries(&archive, None)?.is_empty(), "{name:?}");
+                assert!(asar_entries(&archive, Some(&budget)).is_err(), "{name:?}");
+            } else {
+                let expected =
+                    vec![(format!("fixture.asar!{}", name.replace('\\', "/")), vec![b'x'])];
+                assert_eq!(asar_entries(&archive, None)?, expected);
+                assert_eq!(asar_entries(&archive, Some(&budget))?, expected);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn asar_zero_budgets_count_only_file_members_and_actual_bytes() -> anyhow::Result<()> {
+        let control = crate::ScanControl::default();
+        for (header, entries, succeeds, count) in [
+            (serde_json::json!({"files": {}}), 0, true, 0),
+            (
+                serde_json::json!({"files": {"dir": {"files": {}}, "alias": {"link": "missing"}}}),
+                0,
+                true,
+                0,
+            ),
+            (serde_json::json!({"files": {"empty": {"size": 0, "offset": "0"}}}), 1, true, 1),
+            (serde_json::json!({"files": {"empty": {"size": 0, "offset": "0"}}}), 0, false, 0),
+            (
+                serde_json::json!({"files": {"external": {"size": 1024, "unpacked": true}}}),
+                1,
+                true,
+                1,
+            ),
+        ] {
+            let archive = asar_fixture(header, b"");
+            let budget = super::ArchiveBudget {
+                bytes: 0,
+                entries,
+                control: &control,
+                inspected: std::cell::Cell::new(0),
+            };
+            let result = asar_entries(&archive, Some(&budget));
+            assert_eq!(result.is_ok(), succeeds, "{result:?}");
+            if let Ok(members) = result {
+                assert_eq!(members.len(), count);
+                assert!(members.iter().all(|(_, bytes)| bytes.is_empty()));
+                assert_eq!(budget.inspected.get(), count);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn asar_rejects_malformed_member_shapes_and_locations() {
+        for header in [
+            serde_json::json!(null),
+            serde_json::json!({"files": []}),
+            serde_json::json!({"files": {"bad": {}}}),
+            serde_json::json!({"files": {"bad": {"size": -1, "offset": "0"}}}),
+            serde_json::json!({"files": {"bad": {"size": "1", "offset": "0"}}}),
+            serde_json::json!({"files": {"bad": {"size": 1, "offset": 0}}}),
+            serde_json::json!({"files": {"bad": {"size": 1, "offset": "-1"}}}),
+            serde_json::json!({"files": {"bad": {"size": 1, "offset": "18446744073709551616"}}}),
+            serde_json::json!({"files": {"bad": {"size": 1, "unpacked": "true"}}}),
+        ] {
+            assert!(asar_entries(&asar_fixture(header, b"x"), None).is_err());
+        }
+        let mut invalid_json = asar_fixture(serde_json::json!({"files": {}}), b"");
+        invalid_json[16] = b'[';
+        assert!(asar_entries(&invalid_json, None).is_err());
+    }
+
+    #[test]
+    fn asar_cancellation_interrupts_wide_index_traversal_without_partial_members() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let files: serde_json::Map<_, _> = (0..1024)
+            .map(|index| {
+                (format!("member-{index:04}"), serde_json::json!({"size": 1, "offset": "0"}))
+            })
+            .collect();
+        let archive = asar_fixture(serde_json::json!({"files": files}), b"x");
+        let token = crate::CancellationToken::default();
+        let cancel = token.clone();
+        let checks = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&checks);
+        let control = crate::ScanControl::default()
+            .with_cancellation(token.clone())
+            .with_check_observer(move |location| {
+                if Path::new(location.file()).file_name() == Some(std::ffi::OsStr::new("asar.rs"))
+                    && observed.fetch_add(1, Ordering::Relaxed) + 1 == 12
+                {
+                    cancel.cancel();
+                }
+                Ok(())
+            });
+        let budget = super::ArchiveBudget {
+            bytes: 1024,
+            entries: 1024,
+            control: &control,
+            inspected: std::cell::Cell::new(0),
+        };
+        let error = asar_entries(&archive, Some(&budget)).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<crate::ScanAborted>(),
+            Some(&crate::ScanAborted::Cancelled)
+        );
+        assert!(token.is_cancelled());
+        assert_eq!(checks.load(Ordering::Relaxed), 12);
+        // Cancellation occurred in the index walk, before member-copy iteration.
+        assert_eq!(budget.inspected.get(), 0);
+    }
+
+    #[test]
+    fn asar_preserves_nested_empty_unpacked_and_link_behavior() -> anyhow::Result<()> {
+        let archive = asar_fixture(
+            serde_json::json!({"files": {
+                "nested": {"files": {
+                    "secret.txt": {"size": 6, "offset": "2", "executable": true},
+                    "empty.txt": {"size": 0, "offset": "8"},
+                    "données.txt": {"size": 2, "offset": "0"}
+                }},
+                "back\\slash.txt": {"size": 2, "offset": "8"},
+                "external.txt": {"size": 100, "unpacked": true},
+                "alias.txt": {"link": "nested/secret.txt", "files": null},
+                "empty-dir": {"files": {}}
+            }}),
+            b"xxsecretyy",
+        );
+        let CompressedContent::Archive(entries) = super::handle_asar_archive_in_memory(
+            &archive,
+            Path::new("fixture.asar"),
+            super::ResourceLimits::default(),
+            None,
+        )?
+        else {
+            panic!("expected in-memory ASAR members");
+        };
+        let entries: std::collections::BTreeMap<_, _> = entries.into_iter().collect();
+        assert_eq!(entries.len(), 5);
+        assert_eq!(entries["fixture.asar!nested/secret.txt"], b"secret");
+        assert_eq!(entries["fixture.asar!nested/données.txt"], b"xx");
+        assert_eq!(entries["fixture.asar!back/slash.txt"], b"yy");
+        assert!(entries["fixture.asar!nested/empty.txt"].is_empty());
+        // Unpacked files remain empty: extraction must never read adjacent files
+        // or follow links outside the supplied archive bytes.
+        assert!(entries["fixture.asar!external.txt"].is_empty());
+        assert!(!entries.contains_key("fixture.asar!alias.txt"));
+        Ok(())
+    }
+
+    #[test]
+    fn asar_strict_byte_entry_and_control_budgets() -> anyhow::Result<()> {
+        let archive = asar_fixture(
+            serde_json::json!({"files": {
+                "a.txt": {"size": 3, "offset": "0"},
+                "b.txt": {"size": 3, "offset": "3"}
+            }}),
+            b"secret",
+        );
+        let control = crate::ScanControl::default();
+        let extract = |bytes, entries, control: &crate::ScanControl| {
+            let budget = super::ArchiveBudget {
+                bytes,
+                entries,
+                control,
+                inspected: std::cell::Cell::new(0),
+            };
+            let result = super::handle_asar_archive_in_memory(
+                &archive,
+                Path::new("fixture.asar"),
+                super::ResourceLimits::default(),
+                Some(&budget),
+            );
+            result.map(|content| (content, budget.inspected.get()))
+        };
+        let (_, inspected) = extract(6, 2, &control)?;
+        assert_eq!(inspected, 2);
+        assert!(extract(5, 2, &control).unwrap_err().to_string().contains("max_bytes"));
+        assert!(extract(6, 1, &control).unwrap_err().to_string().contains("max_entries"));
+        let expired = control.with_deadline(std::time::Instant::now());
+        assert!(extract(6, 2, &expired).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn asar_rejects_truncated_headers_and_members() {
+        let archive = asar_fixture(
+            serde_json::json!({"files": {"secret.txt": {"size": 6, "offset": "0"}}}),
+            b"secret",
+        );
+        for length in [0, 7, 15, 18, archive.len() - 1] {
+            assert!(
+                super::handle_asar_archive_in_memory(
+                    &archive[..length],
+                    Path::new("fixture.asar"),
+                    super::ResourceLimits::default(),
+                    None,
+                )
+                .is_err(),
+                "accepted truncated ASAR of {length} bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn asar_rejects_overflowing_offsets_and_overlapping_headers() {
+        for (offset, size) in [(usize::MAX.to_string(), 1), ("1".to_string(), usize::MAX)] {
+            let archive = asar_fixture(
+                serde_json::json!({"files": {"secret.txt": {"size": size, "offset": offset}}}),
+                b"secret",
+            );
+            assert!(
+                super::handle_asar_archive_in_memory(
+                    &archive,
+                    Path::new("fixture.asar"),
+                    super::ResourceLimits::default(),
+                    None,
+                )
+                .is_err()
+            );
+        }
+        let mut archive = asar_fixture(serde_json::json!({"files": {}}), b"");
+        archive[4..8].copy_from_slice(&0u32.to_le_bytes());
+        assert!(
+            super::handle_asar_archive_in_memory(
+                &archive,
+                Path::new("fixture.asar"),
+                super::ResourceLimits::default(),
+                None,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn asar_rejects_excessively_deep_headers() {
+        let mut json = "{\"files\":{\"nested\":".repeat(200);
+        json.push_str("{\"files\":{}}");
+        json.push_str(&"}}".repeat(200));
+        let aligned = (json.len() + 3) & !3;
+        let mut archive = Vec::new();
+        for word in [4, (aligned + 8) as u32, (aligned + 4) as u32, json.len() as u32] {
+            archive.extend_from_slice(&word.to_le_bytes());
+        }
+        archive.extend_from_slice(json.as_bytes());
+        archive.resize(16 + aligned, 0);
+        assert!(
+            super::handle_asar_archive_in_memory(
+                &archive,
+                Path::new("fixture.asar"),
+                super::ResourceLimits::default(),
+                None,
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn decompress_asar_skips_parent_dir_entries_only_in_best_effort_mode() -> anyhow::Result<()> {
-        use asar::AsarWriter;
-
-        let mut writer = AsarWriter::new();
-        writer.write_file("safe.txt", b"safe", false)?;
-        writer.write_file("aa/bb/escape.txt", b"bad", false)?;
-
-        let mut archive = Vec::new();
-        writer.finalize(&mut archive)?;
-
-        let json_size = u32::from_le_bytes(archive[12..16].try_into().unwrap()) as usize;
-        let header = &mut archive[16..16 + json_size];
-        let header_str = std::str::from_utf8(header)?;
-        assert!(header_str.contains("\"aa\""));
-        assert!(header_str.contains("\"bb\""));
-
-        let patched = header_str.replace("\"aa\"", "\"..\"").replace("\"bb\"", "\"..\"");
-        assert_eq!(patched.len(), header_str.len());
-        header.copy_from_slice(patched.as_bytes());
+        let archive = asar_fixture(
+            serde_json::json!({"files": {
+                "safe.txt": {"size": 4, "offset": "0"},
+                "..": {"files": {"..": {"files": {
+                    "escape.txt": {"size": 3, "offset": "4"}
+                }}}}
+            }}),
+            b"safebad",
+        );
 
         let dir = tempdir()?;
         let asar_path = dir.path().join("malicious.asar");

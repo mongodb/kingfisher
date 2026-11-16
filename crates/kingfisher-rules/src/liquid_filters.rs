@@ -649,13 +649,36 @@ struct Sha256B32 {
     args: Sha256B32Args,
 }
 
+fn encode_rfc4648_base32_padded(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    let mut output = String::new();
+    let mut pending = 0u16;
+    let mut bits = 0u32;
+    for &byte in input {
+        // At most four leftover bits plus this byte fit in the accumulator.
+        pending = (pending << 8) | u16::from(byte);
+        bits += 8;
+        while bits >= 5 {
+            bits -= 5;
+            output.push(char::from(ALPHABET[usize::from((pending >> bits) & 31)]));
+        }
+        pending &= (1u16 << bits) - 1;
+    }
+    if bits != 0 {
+        output.push(char::from(ALPHABET[usize::from(pending << (5 - bits))]));
+    }
+    while !output.len().is_multiple_of(8) {
+        output.push('=');
+    }
+    output
+}
+
 impl Filter for Sha256B32 {
     fn evaluate(&self, input: &dyn ValueView, runtime: &dyn Runtime) -> Result<Value> {
         let args = self.args.evaluate(runtime)?;
         let mut h = Sha256::new();
         h.update(input.to_kstr().as_bytes());
-        let mut encoded =
-            base32::encode(base32::Alphabet::Rfc4648 { padding: true }, &h.finalize()[..]);
+        let mut encoded = encode_rfc4648_base32_padded(&h.finalize());
         if let Some(len) = args.len.and_then(|value| {
             let scalar = Value::scalar(value);
             value_to_usize(&scalar)
@@ -1412,6 +1435,51 @@ mod tests {
     }
 
     #[test]
+    fn base32_padded_encoding_matches_rfc4648_vectors_and_binary_boundaries() {
+        let vectors: &[(&[u8], &str)] = &[
+            (b"", ""),
+            (b"f", "MY======"),
+            (b"fo", "MZXQ===="),
+            (b"foo", "MZXW6==="),
+            (b"foob", "MZXW6YQ="),
+            (b"fooba", "MZXW6YTB"),
+            (b"foobar", "MZXW6YTBOI======"),
+            (&[0x00], "AA======"),
+            (&[0xff], "74======"),
+            (&[0x00, 0xff], "AD7Q===="),
+            (&[0x00, 0xff, 0x80], "AD7YA==="),
+            (&[0x00, 0xff, 0x80, 0x00], "AD7YAAA="),
+            (&[0x00, 0xff, 0x80, 0x00, 0x7f], "AD7YAAD7"),
+            (&[0x00, 0xff, 0x80, 0x00, 0x7f, 0x01], "AD7YAAD7AE======"),
+        ];
+        for &(input, expected) in vectors {
+            assert_eq!(encode_rfc4648_base32_padded(input), expected, "input {input:?}");
+        }
+        assert_eq!(encode_rfc4648_base32_padded(&[0xff; 5 * 1024]), "7".repeat(8 * 1024));
+    }
+
+    #[test]
+    fn sha256_b32_filter_preserves_empty_binary_and_exact_length_output() {
+        // Fixed expectations were independently encoded from SHA-256 digests.
+        for (input, expected) in [
+            ("", "4OYMIQUY7QOBJGX36TEJS35ZEQT24QPEMSNZGTFESWMRW6CSXBKQ===="),
+            ("\0é中😀", "P3BQOWNK6LTMUGRILGMYBNIT5TIC7EIP7PY4OTEBFS6NJYZHIFCA===="),
+        ] {
+            let globals = object!({"input": input});
+            let parser = parser();
+            let template = parser.parse("{{ input | sha256_b32 }}").unwrap();
+            assert_eq!(template.render(&globals).unwrap(), expected);
+            for length in [0, 1, 4, 51, 52, 53, 55, 56, 57, 60] {
+                let source = format!("{{{{ input | sha256_b32: {length} }}}}");
+                let rendered = parser.parse(&source).unwrap().render(&globals).unwrap();
+                let exact =
+                    format!("{expected:=<length$}").chars().take(length).collect::<String>();
+                assert_eq!(rendered, exact, "requested output length {length}");
+            }
+        }
+    }
+
+    #[test]
     fn sha256_b32_filter() {
         let expect = "FTZE3OS7WCRQ4JXIHMVMLOPCTYNRMHS4D6TUEXTTAQZWFE4LTASA====";
         assert_eq!(render(r#"{{ "hello" | sha256_b32 }}"#), expect);
@@ -1522,9 +1590,9 @@ mod tests {
         assert_eq!(json["alg"], "HS256");
     }
 
-    fn rsa_test_key() -> &'static rsa::RsaPrivateKey {
-        static KEY: std::sync::OnceLock<rsa::RsaPrivateKey> = std::sync::OnceLock::new();
-        KEY.get_or_init(|| rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap())
+    fn rsa_test_key() -> &'static rsa::PrivateKey {
+        static KEY: std::sync::OnceLock<rsa::PrivateKey> = std::sync::OnceLock::new();
+        KEY.get_or_init(|| rsa::PrivateKey::new(&mut rand::rng(), 2048).unwrap())
     }
 
     #[test]
@@ -1536,7 +1604,7 @@ mod tests {
         };
 
         let key = rsa_test_key();
-        let verifier = rsa::pkcs1v15::VerifyingKey::<rsa::sha2::Sha256>::new(key.to_public_key());
+        let verifier = rsa::pkcs1v15::VerifyingKey::<Sha256>::new(key.to_public_key());
         let template = parser().parse("Bearer {{ CLAIMS | jwt_sign: TOKEN }}").unwrap();
         let claims = r#" {"iss":"12345","iat":1,"exp":601,"custom":{"roles":["reader"]}} "#;
         for line_ending in [LineEnding::LF, LineEnding::CRLF] {
@@ -1597,7 +1665,7 @@ mod tests {
         };
 
         let key = rsa_test_key();
-        let verifier = rsa::pkcs1v15::VerifyingKey::<rsa::sha2::Sha256>::new(key.to_public_key());
+        let verifier = rsa::pkcs1v15::VerifyingKey::<Sha256>::new(key.to_public_key());
         let template = parser()
             .parse(
                 r#"{%- assign now = "" | unix_timestamp -%}

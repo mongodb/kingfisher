@@ -1995,7 +1995,7 @@ fn enumerate_git_branch_history(
     } else {
         for reference in repository.references()?.all()? {
             check_repo_deadline(deadline, path, "git history ref collection")?;
-            let mut reference = reference.map_err(anyhow::Error::from_boxed)?;
+            let mut reference = reference?;
             let object = reference
                 .peel_to_id()
                 .with_context(|| {
@@ -2123,15 +2123,17 @@ fn enumerate_git_diff_repo(
         }
 
         let base_ref = match since_ref {
-            Some(explicit) => explicit,
-            None => detect_staged_base_ref(path)?,
+            Some(explicit) => Some(explicit),
+            None => detect_staged_base_ref(&repository)?,
         };
+        let parent = if branch_ref == "HEAD" && repository.head()?.is_unborn() {
+            None
+        } else {
+            Some(resolve_diff_ref(&repository, path, &branch_ref)?.object()?.peel_to_commit()?.id)
+        };
+        let staged_commit = synthesize_staged_commit(&repository, path, parent, deadline)?;
 
-        let parent_ref = resolve_optional_diff_ref(&repository, path, &branch_ref)
-            .unwrap_or_else(|_| branch_ref.clone());
-        let staged_commit = synthesize_staged_commit(path, parent_ref.as_str())?;
-
-        (staged_commit, Some(base_ref), None)
+        (staged_commit, base_ref, None)
     } else {
         (branch_ref, since_ref, branch_root)
     };
@@ -2317,59 +2319,96 @@ fn check_repo_deadline(deadline: Option<Instant>, path: &Path, phase: &str) -> R
     Ok(())
 }
 
-fn synthesize_staged_commit(path: &Path, parent_ref: &str) -> Result<String> {
-    let parent_arg: Vec<&str> =
-        if parent_ref.is_empty() { Vec::new() } else { vec!["-p", parent_ref] };
-
-    let staged_tree =
-        run_git_command(path, &["write-tree"], true)?.context("Failed to snapshot staged index")?;
-
-    let mut args = vec!["commit-tree", &staged_tree, "-m", "kingfisher staged snapshot"];
-    args.extend(parent_arg.iter().copied());
-
-    run_git_command(path, &args, true)?.context("Failed to create staged snapshot commit")
-}
-
-fn detect_staged_base_ref(path: &Path) -> Result<String> {
-    if let Some(head) = run_git_command(path, &["rev-parse", "--verify", "HEAD"], false)? {
-        return Ok(head);
-    }
-
-    run_git_command(path, &["hash-object", "-t", "tree", "/dev/null"], true)?
-        .context("Failed to resolve an empty tree when no base ref was available")
-}
-
-fn resolve_optional_diff_ref(
+fn synthesize_staged_commit(
     repository: &gix::Repository,
     path: &Path,
-    reference: &str,
+    parent: Option<gix::ObjectId>,
+    deadline: Option<Instant>,
 ) -> Result<String> {
-    resolve_diff_ref(repository, path, reference).map(|id| id.to_hex().to_string())
+    check_repo_deadline(deadline, path, "staged index loading")?;
+    // Like `git -C <path> write-tree`, honor an alternate index without changing
+    // the process environment or falling back to HEAD when the index is absent.
+    let index_path = std::env::var_os("GIT_INDEX_FILE")
+        .map(|index| path.join(index))
+        .unwrap_or_else(|| repository.index_path());
+    let index = gix::index::File::at_or_default(
+        index_path,
+        repository.object_hash(),
+        false,
+        Default::default(),
+    )
+    .context("Failed to read staged index")?;
+    index.verify_entries().context("Invalid staged index entries")?;
+
+    // Plumbing editing preserves Git's byte paths, including index-only names
+    // that cannot be checked out on this platform. No worktree data or filters
+    // are used: the index already holds the canonical staged blob objects.
+    let mut tree = repository.empty_tree().edit()?.detach();
+    for entry in index.entries() {
+        check_repo_deadline(deadline, path, "staged index snapshot")?;
+        if entry.flags.stage() != gix::index::entry::Stage::Unconflicted {
+            bail!("Cannot snapshot staged index with unmerged entries");
+        }
+        let mode = entry.mode.to_tree_entry_mode().context("Invalid mode in staged index")?;
+        let entry_path = entry.path(&index);
+        if !mode.is_commit() && !repository.has_object(entry.id) {
+            bail!("Missing object {} for staged index entry {:?}", entry.id, entry_path);
+        }
+        // Sparse-index directories use a trailing slash, but tree paths do not.
+        let entry_path = entry_path.strip_suffix(b"/").unwrap_or(entry_path);
+        tree.upsert(
+            entry_path.split(|byte| *byte == b'/').map(|component| component.as_bstr()),
+            mode.kind(),
+            entry.id,
+        )
+        .context("Failed to construct staged tree")?;
+    }
+    let staged_tree = tree.write(|tree| -> Result<gix::ObjectId> {
+        check_repo_deadline(deadline, path, "staged tree writing")?;
+        Ok(repository.write_object(tree)?.detach())
+    })?;
+
+    // Read the same user/config/environment identity as commit-tree, without
+    // enabling gix's optional Git-installation-config executable discovery.
+    // A scanner also works on machines without a configured commit identity.
+    let identity_repo =
+        gix::open_opts(repository.git_dir(), gix::open::Options::default().open_path_as_is(true))
+            .context("Failed to read staged snapshot identity")?;
+    let fallback = || gix::actor::Signature {
+        name: "Kingfisher".into(),
+        email: "kingfisher@localhost".into(),
+        time: gix::date::Time::now_local_or_utc(),
+    };
+    let author = identity_repo
+        .author()
+        .transpose()?
+        .map(|signature| signature.to_owned())
+        .transpose()?
+        .unwrap_or_else(fallback);
+    let committer = identity_repo
+        .committer()
+        .transpose()?
+        .map(|signature| signature.to_owned())
+        .transpose()?
+        .unwrap_or_else(fallback);
+    let commit = gix::objs::Commit {
+        tree: staged_tree,
+        parents: parent.into_iter().collect(),
+        author,
+        committer,
+        encoding: None,
+        message: "kingfisher staged snapshot\n".into(),
+        extra_headers: Default::default(),
+    };
+    check_repo_deadline(deadline, path, "staged commit writing")?;
+    Ok(repository.write_object(&commit)?.to_string())
 }
 
-fn run_git_command(path: &Path, args: &[&str], bubble_up_error: bool) -> Result<Option<String>> {
-    let mut command = crate::git_binary::git_command();
-    command.arg("-C").arg(path).args(args);
-    let executable_hint = crate::git_binary::git_command_failure_hint(&command);
-    let output = command.output().context(
-        "Failed to execute Git; install Git on PATH or set KF_GIT_BINARY to its executable",
-    )?;
-
-    if !output.status.success() {
-        if bubble_up_error {
-            bail!(
-                "Git command failed ({}): git -C {} {}{}",
-                output.status,
-                path.display(),
-                args.join(" "),
-                executable_hint
-            );
-        }
-        return Ok(None);
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if stdout.is_empty() { Ok(None) } else { Ok(Some(stdout)) }
+fn detect_staged_base_ref(repository: &gix::Repository) -> Result<Option<String>> {
+    let head = repository.head().context("Failed to read HEAD for staged scan")?;
+    // An unborn HEAD has neither a diff base nor a synthetic-commit parent.
+    // The existing diff pipeline compares it with the repository's empty tree.
+    Ok(head.id().map(|id| id.to_string()))
 }
 
 fn resolve_diff_ref<'repo>(
@@ -2453,6 +2492,8 @@ pub(crate) fn reference_candidates(reference: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::git_test_fixture as fixture;
+
     use std::{fs, io::Write};
     use std::{
         path::{Path, PathBuf},
@@ -2466,7 +2507,6 @@ mod tests {
     };
     use anyhow::Result;
     use bstr::ByteSlice;
-    use git2::{Repository as Git2Repository, Signature};
     use gix::{open::Options, open_opts};
     use rayon::iter::ParallelIterator;
     use rusqlite::Connection;
@@ -2634,19 +2674,272 @@ mod tests {
         assert_eq!(reference_candidates("HEAD"), vec!["HEAD".to_string()]);
     }
 
+    fn staged_index(
+        repo: &gix::Repository,
+        entries: &[(&[u8], gix::ObjectId, gix::index::entry::Mode, gix::index::entry::Flags)],
+    ) -> Result<()> {
+        let mut index = gix::index::File::from_state(
+            gix::index::State::new(repo.object_hash()),
+            repo.index_path(),
+        );
+        for (path, id, mode, flags) in entries {
+            index.dangerously_push_entry(Default::default(), *id, *flags, *mode, path.as_bstr());
+        }
+        index.sort_entries();
+        index.write(Default::default())?;
+        Ok(())
+    }
+
+    fn staged_diff(
+        repo: &gix::Repository,
+        since_ref: Option<String>,
+        exclude: Option<globset::GlobSet>,
+    ) -> Result<crate::GitRepoResult> {
+        enumerate_git_diff_repo(
+            repo.workdir().unwrap(),
+            open_opts(repo.git_dir(), Options::isolated().open_path_as_is(true))?,
+            GitDiffConfig { since_ref, branch_ref: "HEAD".into(), branch_root: None, staged: true },
+            exclude.map(std::sync::Arc::new),
+            true,
+            Some(Instant::now() + Duration::from_secs(60)),
+        )
+    }
+
+    #[test]
+    fn staged_diff_reads_index_changes_and_preserves_raw_paths() -> Result<()> {
+        use gix::index::entry::{Flags, Mode};
+
+        let temp = tempdir()?;
+        let repo = gix::init(temp.path())?;
+        fixture::config(&repo, "user.name", "tester")?;
+        fixture::config(&repo, "user.email", "tester@example.com")?;
+        let signature = fixture::signature("tester", "tester@example.com");
+        let original = repo.write_blob(b"original staged content")?.detach();
+        let modified = repo.write_blob(b"modified staged content")?.detach();
+        let binary = repo.write_blob(b"\0binary staged content\xff\r\n")?.detach();
+        let link = repo.write_blob(b"relative-target")?.detach();
+        let mut tree = repo.empty_tree().edit()?;
+        for name in ["modified.txt", "deleted.txt", "old-name.txt", "unchanged.txt"] {
+            fixture::insert(&mut tree, name, original, 0o100644)?;
+        }
+        let tree = tree.write()?.detach();
+        let head =
+            fixture::commit(&repo, Some("HEAD"), &signature, &signature, "base", &tree, &[])?;
+        // Index-only names need not be representable by the host filesystem.
+        let unusual = b"nested/-spaces \t\n\"!\xff.bin";
+        staged_index(
+            &repo,
+            &[
+                (b"modified.txt", modified, Mode::FILE_EXECUTABLE, Flags::empty()),
+                (b"renamed.txt", original, Mode::FILE, Flags::empty()),
+                (b"unchanged.txt", original, Mode::FILE, Flags::empty()),
+                (unusual, binary, Mode::FILE, Flags::empty()),
+                (b"link", link, Mode::SYMLINK, Flags::empty()),
+                (b"submodule", head, Mode::COMMIT, Flags::empty()),
+                (b"intent.txt", repo.write_blob(b"")?.detach(), Mode::FILE, Flags::INTENT_TO_ADD),
+            ],
+        )?;
+        // A modified or absent worktree must never replace the indexed object data.
+        fs::write(temp.path().join("modified.txt"), b"unstaged worktree content")?;
+        fs::write(temp.path().join("unchanged.txt"), b"unstaged changes only")?;
+        let before = repo.open_index()?;
+        let result = staged_diff(&repo, None, None)?;
+        let GitBlobSource::Precomputed(blobs) = result.blobs else {
+            panic!("expected staged blobs")
+        };
+        let mut actual = std::collections::BTreeMap::new();
+        for blob in &blobs {
+            let path = blob.first_seen[0].path.clone();
+            let id = gix::ObjectId::from_bytes_or_panic(blob.blob_oid.as_slice());
+            actual.insert(path, result.repository.find_object(id)?.data.clone());
+            let metadata = &blob.first_seen[0].commit_metadata;
+            assert_eq!(metadata.author_name.as_deref(), Some("tester"));
+            assert_eq!(metadata.committer_email.as_ref(), "tester@example.com");
+            let commit = result.repository.find_commit(metadata.commit_id)?;
+            assert_eq!(commit.parent_ids().next().unwrap().detach(), head);
+            assert_eq!(commit.message_raw()?.as_bytes(), b"kingfisher staged snapshot\n");
+        }
+        assert_eq!(
+            actual,
+            std::collections::BTreeMap::from([
+                (bstr::BString::from("modified.txt"), b"modified staged content".to_vec()),
+                (bstr::BString::from("renamed.txt"), b"original staged content".to_vec()),
+                (
+                    bstr::BString::from(unusual.as_slice()),
+                    b"\0binary staged content\xff\r\n".to_vec()
+                ),
+                (bstr::BString::from("link"), b"relative-target".to_vec()),
+                (bstr::BString::from("intent.txt"), Vec::new()),
+            ])
+        );
+        assert_eq!(repo.head_id()?.detach(), head, "staged scan must not advance HEAD");
+        // write-tree may add a cache-tree extension, but it must not change entries.
+        let after = repo.open_index()?;
+        assert_eq!(before.entries().len(), after.entries().len());
+        for (before_entry, after_entry) in before.entries().iter().zip(after.entries()) {
+            assert_eq!(before_entry.path(&before), after_entry.path(&after));
+            assert_eq!(before_entry.id, after_entry.id);
+            assert_eq!(before_entry.mode, after_entry.mode);
+            assert_eq!(before_entry.flags, after_entry.flags);
+        }
+        let mut exclusions = globset::GlobSetBuilder::new();
+        exclusions.add(globset::Glob::new("nested/**")?);
+        exclusions.add(globset::Glob::new("renamed.txt")?);
+        let filtered = staged_diff(&repo, None, Some(exclusions.build()?))?;
+        let GitBlobSource::Precomputed(blobs) = filtered.blobs else {
+            panic!("expected staged blobs")
+        };
+        assert_eq!(blobs.len(), 3);
+        assert!(blobs.iter().all(|blob| {
+            ["modified.txt", "link", "intent.txt"]
+                .contains(&blob.first_seen[0].path.to_str_lossy().as_ref())
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn staged_diff_explicit_base_and_unmerged_index() -> Result<()> {
+        use gix::index::entry::{Flags, Mode, Stage};
+
+        let temp = tempdir()?;
+        let repo = gix::init(temp.path())?;
+        let signature = fixture::signature("tester", "tester@example.com");
+        let empty = repo.empty_tree().edit()?.write()?.detach();
+        let root =
+            fixture::commit(&repo, Some("HEAD"), &signature, &signature, "root", &empty, &[])?;
+        let blob = repo.write_blob(b"already committed content")?.detach();
+        let mut tree = repo.empty_tree().edit()?;
+        fixture::insert(&mut tree, "committed.txt", blob, 0o100644)?;
+        let tree = tree.write()?.detach();
+        let head =
+            fixture::commit(&repo, Some("HEAD"), &signature, &signature, "head", &tree, &[&root])?;
+        staged_index(&repo, &[(b"committed.txt", blob, Mode::FILE, Flags::empty())])?;
+        let default = staged_diff(&repo, None, None)?;
+        let GitBlobSource::Precomputed(blobs) = default.blobs else {
+            panic!("expected staged blobs")
+        };
+        assert!(blobs.is_empty(), "unchanged index is empty relative to HEAD");
+        let explicit = staged_diff(&repo, Some(root.to_string()), None)?;
+        let GitBlobSource::Precomputed(blobs) = explicit.blobs else {
+            panic!("expected staged blobs")
+        };
+        assert_eq!(blobs.len(), 1, "--since-commit remains the staged comparison base");
+        staged_index(
+            &repo,
+            &[(b"conflicted.txt", blob, Mode::FILE, Flags::from_stage(Stage::Ours))],
+        )?;
+        let index_before = fs::read(repo.index_path())?;
+        let mut exclude_all = globset::GlobSetBuilder::new();
+        exclude_all.add(globset::Glob::new("**")?);
+        assert!(
+            staged_diff(&repo, None, Some(exclude_all.build()?)).is_err(),
+            "an unmerged index must fail even if paths are excluded"
+        );
+        assert_eq!(fs::read(repo.index_path())?, index_before);
+        assert_eq!(repo.head_id()?.detach(), head);
+        Ok(())
+    }
+
+    #[test]
+    fn staged_diff_unborn_sparse_index_and_missing_objects() -> Result<()> {
+        use gix::index::entry::{Flags, Mode};
+
+        let temp = tempdir()?;
+        let repo = gix::init(temp.path())?;
+        let empty = staged_diff(&repo, None, None)?;
+        let GitBlobSource::Precomputed(blobs) = empty.blobs else {
+            panic!("expected staged blobs")
+        };
+        assert!(blobs.is_empty());
+        assert!(!repo.index_path().exists());
+        assert!(repo.head()?.is_unborn());
+
+        let blob = repo.write_blob(b"sparse staged content")?.detach();
+        let mut subtree = repo.empty_tree().edit()?;
+        fixture::insert(&mut subtree, "secret.txt", blob, 0o100644)?;
+        let subtree = subtree.write()?.detach();
+        staged_index(&repo, &[(b"sparse/", subtree, Mode::DIR, Flags::SKIP_WORKTREE)])?;
+        // Reopening recognizes the sparse mode; writing adds its required sdir extension.
+        let mut sparse = repo.open_index()?;
+        assert!(sparse.is_sparse());
+        sparse.write(Default::default())?;
+        let before = fs::read(repo.index_path())?;
+        let result = staged_diff(&repo, None, None)?;
+        let GitBlobSource::Precomputed(blobs) = result.blobs else {
+            panic!("expected staged blobs")
+        };
+        assert_eq!(blobs.len(), 1);
+        assert_eq!(blobs[0].first_seen[0].path.as_bytes(), b"sparse/secret.txt");
+        let commit =
+            result.repository.find_commit(blobs[0].first_seen[0].commit_metadata.commit_id)?;
+        assert_eq!(commit.parent_ids().count(), 0);
+        assert_eq!(fs::read(repo.index_path())?, before);
+        assert!(repo.head()?.is_unborn());
+        assert!(staged_diff(&repo, Some("not-a-reference".into()), None).is_err());
+
+        let missing = gix::ObjectId::from_hex(b"1111111111111111111111111111111111111111")?;
+        staged_index(&repo, &[(b"missing.txt", missing, Mode::FILE, Flags::empty())])?;
+        assert!(staged_diff(&repo, None, None).is_err(), "missing staged objects must fail");
+        Ok(())
+    }
+
+    #[test]
+    fn staged_diff_reads_split_index_without_modifying_either_file() -> Result<()> {
+        use gix::index::entry::{Flags, Mode};
+
+        let temp = tempdir()?;
+        let repo = gix::init(temp.path())?;
+        let blob = repo.write_blob(b"shared staged content")?.detach();
+        staged_index(&repo, &[(b"shared.txt", blob, Mode::FILE, Flags::empty())])?;
+        let shared = repo.open_index()?;
+        let checksum = shared.checksum().unwrap();
+        let shared_path = repo.git_dir().join(format!("sharedindex.{checksum}"));
+        let shared_bytes = fs::read(repo.index_path())?;
+        fs::write(&shared_path, &shared_bytes)?;
+
+        // An empty split index links all shared entries, with empty delete and
+        // replace EWAH bitmaps (bit length, one zero word, and RLW position).
+        let mut link = checksum.as_slice().to_vec();
+        for _ in 0..2 {
+            link.extend_from_slice(&0u32.to_be_bytes());
+            link.extend_from_slice(&1u32.to_be_bytes());
+            link.extend_from_slice(&0u64.to_be_bytes());
+            link.extend_from_slice(&0u32.to_be_bytes());
+        }
+        let mut split = b"DIRC".to_vec();
+        split.extend_from_slice(&2u32.to_be_bytes());
+        split.extend_from_slice(&0u32.to_be_bytes());
+        split.extend_from_slice(b"link");
+        split.extend_from_slice(&(link.len() as u32).to_be_bytes());
+        split.extend_from_slice(&link);
+        let mut hash = gix::hash::hasher(repo.object_hash());
+        hash.update(&split);
+        split.extend_from_slice(hash.try_finalize()?.as_slice());
+        fs::write(repo.index_path(), &split)?;
+        let result = staged_diff(&repo, None, None)?;
+        let GitBlobSource::Precomputed(blobs) = result.blobs else {
+            panic!("expected staged blobs")
+        };
+        assert_eq!(blobs.len(), 1);
+        assert_eq!(blobs[0].first_seen[0].path.as_bytes(), b"shared.txt");
+        assert_eq!(fs::read(repo.index_path())?, split);
+        assert_eq!(fs::read(shared_path)?, shared_bytes);
+        Ok(())
+    }
+
     #[test]
     fn repository_deadlines_apply_to_history_and_snapshot_with_unlimited_content() -> Result<()> {
         use crate::cli::{CommandLineArgs, commands::scan::ScanOperation, global::Command};
         use clap::Parser;
 
         let temp = tempdir()?;
-        let repo = Git2Repository::init(temp.path())?;
+        let repo = gix::init(temp.path())?;
         fs::write(temp.path().join("secret.txt"), "fixture-secret")?;
-        let mut index = repo.index()?;
-        index.add_path(Path::new("secret.txt"))?;
-        let tree = repo.find_tree(index.write_tree()?)?;
-        let signature = Signature::now("tester", "tester@example.com")?;
-        repo.commit(Some("HEAD"), &signature, &signature, "fixture", &tree, &[])?;
+        let mut index = fixture::index(&repo)?;
+        fixture::stage(&repo, &mut index, Path::new("secret.txt"))?;
+        let tree = fixture::write_tree(&repo, &index)?;
+        let signature = fixture::signature("tester", "tester@example.com");
+        fixture::commit(&repo, Some("HEAD"), &signature, &signature, "fixture", &tree, &[])?;
 
         for content in [false, true] {
             for timeouts in [false, true] {
@@ -2666,7 +2959,7 @@ mod tests {
                 let deadline =
                     args.repository_timeout().map(|_| Instant::now() - Duration::from_secs(1));
                 let open = || -> Result<gix::Repository> {
-                    Ok(open_opts(repo.path(), Options::isolated().open_path_as_is(true))?)
+                    Ok(open_opts(repo.git_dir(), Options::isolated().open_path_as_is(true))?)
                 };
                 let history = enumerate_git_branch_history(
                     temp.path(),
@@ -2714,20 +3007,27 @@ mod tests {
     fn enumerate_git_diff_repo_branch_without_since_scans_head_tree() -> Result<()> {
         let temp = tempdir()?;
         let repo_path = temp.path().join("repo");
-        let repo = Git2Repository::init(&repo_path)?;
-        let signature = Signature::now("tester", "tester@exmple.com")?;
+        let repo = gix::init(&repo_path)?;
+        let signature = fixture::signature("tester", "tester@exmple.com");
 
         let tracked_file = repo_path.join("secret.txt");
         fs::create_dir_all(tracked_file.parent().unwrap())?;
         fs::write(&tracked_file, b"super-secret")?;
 
-        let mut index = repo.index()?;
-        index.add_path(Path::new("secret.txt"))?;
-        let tree_id = index.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        let commit_id = repo.commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[])?;
-        let commit = repo.find_commit(commit_id)?;
-        repo.branch("featurefake", &commit, true)?;
+        let mut index = fixture::index(&repo)?;
+        fixture::stage(&repo, &mut index, Path::new("secret.txt"))?;
+        let tree_id = fixture::write_tree(&repo, &index)?;
+        let tree = tree_id;
+        let commit_id =
+            fixture::commit(&repo, Some("HEAD"), &signature, &signature, "initial", &tree, &[])?;
+        let commit = commit_id;
+        fixture::reference(
+            &repo,
+            &format!("refs/heads/{}", "featurefake"),
+            commit,
+            gix::refs::transaction::PreviousValue::Any,
+            "branch",
+        )?;
 
         let git_dir = repo_path.join(".git");
         let gix_repo = open_opts(&git_dir, Options::isolated().open_path_as_is(true))?;
@@ -2761,29 +3061,37 @@ mod tests {
     #[test]
     fn branch_history_deduplicates_reintroduced_blobs_and_preserves_appearances() -> Result<()> {
         let temp = tempdir()?;
-        let repo = Git2Repository::init(temp.path())?;
-        let signature = Signature::now("tester", "tester@example.com")?;
-        let mut index = repo.index()?;
+        let repo = gix::init(temp.path())?;
+        let signature = fixture::signature("tester", "tester@example.com");
+        let mut index = fixture::index(&repo)?;
         for (path, content) in
             [("a.txt", "first historical secret"), ("b.txt", "second historical secret")]
         {
             fs::write(temp.path().join(path), content)?;
-            index.add_path(Path::new(path))?;
+            fixture::stage(&repo, &mut index, Path::new(path))?;
         }
-        let tree = repo.find_tree(index.write_tree()?)?;
-        let root_id = repo.commit(None, &signature, &signature, "introduce", &tree, &[])?;
-        let root = repo.find_commit(root_id)?;
-        index.clear()?;
-        let empty_tree = repo.find_tree(index.write_tree()?)?;
+        let tree = fixture::write_tree(&repo, &index)?;
+        let root_id =
+            fixture::commit(&repo, None, &signature, &signature, "introduce", &tree, &[])?;
+        let root = root_id;
+        index.remove_entries(|_, _, _| true);
+        let empty_tree = fixture::write_tree(&repo, &index)?;
         let deleted_id =
-            repo.commit(None, &signature, &signature, "delete", &empty_tree, &[&root])?;
-        let deleted = repo.find_commit(deleted_id)?;
-        let tip_id =
-            repo.commit(Some("HEAD"), &signature, &signature, "restore", &tree, &[&deleted])?;
+            fixture::commit(&repo, None, &signature, &signature, "delete", &empty_tree, &[&root])?;
+        let deleted = deleted_id;
+        let tip_id = fixture::commit(
+            &repo,
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "restore",
+            &tree,
+            &[&deleted],
+        )?;
 
         let result = enumerate_git_branch_history(
             temp.path(),
-            open_opts(repo.path(), Options::isolated().open_path_as_is(true))?,
+            open_opts(repo.git_dir(), Options::isolated().open_path_as_is(true))?,
             Some("HEAD"),
             None,
             None,
@@ -2817,26 +3125,36 @@ mod tests {
     #[test]
     fn timed_history_uses_committer_dates_without_pruning_older_descendants() -> Result<()> {
         let temp = tempdir()?;
-        let repo = Git2Repository::init_bare(temp.path())?;
+        let repo = gix::init_bare(temp.path())?;
         let start = 1_700_000_000;
         let end = start + 3600;
-        let signature =
-            |seconds| Signature::new("tester", "tester@example.com", &git2::Time::new(seconds, 0));
-        let old = signature(start - 1)?;
-        let lower = signature(start)?;
-        let upper = signature(end)?;
-        let future = signature(end + 1)?;
-        let mut builder = repo.treebuilder(None)?;
-        let baseline_blob = repo.blob(b"unchanged old secret")?;
-        builder.insert("baseline.txt", baseline_blob, 0o100644)?;
-        let baseline_tree = repo.find_tree(builder.write()?)?;
-        let root_id =
-            repo.commit(None, &upper, &old, "old commit with recent author", &baseline_tree, &[])?;
-        let root = repo.find_commit(root_id)?;
-        let recent_blob = repo.blob(b"recent temporary secret")?;
-        builder.insert("recent.txt", recent_blob, 0o100644)?;
-        let recent_tree = repo.find_tree(builder.write()?)?;
-        let recent_id = repo.commit(
+        let signature = |seconds| gix::actor::Signature {
+            time: gix::date::Time::new(seconds, 0),
+            ..fixture::signature("tester", "tester@example.com")
+        };
+        let old = signature(start - 1);
+        let lower = signature(start);
+        let upper = signature(end);
+        let future = signature(end + 1);
+        let mut builder = repo.empty_tree().edit()?;
+        let baseline_blob = repo.write_blob(b"unchanged old secret").map(gix::Id::detach)?;
+        fixture::insert(&mut builder, "baseline.txt", baseline_blob, 0o100644)?;
+        let baseline_tree = builder.write()?.detach();
+        let root_id = fixture::commit(
+            &repo,
+            None,
+            &upper,
+            &old,
+            "old commit with recent author",
+            &baseline_tree,
+            &[],
+        )?;
+        let root = root_id;
+        let recent_blob = repo.write_blob(b"recent temporary secret").map(gix::Id::detach)?;
+        fixture::insert(&mut builder, "recent.txt", recent_blob, 0o100644)?;
+        let recent_tree = builder.write()?.detach();
+        let recent_id = fixture::commit(
+            &repo,
             None,
             &old,
             &lower,
@@ -2844,9 +3162,10 @@ mod tests {
             &recent_tree,
             &[&root],
         )?;
-        let recent = repo.find_commit(recent_id)?;
+        let recent = recent_id;
         // An older child must not prune its newer ancestor; it removes the secret.
-        repo.commit(
+        fixture::commit(
+            &repo,
             Some("refs/heads/main"),
             &upper,
             &old,
@@ -2854,17 +3173,23 @@ mod tests {
             &baseline_tree,
             &[&recent],
         )?;
-        repo.set_head("refs/heads/main")?;
-        let mut builder = repo.treebuilder(Some(&baseline_tree))?;
-        let remote_blob = repo.blob(b"remote secret at upper bound")?;
-        builder.insert("remote.txt", remote_blob, 0o100644)?;
-        let remote_tree = repo.find_tree(builder.write()?)?;
+        fixture::set_head(&repo, "refs/heads/main")?;
+        let mut builder = repo.edit_tree(baseline_tree)?;
+        let remote_blob = repo.write_blob(b"remote secret at upper bound").map(gix::Id::detach)?;
+        fixture::insert(&mut builder, "remote.txt", remote_blob, 0o100644)?;
+        let remote_tree = builder.write()?.detach();
         let remote_id =
-            repo.commit(None, &old, &upper, "at upper bound", &remote_tree, &[&root])?;
-        let remote = repo.find_commit(remote_id)?;
-        builder.insert("future.txt", repo.blob(b"future secret outside window")?, 0o100644)?;
-        let future_tree = repo.find_tree(builder.write()?)?;
-        repo.commit(
+            fixture::commit(&repo, None, &old, &upper, "at upper bound", &remote_tree, &[&root])?;
+        let remote = remote_id;
+        fixture::insert(
+            &mut builder,
+            "future.txt",
+            repo.write_blob(b"future secret outside window").map(gix::Id::detach)?,
+            0o100644,
+        )?;
+        let future_tree = builder.write()?.detach();
+        fixture::commit(
+            &repo,
             Some("refs/remotes/origin/feature"),
             &upper,
             &future,
@@ -2877,7 +3202,7 @@ mod tests {
             for branch in [None, Some("main")] {
                 let result = enumerate_git_branch_history(
                     temp.path(),
-                    open_opts(repo.path(), Options::isolated().open_path_as_is(true))?,
+                    open_opts(repo.git_dir(), Options::isolated().open_path_as_is(true))?,
                     branch,
                     None,
                     Some((start, end)),
@@ -2902,8 +3227,8 @@ mod tests {
                 );
                 if metadata {
                     assert!(blobs.iter().flat_map(|blob| &blob.first_seen).all(|appearance| {
-                        let id = appearance.commit_metadata.commit_id.to_string();
-                        id == recent_id.to_string() || id == remote_id.to_string()
+                        let id = appearance.commit_metadata.commit_id;
+                        id == recent_id || id == remote_id
                     }));
                 }
             }
@@ -2914,17 +3239,18 @@ mod tests {
     #[test]
     fn all_ref_history_preserves_unique_appearances_and_shallow_tips() -> Result<()> {
         let temp = tempdir()?;
-        let repo = Git2Repository::init_bare(temp.path())?;
-        let sig = Signature::now("tester", "tester@example.com")?;
-        let empty_tree = repo.find_tree(repo.treebuilder(None)?.write()?)?;
-        let base_id = repo.commit(Some("refs/heads/main"), &sig, &sig, "base", &empty_tree, &[])?;
-        let base = repo.find_commit(base_id)?;
-        let mut builder = repo.treebuilder(None)?;
-        let shared_blob = repo.blob(b"shared historical secret")?;
-        builder.insert("shared.txt", shared_blob, 0o100644)?;
-        let shared_tree = repo.find_tree(builder.write()?)?;
-        let shared_id = repo.commit(None, &sig, &sig, "shared", &shared_tree, &[&base])?;
-        let shared = repo.find_commit(shared_id)?;
+        let repo = gix::init_bare(temp.path())?;
+        let sig = fixture::signature("tester", "tester@example.com");
+        let empty_tree = repo.empty_tree().edit()?.write()?.detach();
+        let base_id =
+            fixture::commit(&repo, Some("refs/heads/main"), &sig, &sig, "base", &empty_tree, &[])?;
+        let base = base_id;
+        let mut builder = repo.empty_tree().edit()?;
+        let shared_blob = repo.write_blob(b"shared historical secret").map(gix::Id::detach)?;
+        fixture::insert(&mut builder, "shared.txt", shared_blob, 0o100644)?;
+        let shared_tree = builder.write()?.detach();
+        let shared_id = fixture::commit(&repo, None, &sig, &sig, "shared", &shared_tree, &[&base])?;
+        let shared = shared_id;
         let mut expected = vec![shared_id.to_string()];
         for (name, reference) in [
             ("local", Some("refs/heads/feature")),
@@ -2932,30 +3258,43 @@ mod tests {
             ("tag", None),
             ("detached", None),
         ] {
-            let mut builder = repo.treebuilder(Some(&shared_tree))?;
-            builder.insert(name, repo.blob(format!("secret for {name}").as_bytes())?, 0o100644)?;
-            let tree = repo.find_tree(builder.write()?)?;
-            let id = repo.commit(reference, &sig, &sig, name, &tree, &[&shared])?;
+            let mut builder = repo.edit_tree(shared_tree)?;
+            fixture::insert(
+                &mut builder,
+                name,
+                repo.write_blob(format!("secret for {name}").as_bytes()).map(gix::Id::detach)?,
+                0o100644,
+            )?;
+            let tree = builder.write()?.detach();
+            let id = fixture::commit(&repo, reference, &sig, &sig, name, &tree, &[&shared])?;
             expected.push(id.to_string());
             match name {
                 "tag" => {
-                    repo.tag("release", repo.find_commit(id)?.as_object(), &sig, "release", false)?;
+                    fixture::tag(&repo, "release", id, &sig, "release")?;
                 }
-                "detached" => repo.set_head_detached(id)?,
+                "detached" => fixture::detach_head(&repo, id)?,
                 _ => {}
             }
         }
         // Symbolic/duplicate tips must not repeat appearances. Non-commit tags are harmless.
-        repo.reference_symbolic(
+        fixture::reference(
+            &repo,
             "refs/remotes/origin/HEAD",
-            "refs/remotes/origin/feature",
-            true,
+            gix::refs::Target::Symbolic("refs/remotes/origin/feature".try_into()?),
+            gix::refs::transaction::PreviousValue::Any,
             "test",
         )?;
-        repo.tag("tree", empty_tree.as_object(), &sig, "tree tag", false)?;
-        repo.reference("refs/tags/blob", shared_blob, true, "blob tag")?;
+        fixture::tag(&repo, "tree", empty_tree, &sig, "tree tag")?;
+        fixture::reference(
+            &repo,
+            "refs/tags/blob",
+            shared_blob,
+            gix::refs::transaction::PreviousValue::Any,
+            "blob tag",
+        )?;
         // A separate shallow tip inherits a blob from its unavailable parent.
-        let shallow_id = repo.commit(
+        let shallow_id = fixture::commit(
+            &repo,
             Some("refs/heads/shallow"),
             &sig,
             &sig,
@@ -2963,18 +3302,18 @@ mod tests {
             &shared_tree,
             &[&shared],
         )?;
-        fs::write(repo.path().join("shallow"), format!("{shallow_id}\n"))?;
+        fs::write(repo.git_dir().join("shallow"), format!("{shallow_id}\n"))?;
         expected.push(shallow_id.to_string());
         expected.sort();
 
         // Unborn HEAD must not prevent scanning the remaining refs either.
         for unborn in [false, true] {
             if unborn {
-                repo.set_head("refs/heads/unborn")?;
+                fixture::set_head(&repo, "refs/heads/unborn")?;
             }
             let result = enumerate_git_branch_history(
                 temp.path(),
-                open_opts(repo.path(), Options::isolated().open_path_as_is(true))?,
+                open_opts(repo.git_dir(), Options::isolated().open_path_as_is(true))?,
                 None,
                 Some(&base_id.to_string()),
                 None,
@@ -3017,47 +3356,57 @@ mod tests {
     #[test]
     fn bare_branch_scan_ignores_index_and_preserves_changed_paths() -> Result<()> {
         let temp = tempdir()?;
-        let repo = Git2Repository::init_bare(temp.path())?;
-        let signature = Signature::now("tester", "tester@example.com")?;
-        let shared = repo.blob(b"secret moved and copied without changing content")?;
-        let old = repo.blob(b"old secret in modified file")?;
-        let new = repo.blob(b"new secret in modified file")?;
-        let deleted = repo.blob(b"deleted historical secret")?;
-        let excluded = repo.blob(b"excluded secret")?;
-        let mut nested = repo.treebuilder(None)?;
-        nested.insert("secret.txt", shared, 0o100644)?;
-        let nested = nested.write()?;
-        let mut builder = repo.treebuilder(None)?;
-        builder.insert("old-dir", nested, 0o040000)?;
-        builder.insert("modified.txt", old, 0o100644)?;
-        builder.insert("deleted.txt", deleted, 0o100644)?;
-        let root_tree = repo.find_tree(builder.write()?)?;
-        let root_id = repo.commit(None, &signature, &signature, "root", &root_tree, &[])?;
-        let root = repo.find_commit(root_id)?;
+        let repo = gix::init_bare(temp.path())?;
+        let signature = fixture::signature("tester", "tester@example.com");
+        let shared = repo
+            .write_blob(b"secret moved and copied without changing content")
+            .map(gix::Id::detach)?;
+        let old = repo.write_blob(b"old secret in modified file").map(gix::Id::detach)?;
+        let new = repo.write_blob(b"new secret in modified file").map(gix::Id::detach)?;
+        let deleted = repo.write_blob(b"deleted historical secret").map(gix::Id::detach)?;
+        let excluded = repo.write_blob(b"excluded secret").map(gix::Id::detach)?;
+        let mut nested = repo.empty_tree().edit()?;
+        fixture::insert(&mut nested, "secret.txt", shared, 0o100644)?;
+        let nested = nested.write()?.detach();
+        let mut builder = repo.empty_tree().edit()?;
+        fixture::insert(&mut builder, "old-dir", nested, 0o040000)?;
+        fixture::insert(&mut builder, "modified.txt", old, 0o100644)?;
+        fixture::insert(&mut builder, "deleted.txt", deleted, 0o100644)?;
+        let root_tree = builder.write()?.detach();
+        let root_id =
+            fixture::commit(&repo, None, &signature, &signature, "root", &root_tree, &[])?;
+        let root = root_id;
         builder.remove("old-dir")?;
         builder.remove("deleted.txt")?;
-        builder.insert("new-dir", nested, 0o040000)?;
-        builder.insert("copy.txt", shared, 0o100644)?;
-        builder.insert("modified.txt", new, 0o100644)?;
-        builder.insert("excluded.txt", excluded, 0o100644)?;
-        let tip_tree = repo.find_tree(builder.write()?)?;
-        let tip_id =
-            repo.commit(Some("HEAD"), &signature, &signature, "tip", &tip_tree, &[&root])?;
+        fixture::insert(&mut builder, "new-dir", nested, 0o040000)?;
+        fixture::insert(&mut builder, "copy.txt", shared, 0o100644)?;
+        fixture::insert(&mut builder, "modified.txt", new, 0o100644)?;
+        fixture::insert(&mut builder, "excluded.txt", excluded, 0o100644)?;
+        let tip_tree = builder.write()?.detach();
+        let tip_id = fixture::commit(
+            &repo,
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "tip",
+            &tip_tree,
+            &[&root],
+        )?;
         // User diff preferences must not trigger similarity checks or index loading.
-        repo.config()?.set_str("diff.renames", "copies")?;
+        fixture::config(&repo, "diff.renames", "copies")?;
         let mut excludes = globset::GlobSetBuilder::new();
         excludes.add(globset::Glob::new("excluded.txt")?);
         let excludes = std::sync::Arc::new(excludes.build()?);
 
         for corrupt_index in [false, true] {
-            let index_path = repo.path().join("index");
+            let index_path = repo.git_dir().join("index");
             if corrupt_index {
                 fs::write(&index_path, b"deliberately invalid index")?;
             } else {
                 assert!(!index_path.exists());
             }
             let open = || {
-                open_opts(repo.path(), Options::isolated().open_path_as_is(true))
+                open_opts(repo.git_dir(), Options::isolated().open_path_as_is(true))
                     .map_err(anyhow::Error::from)
             };
             let result = enumerate_git_diff_repo(
@@ -3118,22 +3467,23 @@ mod tests {
     #[test]
     fn branch_history_scans_annotated_tag_at_shallow_boundary() -> Result<()> {
         let temp = tempdir()?;
-        let repo = Git2Repository::init(temp.path())?;
-        let signature = Signature::now("tester", "tester@example.com")?;
+        let repo = gix::init(temp.path())?;
+        let signature = fixture::signature("tester", "tester@example.com");
         fs::write(temp.path().join("secret.txt"), "a secret inherited from missing history")?;
-        let mut index = repo.index()?;
-        index.add_path(Path::new("secret.txt"))?;
-        let tree = repo.find_tree(index.write_tree()?)?;
-        let root_id = repo.commit(None, &signature, &signature, "root", &tree, &[])?;
-        let root = repo.find_commit(root_id)?;
-        let tip_id = repo.commit(Some("HEAD"), &signature, &signature, "tip", &tree, &[&root])?;
-        let tip = repo.find_commit(tip_id)?;
-        repo.tag("release", tip.as_object(), &signature, "annotated tag", false)?;
-        fs::write(repo.path().join("shallow"), format!("{tip_id}\n"))?;
+        let mut index = fixture::index(&repo)?;
+        fixture::stage(&repo, &mut index, Path::new("secret.txt"))?;
+        let tree = fixture::write_tree(&repo, &index)?;
+        let root_id = fixture::commit(&repo, None, &signature, &signature, "root", &tree, &[])?;
+        let root = root_id;
+        let tip_id =
+            fixture::commit(&repo, Some("HEAD"), &signature, &signature, "tip", &tree, &[&root])?;
+        let tip = tip_id;
+        fixture::tag(&repo, "release", tip, &signature, "annotated tag")?;
+        fs::write(repo.git_dir().join("shallow"), format!("{tip_id}\n"))?;
 
         let result = enumerate_git_branch_history(
             temp.path(),
-            open_opts(repo.path(), Options::isolated().open_path_as_is(true))?,
+            open_opts(repo.git_dir(), Options::isolated().open_path_as_is(true))?,
             Some("release"),
             None,
             None,

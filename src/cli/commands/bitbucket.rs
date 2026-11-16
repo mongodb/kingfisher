@@ -1,5 +1,4 @@
 use clap::{Args, Subcommand, ValueEnum, ValueHint};
-use strum::Display;
 use url::Url;
 
 use crate::cli::commands::output::OutputArgs;
@@ -92,8 +91,7 @@ impl BitbucketRepoSpecifiers {
     }
 }
 
-#[derive(Copy, Clone, Debug, Display, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-#[strum(serialize_all = "kebab-case")]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum BitbucketRepoType {
     /// Source repositories (exclude forks)
     Source,
@@ -103,6 +101,8 @@ pub enum BitbucketRepoType {
     /// All repositories (source and forks)
     All,
 }
+
+crate::cli::impl_value_enum_display!(BitbucketRepoType);
 
 pub type BitbucketOutputFormat = crate::cli::commands::output::GitHubOutputFormat;
 

@@ -1,18 +1,125 @@
 use anyhow::{Context, Result, bail};
 use kingfisher_scanner::validation::limits::NetworkLimits;
 use reqwest::{Client, RequestBuilder};
-use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     path::{Path, PathBuf},
     time::Duration,
 };
 use url::Url;
 
-// Re-export the Issue type from gouqi so callers don't depend on the crate.
-pub use gouqi::Issue as JiraIssue;
+/// A Jira issue with its complete, untyped field map, including custom fields.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct JiraIssue {
+    #[serde(rename = "self")]
+    pub self_link: String,
+    pub key: String,
+    pub id: String,
+    pub fields: BTreeMap<String, serde_json::Value>,
+}
+
+impl JiraIssue {
+    /// Read a typed field without changing the raw fields in the issue artifact.
+    pub fn field<F: DeserializeOwned>(&self, name: &str) -> Option<serde_json::Result<F>> {
+        self.fields.get(name).map(|value| serde_json::from_value(value.clone()))
+    }
+
+    /// Invalid or absent embedded pages fall back to the comments endpoint.
+    pub fn comments(&self) -> Option<JiraComments> {
+        self.field("comment").and_then(std::result::Result::ok)
+    }
+}
+
+// Keep the embedded-comment response's existing typed serialization, including
+// null optional fields and ISO8601 timestamps. The original comment JSON (and
+// arbitrary custom comment properties) remains untouched in JiraIssue::fields;
+// responses from the standalone comments endpoint also remain untyped.
+#[derive(Serialize, Deserialize, Debug)]
+pub struct JiraComments {
+    pub comments: Vec<JiraComment>,
+    #[serde(rename = "self")]
+    pub self_link: String,
+    #[serde(rename = "maxResults")]
+    pub max_results: u32,
+    pub total: u32,
+    #[serde(rename = "startAt")]
+    pub start_at: u32,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct JiraComment {
+    pub id: Option<String>,
+    #[serde(rename = "self")]
+    pub self_link: String,
+    pub author: Option<JiraUser>,
+    #[serde(rename = "updateAuthor")]
+    pub update_author: Option<JiraUser>,
+    #[serde(default, with = "time::serde::iso8601::option")]
+    pub created: Option<time::OffsetDateTime>,
+    #[serde(default, with = "time::serde::iso8601::option")]
+    pub updated: Option<time::OffsetDateTime>,
+    // Retain the raw string/ADF value; flatten_comment_bodies handles ADF using
+    // the same extractor as issue descriptions, without an extra text cache.
+    pub body: serde_json::Value,
+    pub visibility: Option<JiraCommentVisibility>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct JiraCommentVisibility {
+    #[serde(rename = "type")]
+    pub visibility_type: String,
+    pub value: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct JiraUser {
+    #[serde(rename = "accountId")]
+    pub account_id: Option<String>,
+    pub active: bool,
+    #[serde(rename = "avatarUrls")]
+    pub avatar_urls: Option<BTreeMap<String, String>>,
+    #[serde(rename = "displayName")]
+    pub display_name: String,
+    #[serde(rename = "emailAddress")]
+    pub email_address: Option<String>,
+    pub key: Option<String>,
+    pub name: Option<String>,
+    #[serde(rename = "self")]
+    pub self_link: String,
+    #[serde(rename = "timeZone")]
+    pub timezone: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct JiraChangelog {
+    #[serde(rename = "values")]
+    pub histories: Vec<JiraHistory>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct JiraHistory {
+    /// Absent for anonymous or system edits (for example on Jira Server).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<JiraUser>,
+    pub created: String,
+    pub items: Vec<JiraHistoryItem>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct JiraHistoryItem {
+    pub field: String,
+    pub from: Option<String>,
+    #[serde(rename = "fromString")]
+    pub from_string: Option<String>,
+    pub to: Option<String>,
+    #[serde(rename = "toString")]
+    pub to_string: Option<String>,
+}
 
 const JIRA_COMMENTS_PAGE_SIZE: u32 = 1000;
+/// Jira Cloud caps changelog pages at 100 entries.
+const JIRA_CHANGELOG_PAGE_SIZE: u64 = 100;
 // Bound decoded bytes, not Content-Length: Jira responses may be compressed.
 // This is per API page, not a total artifact/result limit.
 const MAX_JIRA_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
@@ -652,16 +759,59 @@ pub async fn fetch_comments(
     Ok(all_comments)
 }
 
+#[derive(Deserialize)]
+struct JiraChangelogPage {
+    values: Vec<JiraHistory>,
+    #[serde(rename = "startAt")]
+    start_at: Option<u64>,
+    total: Option<u64>,
+    #[serde(rename = "isLast")]
+    is_last: Option<bool>,
+}
+
 pub async fn fetch_changelog(
     jira_url: &Url,
     issue_key: &str,
     ignore_certs: bool,
-) -> Result<gouqi::Changelog> {
+) -> Result<JiraChangelog> {
     validate_issue_key(issue_key)?;
-    let url = jira_api_url(jira_url, &format!("issue/{issue_key}/changelog"))?;
-    jira_json(jira_get(&build_http_client(ignore_certs)?, &JiraAuth::from_env()?, url).await?)
-        .await
-        .context("Failed to parse Jira changelog response")
+    let client = build_http_client(ignore_certs)?;
+    let auth = JiraAuth::from_env()?;
+    let mut start_at = 0u64;
+    let mut histories = Vec::new();
+    loop {
+        let url = jira_api_url(
+            jira_url,
+            &format!(
+                "issue/{issue_key}/changelog?startAt={start_at}&maxResults={JIRA_CHANGELOG_PAGE_SIZE}"
+            ),
+        )?;
+        let page: JiraChangelogPage = jira_json(jira_get(&client, &auth, url).await?)
+            .await
+            .context("Failed to parse Jira changelog response")?;
+        let received = page.values.len() as u64;
+        histories.extend(page.values);
+        let page_start = page.start_at.unwrap_or(start_at);
+        let next = page_start.saturating_add(received);
+        // Stop on the last page or a response without pagination metadata (treated
+        // as complete, as before). An empty page that claims more would silently
+        // truncate the changelog, so it is an error like a non-advancing cursor.
+        let more = match (page.is_last, page.total) {
+            (Some(is_last), _) => !is_last,
+            (None, Some(total)) => next < total,
+            (None, None) => false,
+        };
+        if !more {
+            break;
+        }
+        anyhow::ensure!(
+            received > 0,
+            "Jira changelog pagination returned an empty page before the last page"
+        );
+        anyhow::ensure!(next > start_at, "Jira changelog pagination did not advance");
+        start_at = next;
+    }
+    Ok(JiraChangelog { histories })
 }
 
 pub async fn download_issues_to_dir(
@@ -710,6 +860,264 @@ pub async fn download_issues_to_dir(
 
 #[cfg(test)]
 mod tests {
+    fn compatibility_issue() -> serde_json::Value {
+        json!({
+            "self": "https://jira.example.com/rest/api/3/issue/COMPAT-1",
+            "key": "COMPAT-1",
+            "id": "123",
+            "fields": {
+                "summary": "summary-secret",
+                "customfield_123": {
+                    "nested": ["custom-secret", 42, true, null, {"unicode": "秘密"}]
+                },
+                "environment": {"custom": "environment-secret"},
+                "description": {
+                    "type": "doc", "version": 1,
+                    "content": [{"type": "paragraph", "content": [
+                        {"type": "text", "text": "description-"},
+                        {"type": "text", "text": "secret"}
+                    ]}]
+                },
+                "comment": {
+                    "self": "https://jira.example.com/rest/api/3/issue/COMPAT-1/comment",
+                    "startAt": 0, "maxResults": 1, "total": 1,
+                    "custom_wrapper": "wrapper-secret",
+                    "comments": [{
+                        "self": "https://jira.example.com/rest/api/3/issue/COMPAT-1/comment/1",
+                        "id": "1",
+                        "custom_comment": {"nested": ["comment-custom-secret"]},
+                        "body": {
+                            "type": "doc", "version": 1,
+                            "content": [{"type": "paragraph", "content": [
+                                {"type": "text", "text": "comment-secret"}
+                            ]}]
+                        },
+                        "created": "2026-10-18T12:34:56.123+0530",
+                        "updated": "2026-10-19T01:02:03Z",
+                        "visibility": {"type": "role", "value": "Administrators"}
+                    }]
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn issue_response_compatibility_preserves_raw_fields_and_normalized_artifacts() {
+        let original = compatibility_issue();
+        let issue: super::JiraIssue = serde_json::from_value(original.clone()).unwrap();
+        assert_eq!(issue.self_link, original["self"].as_str().unwrap());
+        assert_eq!(issue.key, "COMPAT-1");
+        assert_eq!(issue.id, "123");
+        assert_eq!(issue.fields["customfield_123"], original["fields"]["customfield_123"]);
+        assert_eq!(serde_json::to_value(issue.clone()).unwrap(), original);
+        assert!(issue.field::<String>("missing").is_none());
+        assert!(issue.field::<String>("customfield_123").unwrap().is_err());
+        assert_eq!(issue.field::<String>("summary").unwrap().unwrap(), "summary-secret");
+
+        let mut expected = original.clone();
+        expected["fields"]["description"] = json!("description-secret");
+        expected["fields"]["comment"]["comments"][0]["body"] = json!("comment-secret");
+        assert_eq!(super::normalize_issue(&issue).unwrap(), expected);
+        // Normalizing the scanned artifact must not mutate the response used for
+        // embedded-comment completeness checks or discard arbitrary secret text.
+        assert_eq!(serde_json::to_value(&issue).unwrap(), original);
+    }
+
+    #[test]
+    fn embedded_comment_response_compatibility_keeps_defaults_dates_and_visibility() {
+        let issue: super::JiraIssue = serde_json::from_value(compatibility_issue()).unwrap();
+        let page = issue.comments().unwrap();
+        assert_eq!(page.self_link, "https://jira.example.com/rest/api/3/issue/COMPAT-1/comment");
+        assert_eq!((page.start_at, page.max_results, page.total), (0, 1, 1));
+        let (comments, complete) = extract_embedded_comments(&issue).unwrap().unwrap();
+        assert!(complete);
+        // Freeze the previous typed embedded-comment serialization. The raw
+        // custom properties are retained separately in the issue artifact.
+        assert_eq!(
+            comments,
+            vec![json!({
+                "self": "https://jira.example.com/rest/api/3/issue/COMPAT-1/comment/1",
+                "id": "1", "author": null, "updateAuthor": null,
+                "created": "+002026-10-18T12:34:56.123000000+05:30",
+                "updated": "+002026-10-19T01:02:03.000000000Z",
+                "body": "comment-secret",
+                "visibility": {"type": "role", "value": "Administrators"}
+            })]
+        );
+    }
+
+    #[test]
+    fn embedded_comment_response_compatibility_rejects_invalid_wrappers() {
+        for pointer in [
+            "/fields/comment/self",
+            "/fields/comment/startAt",
+            "/fields/comment/maxResults",
+            "/fields/comment/total",
+            "/fields/comment/comments/0/self",
+        ] {
+            let mut value = compatibility_issue();
+            *value.pointer_mut(pointer).unwrap() = json!(null);
+            let issue: super::JiraIssue = serde_json::from_value(value).unwrap();
+            assert!(issue.comments().is_none(), "invalid embedded page at {pointer}");
+            assert!(extract_embedded_comments(&issue).unwrap().is_none());
+        }
+        for (field, value) in [
+            ("created", json!("not-a-timestamp")),
+            ("updated", json!(42)),
+            ("author", json!({"displayName": "incomplete user"})),
+        ] {
+            let mut value_json = compatibility_issue();
+            value_json["fields"]["comment"]["comments"][0][field] = value;
+            let issue: super::JiraIssue = serde_json::from_value(value_json).unwrap();
+            assert!(issue.comments().is_none(), "invalid embedded comment {field}");
+        }
+    }
+
+    #[tokio::test]
+    async fn changelog_response_compatibility_preserves_known_fields_and_optional_nulls() {
+        let server = MockServer::start().await;
+        let author = json!({
+            "accountId": "account-secret", "active": false,
+            "avatarUrls": {"48x48": "https://jira.example.com/avatar?secret=avatar-secret"},
+            "displayName": "display-secret", "emailAddress": "user@example.com",
+            "key": "key-secret", "name": "name-secret",
+            "self": "https://jira.example.com/user/1", "timeZone": "Europe/London"
+        });
+        let body = json!({"values": [{
+            "author": author.clone(), "created": "unparsed-created-secret",
+            "items": [
+                {"field": "customfield_123", "from": "from-secret", "fromString": "before-secret",
+                 "to": "to-secret", "toString": "after-secret"},
+                {"field": "description"}
+            ]
+        }]});
+        Mock::given(method("GET"))
+            .and(path("/rest/api/latest/issue/COMPAT-1/changelog"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let changelog = without_jira_credentials(super::fetch_changelog(
+            &Url::parse(&server.uri()).unwrap(),
+            "COMPAT-1",
+            false,
+        ))
+        .await
+        .unwrap();
+        assert_eq!(changelog.histories.len(), 1);
+        assert_eq!(changelog.histories[0].items[0].from_string.as_deref(), Some("before-secret"));
+        assert_eq!(
+            serde_json::to_value(changelog).unwrap(),
+            json!({"values": [{
+                "author": author, "created": "unparsed-created-secret",
+                "items": [
+                    {"field": "customfield_123", "from": "from-secret", "fromString": "before-secret",
+                     "to": "to-secret", "toString": "after-secret"},
+                    {"field": "description", "from": null, "fromString": null, "to": null, "toString": null}
+                ]
+            }]})
+        );
+    }
+
+    #[tokio::test]
+    async fn complete_embedded_comments_avoid_fetching_and_keep_raw_issue_fields() {
+        let server = MockServer::start().await;
+        let mut issue = compatibility_issue();
+        // A complete page with missing optional comment fields must serialize
+        // those fields as null rather than silently omitting them.
+        issue["fields"]["comment"]["comments"][0] = json!({
+            "self": "https://jira.example.com/comment/1", "body": "plain-secret"
+        });
+        for (endpoint, body) in
+            [("serverInfo", json!({})), ("search", json!({"issues": [issue.clone()], "total": 1}))]
+        {
+            Mock::given(method("GET"))
+                .and(path(format!("/rest/api/latest/{endpoint}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let paths = without_jira_credentials(super::download_issues_to_dir(
+            &Url::parse(&server.uri()).unwrap(),
+            "project = COMPAT",
+            1,
+            false,
+            &dir.path().to_path_buf(),
+            super::DownloadIssueArtifactsOptions {
+                include_comments: true,
+                include_changelog: false,
+            },
+        ))
+        .await
+        .unwrap();
+        assert_eq!(paths.len(), 2);
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+        let read = |name| -> serde_json::Value {
+            serde_json::from_slice(&std::fs::read(dir.path().join("COMPAT-1").join(name)).unwrap())
+                .unwrap()
+        };
+        issue["fields"]["description"] = json!("description-secret");
+        assert_eq!(read("issue.json"), issue);
+        assert_eq!(
+            read("comments.json"),
+            json!([{
+                "self": "https://jira.example.com/comment/1", "body": "plain-secret",
+                "id": null, "author": null, "updateAuthor": null, "created": null,
+                "updated": null, "visibility": null
+            }])
+        );
+    }
+
+    #[tokio::test]
+    async fn partial_embedded_comments_fetch_complete_raw_comments_and_convert_adf() {
+        let server = MockServer::start().await;
+        let mut issue = compatibility_issue();
+        issue["fields"]["comment"]["total"] = json!(2);
+        let comments = json!([{
+            "id": "fetched", "custom_comment": {"nested": ["fetched-custom-secret"]},
+            "created": "2026-10-18T12:34:56.123+0530",
+            "body": compatibility_issue()["fields"]["description"].clone()
+        }]);
+        for (endpoint, body) in [
+            ("serverInfo", json!({})),
+            ("search", json!({"issues": [issue], "total": 1})),
+            (
+                "issue/COMPAT-1/comment",
+                json!({"comments": comments.clone(), "startAt": 0, "total": 1}),
+            ),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(format!("/rest/api/latest/{endpoint}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        without_jira_credentials(super::download_issues_to_dir(
+            &Url::parse(&server.uri()).unwrap(),
+            "project = COMPAT",
+            1,
+            false,
+            &dir.path().to_path_buf(),
+            super::DownloadIssueArtifactsOptions {
+                include_comments: true,
+                include_changelog: false,
+            },
+        ))
+        .await
+        .unwrap();
+        let output: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(dir.path().join("COMPAT-1").join("comments.json")).unwrap(),
+        )
+        .unwrap();
+        let mut expected = comments;
+        expected[0]["body"] = json!("description-secret");
+        assert_eq!(output, expected);
+    }
+
     #[tokio::test]
     async fn compressed_response_limits_count_decoded_bytes_and_obey_content_policy() {
         use std::io::Write;
@@ -1016,8 +1424,9 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("after 3 retries"));
     }
     use super::{
-        JIRA_COMMENTS_PAGE_SIZE, JiraAuth, extract_adf_text, extract_embedded_comments,
-        fetch_comments, fetch_issues, flatten_adf_fields, flatten_comment_bodies, is_adf,
+        JIRA_CHANGELOG_PAGE_SIZE, JIRA_COMMENTS_PAGE_SIZE, JiraAuth, extract_adf_text,
+        extract_embedded_comments, fetch_comments, fetch_issues, flatten_adf_fields,
+        flatten_comment_bodies, is_adf,
     };
     use kingfisher_scanner::validation::limits::NetworkLimits;
     use serde_json::json;
@@ -1444,6 +1853,69 @@ mod tests {
             assert_eq!(comments_error.to_string(), "Invalid Jira issue key");
             assert_eq!(changelog_error.to_string(), "Invalid Jira issue key");
         }
+    }
+
+    #[tokio::test]
+    async fn fetch_changelog_paginates_and_accepts_anonymous_authors() {
+        if std::net::TcpListener::bind(("127.0.0.1", 0)).is_err() {
+            return;
+        }
+        let server = MockServer::start().await;
+        let author = json!({"active": true, "displayName": "Dev", "self": "https://jira/u/1"});
+        for (start, values, is_last) in [
+            ("0", json!([{"author": author, "created": "c1", "items": []}]), false),
+            ("1", json!([{"created": "c2", "items": [{"field": "summary"}]}]), true),
+        ] {
+            Mock::given(method("GET"))
+                .and(path("/rest/api/latest/issue/TEST-1/changelog"))
+                .and(query_param("startAt", start))
+                .and(query_param("maxResults", JIRA_CHANGELOG_PAGE_SIZE.to_string()))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "values": values, "startAt": start.parse::<u64>().unwrap(),
+                    "maxResults": JIRA_CHANGELOG_PAGE_SIZE, "total": 2, "isLast": is_last
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let changelog = without_jira_credentials(super::fetch_changelog(
+            &Url::parse(&server.uri()).unwrap(),
+            "TEST-1",
+            false,
+        ))
+        .await
+        .unwrap();
+        assert_eq!(changelog.histories.len(), 2);
+        assert!(changelog.histories[0].author.is_some());
+        assert!(changelog.histories[1].author.is_none());
+        // Anonymous entries omit the author rather than serializing null.
+        let serialized = serde_json::to_value(&changelog).unwrap();
+        assert!(serialized["values"][1].get("author").is_none());
+    }
+
+    #[tokio::test]
+    async fn fetch_changelog_rejects_an_empty_non_final_page() {
+        if std::net::TcpListener::bind(("127.0.0.1", 0)).is_err() {
+            return;
+        }
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/latest/issue/TEST-1/changelog"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "values": [], "startAt": 0, "maxResults": JIRA_CHANGELOG_PAGE_SIZE,
+                "total": 5, "isLast": false
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = without_jira_credentials(super::fetch_changelog(
+            &Url::parse(&server.uri()).unwrap(),
+            "TEST-1",
+            false,
+        ))
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("empty page before the last page"), "{error:#}");
     }
 
     #[tokio::test]

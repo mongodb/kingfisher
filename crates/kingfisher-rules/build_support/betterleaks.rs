@@ -162,7 +162,7 @@ struct RuleCapabilities {
     #[serde(default)]
     verify_candidates: Vec<String>,
     access_map: Option<BetterleaksAccessMap>,
-    revocation: Option<serde_yaml::Value>,
+    revocation: Option<yaml_serde::Value>,
     revocation_bindings: Option<BetterleaksRevocationBindings>,
     validation: Option<TypedValidation>,
     validation_override: Option<String>,
@@ -222,7 +222,7 @@ struct ImportedRule {
     #[serde(skip_serializing_if = "Option::is_none")]
     validation: Option<Validation>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    revocation: Option<serde_yaml::Value>,
+    revocation: Option<yaml_serde::Value>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     depends_on_rule: Vec<DependsOnRule>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -629,7 +629,7 @@ fn import_config_with_namespace(
     let source_config = resolve_config(contents, &mut Vec::new(), 0)?;
     validate_source_config(&source_config)?;
     let mut capability_overlay: CapabilityOverlay =
-        serde_yaml::from_str(capabilities).context("invalid Betterleaks capability overlay")?;
+        yaml_serde::from_str(capabilities).context("invalid Betterleaks capability overlay")?;
     if capability_overlay.version != 1 {
         bail!("unsupported Betterleaks capability overlay version {}", capability_overlay.version);
     }
@@ -913,7 +913,7 @@ fn import_config_with_namespace(
                     validate_revocation_expression(&expression).with_context(|| {
                         format!("unsupported revocation operation in {}", source_rule.id)
                     })?;
-                    Some(serde_yaml::to_value(Validation::Betterleaks(Box::new(
+                    Some(yaml_serde::to_value(Validation::Betterleaks(Box::new(
                         BetterleaksValidation {
                             source: source.to_string(),
                             expression,
@@ -947,7 +947,7 @@ fn import_config_with_namespace(
     imported.sort_by(|left, right| left.id.cmp(&right.id));
 
     let yaml =
-        serde_yaml::to_string(&Snapshot { betterleaks_prefilter: prefilter, rules: imported })?;
+        yaml_serde::to_string(&Snapshot { betterleaks_prefilter: prefilter, rules: imported })?;
     Ok(format!(
         "# Generated from source {source}; do not edit.\n\
          # Imported {} of {source_count} Betterleaks rules. Omitted low-value generic rules: {}.\n\
@@ -2261,7 +2261,7 @@ analyze = 'analysis.capabilities({"read": len(validation.analysis?.scopes ?? [])
 revoke = 'http.delete("https://example.invalid/revoke")'
 "#;
         let yaml = import_config(source, "synthetic-v2", "version: 1\nrules: {}\n").unwrap();
-        let snapshot: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        let snapshot: yaml_serde::Value = yaml_serde::from_str(&yaml).unwrap();
         let rule = &snapshot["rules"][0];
         assert_eq!(rule["validation"]["type"].as_str(), Some("Betterleaks"));
         assert!(rule["validation"]["content"]["source"].as_str().unwrap().contains("startsWith"));
@@ -2284,7 +2284,7 @@ entropy(finding["secret"]) < 4 || len(payload) % 4 == 1 ||
  !(fromBase64(replace(replace(payload, "-", "+"), "_", "/") + repeat("=", padding)) matches
    '^\\{"u":"[^"\\\\\\x00-\\x1f]+"\\s*,\\s*"a"\\s*:\\s*"[A-Za-z0-9]+"\\s*\\}$')
 "#;
-        let expected_filter = serde_yaml::to_value(parse_expression(filter).unwrap()).unwrap();
+        let expected_filter = yaml_serde::to_value(parse_expression(filter).unwrap()).unwrap();
         for (id, prefix) in [("mapbox-api-token", "pk"), ("mapbox-secret-token", "sk")] {
             let source = format!(
                 r#"
@@ -2302,7 +2302,7 @@ filter = '''{filter}'''
                 ),
                 ("custom.", import_custom_config(&source, "custom-mapbox.toml").unwrap()),
             ] {
-                let snapshot: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+                let snapshot: yaml_serde::Value = yaml_serde::from_str(&yaml).unwrap();
                 let rules = snapshot["rules"].as_sequence().unwrap();
                 assert_eq!(rules.len(), 1);
                 assert_eq!(rules[0]["id"].as_str().unwrap(), format!("{namespace}{id}"));
@@ -2332,7 +2332,7 @@ filter = '''{filter}'''
         let yaml =
             import_custom_config(source, "Betterleaks 22ae2f41a70d759e83e832a6a1b205fac729223b")
                 .unwrap();
-        let snapshot: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        let snapshot: yaml_serde::Value = yaml_serde::from_str(&yaml).unwrap();
         let rule = &snapshot["rules"][0];
         assert_eq!(rule["id"], "custom.buildkite-user-access-token");
         assert_eq!(rule["validation"]["type"], "Betterleaks");
@@ -2368,7 +2368,7 @@ tags = ["private", "key"]
             "test",
         )
         .unwrap();
-        let snapshot: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        let snapshot: yaml_serde::Value = yaml_serde::from_str(&yaml).unwrap();
         let rule = &snapshot["rules"][0];
         assert_eq!(rule["id"], "custom.private-key-file");
         assert_eq!(rule["specificity"].as_i64(), Some(-17));
@@ -2399,7 +2399,7 @@ id = "content-only"
 regex = '(other_[a-z0-9]{16})'
 "#;
         let builtins = import_config(source, "test", EMPTY_CAPABILITIES).unwrap();
-        let snapshot: serde_yaml::Value = serde_yaml::from_str(&builtins).unwrap();
+        let snapshot: yaml_serde::Value = yaml_serde::from_str(&builtins).unwrap();
         let rules = snapshot["rules"].as_sequence().unwrap();
         assert_eq!(rules.len(), 2);
         assert_eq!(rules[0]["id"], "betterleaks.content-only");
@@ -2409,7 +2409,7 @@ regex = '(other_[a-z0-9]{16})'
         assert!(builtins.contains("Imported 2 of 4 Betterleaks rules"));
 
         let custom = import_custom_config(source, "test").unwrap();
-        let snapshot: serde_yaml::Value = serde_yaml::from_str(&custom).unwrap();
+        let snapshot: yaml_serde::Value = yaml_serde::from_str(&custom).unwrap();
         let rules = snapshot["rules"].as_sequence().unwrap();
         assert_eq!(rules.len(), 4);
         assert_eq!(
@@ -2483,7 +2483,7 @@ regex = 'new-token'
 "#
         );
         let yaml = import_custom_config(&child, "child").unwrap();
-        let snapshot: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        let snapshot: yaml_serde::Value = yaml_serde::from_str(&yaml).unwrap();
         let rules = snapshot["rules"].as_sequence().unwrap();
         assert_eq!(rules.len(), 2);
         let replacement = rules.iter().find(|rule| rule["id"] == "custom.replace").unwrap();
@@ -2673,10 +2673,10 @@ filter = '''entropy(finding["secret"]) <= 3.5'''
 validate = '''{"result": "unknown"}'''
 "#;
         let overlay = "version: 1\nrules:\n  example:\n    bare: true\n";
-        let imported: serde_yaml::Value =
-            serde_yaml::from_str(&import_config(source, "test", overlay).unwrap()).unwrap();
-        let original: serde_yaml::Value =
-            serde_yaml::from_str(&import_config(source, "test", EMPTY_CAPABILITIES).unwrap())
+        let imported: yaml_serde::Value =
+            yaml_serde::from_str(&import_config(source, "test", overlay).unwrap()).unwrap();
+        let original: yaml_serde::Value =
+            yaml_serde::from_str(&import_config(source, "test", EMPTY_CAPABILITIES).unwrap())
                 .unwrap();
         let rule = &imported["rules"][0];
         assert!(
@@ -2748,7 +2748,7 @@ skipReport = true
             EMPTY_CAPABILITIES,
         )
         .unwrap();
-        let snapshot: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        let snapshot: yaml_serde::Value = yaml_serde::from_str(&yaml).unwrap();
         let rules = snapshot["rules"].as_sequence().unwrap();
         let primary = rules.iter().find(|rule| rule["id"] == "betterleaks.primary").unwrap();
         let dependencies = primary["depends_on_rule"].as_sequence().unwrap();
@@ -2837,7 +2837,7 @@ filter = '''
 "#;
         let capabilities = "version: 1\nrules:\n  generic-api-key:\n    confidence: low\n";
         let builtin = import_config(source, "test", capabilities).unwrap();
-        let builtin: serde_yaml::Value = serde_yaml::from_str(&builtin).unwrap();
+        let builtin: yaml_serde::Value = yaml_serde::from_str(&builtin).unwrap();
         let rule = &builtin["rules"][0];
         assert_eq!(rule["confidence"].as_str(), Some("low"));
         let expected_filter = parse_expression(
@@ -2849,16 +2849,16 @@ filter = '''
         "#,
         )
         .unwrap();
-        assert_eq!(rule["betterleaks_filter"], serde_yaml::to_value(expected_filter).unwrap());
+        assert_eq!(rule["betterleaks_filter"], yaml_serde::to_value(expected_filter).unwrap());
 
         let custom = import_custom_config(source, "test").unwrap();
-        let custom: serde_yaml::Value = serde_yaml::from_str(&custom).unwrap();
+        let custom: yaml_serde::Value = yaml_serde::from_str(&custom).unwrap();
         assert_eq!(custom["rules"][0]["confidence"].as_str(), Some("low"));
         let original: toml::Value = toml::from_str(source).unwrap();
         let original_filter = original["rules"][0]["filter"].as_str().unwrap();
         assert_eq!(
             custom["rules"][0]["betterleaks_filter"],
-            serde_yaml::to_value(parse_expression(original_filter).unwrap()).unwrap()
+            yaml_serde::to_value(parse_expression(original_filter).unwrap()).unwrap()
         );
     }
 
@@ -2891,7 +2891,7 @@ filter = 'let _ = setConfidence("high"); false'
             "[[rules]]\nid='generic-credential-uri'\nregex='token'\nconfidence='medium'\nfilter='''{original_filter}'''"
         );
         let builtin = import_config(&source, "archived-uri", EMPTY_CAPABILITIES).unwrap();
-        let builtin: serde_yaml::Value = serde_yaml::from_str(&builtin).unwrap();
+        let builtin: yaml_serde::Value = yaml_serde::from_str(&builtin).unwrap();
         let rule = &builtin["rules"][0];
         assert!(rule["confidence"].is_null() || rule["confidence"].as_str() == Some("medium"));
 
@@ -2921,13 +2921,13 @@ filter = 'let _ = setConfidence("high"); false'
         assert!(!skipping);
         assert_eq!(
             rule["betterleaks_filter"],
-            serde_yaml::to_value(parse_expression(&expected).unwrap()).unwrap()
+            yaml_serde::to_value(parse_expression(&expected).unwrap()).unwrap()
         );
         let custom = import_custom_config(&source, "archived-uri").unwrap();
-        let custom: serde_yaml::Value = serde_yaml::from_str(&custom).unwrap();
+        let custom: yaml_serde::Value = yaml_serde::from_str(&custom).unwrap();
         assert_eq!(
             custom["rules"][0]["betterleaks_filter"],
-            serde_yaml::to_value(parse_expression(original_filter).unwrap()).unwrap()
+            yaml_serde::to_value(parse_expression(original_filter).unwrap()).unwrap()
         );
 
         // Do not discard a changed computation (which might now error), or a binding
@@ -3114,10 +3114,10 @@ filter = '''containsAny(finding["secret"], ["rule-filter"])'''
             EMPTY_CAPABILITIES,
         )
         .unwrap();
-        let snapshot: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
-        let prefilter = serde_yaml::to_string(&snapshot["betterleaks_prefilter"]).unwrap();
+        let snapshot: yaml_serde::Value = yaml_serde::from_str(&yaml).unwrap();
+        let prefilter = yaml_serde::to_string(&snapshot["betterleaks_prefilter"]).unwrap();
         let finding_filter =
-            serde_yaml::to_string(&snapshot["rules"][0]["betterleaks_filter"]).unwrap();
+            yaml_serde::to_string(&snapshot["rules"][0]["betterleaks_filter"]).unwrap();
 
         assert!(prefilter.contains("vendor/"));
         assert!(!prefilter.contains("global-filter"));
@@ -3239,8 +3239,8 @@ rules:
 "#,
         )
         .unwrap();
-        let snapshot: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
-        let filter = serde_yaml::to_string(&snapshot["rules"][0]["betterleaks_filter"]).unwrap();
+        let snapshot: yaml_serde::Value = yaml_serde::from_str(&yaml).unwrap();
+        let filter = yaml_serde::to_string(&snapshot["rules"][0]["betterleaks_filter"]).unwrap();
 
         assert!(filter.contains("sk_test_"));
         assert!(filter.contains("3.5"));
@@ -3263,7 +3263,7 @@ rules:
 "#,
         )
         .unwrap();
-        let snapshot: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        let snapshot: yaml_serde::Value = yaml_serde::from_str(&yaml).unwrap();
         let imported = snapshot["rules"][0]["pattern"].as_str().unwrap();
         let re = regex::bytes::Regex::new(imported).unwrap();
         let fake = "-----BEGIN RSA PRIVATE KEY-----\nfoo\nbar\nfoobar\nbarfoo\n-----END RSA PRIVATE KEY-----";
@@ -3282,10 +3282,10 @@ rules:
             assert_eq!(re.find(short.as_bytes()).unwrap().as_bytes(), short.as_bytes());
         }
         let legacy = import_custom_config(&source, "legacy.toml").unwrap();
-        let legacy: serde_yaml::Value = serde_yaml::from_str(&legacy).unwrap();
+        let legacy: yaml_serde::Value = yaml_serde::from_str(&legacy).unwrap();
         assert_eq!(legacy["rules"][0]["pattern"].as_str().unwrap(), pattern);
         let unfiltered = import_config(&source, "test", "version: 1\nrules: {}\n").unwrap();
-        let unfiltered: serde_yaml::Value = serde_yaml::from_str(&unfiltered).unwrap();
+        let unfiltered: yaml_serde::Value = yaml_serde::from_str(&unfiltered).unwrap();
         assert_eq!(unfiltered["rules"][0]["pattern"].as_str().unwrap(), pattern);
         let unknown = pattern.replace("{64,}", "{65,}");
         assert_eq!(bounded_private_key_pattern(&unknown), unknown);
@@ -3311,8 +3311,8 @@ rules:
 "#,
         )
         .unwrap();
-        let snapshot: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
-        let filter = serde_yaml::to_string(&snapshot["rules"][0]["betterleaks_filter"]).unwrap();
+        let snapshot: yaml_serde::Value = yaml_serde::from_str(&yaml).unwrap();
+        let filter = yaml_serde::to_string(&snapshot["rules"][0]["betterleaks_filter"]).unwrap();
         assert!(filter.contains("malformedPrivateKey"));
         assert!(filter.contains("upstream placeholder"));
         let legacy = import_custom_config(source, "legacy.toml").unwrap();
@@ -3370,13 +3370,13 @@ rules:
         )
         .unwrap();
 
-        let snapshot: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        let snapshot: yaml_serde::Value = yaml_serde::from_str(&yaml).unwrap();
         let validations: BTreeMap<_, _> = snapshot["rules"]
             .as_sequence()
             .unwrap()
             .iter()
             .map(|rule| {
-                (rule["id"].as_str().unwrap(), serde_yaml::to_string(&rule["validation"]).unwrap())
+                (rule["id"].as_str().unwrap(), yaml_serde::to_string(&rule["validation"]).unwrap())
             })
             .collect();
 

@@ -97,7 +97,7 @@ fn generate(root: &Path, mode: Option<&str>) -> Result<()> {
     let first_party_source = fs::read_to_string(root.join(FIRST_PARTY_RULES))?;
     let (kingfisher_yaml, first_party_provenance) =
         first_party_rules(&first_party_source, &[&yaml, &veles_yaml])?;
-    let config: serde_yaml::Value = serde_yaml::from_str(&veles_config)?;
+    let config: yaml_serde::Value = yaml_serde::from_str(&veles_config)?;
     let revision = config["revision"].as_str().context("missing Veles revision")?;
     let veles_base = format!("https://raw.githubusercontent.com/google/osv-scalibr/{revision}");
     let mut notices = String::from(
@@ -326,7 +326,7 @@ fn find_obsolete_rule_files(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FirstPartySource {
-    rules: Vec<serde_yaml::Value>,
+    rules: Vec<yaml_serde::Value>,
     exceptions: Vec<FirstPartyException>,
 }
 
@@ -344,10 +344,10 @@ struct FirstPartyException {
 // New generally useful detectors belong upstream; retaining one here requires an explicit exception.
 fn first_party_rules(source: &str, imported: &[&str]) -> Result<(String, BTreeMap<String, Value>)> {
     let source: FirstPartySource =
-        serde_yaml::from_str(source).context("invalid first-party detector source")?;
+        yaml_serde::from_str(source).context("invalid first-party detector source")?;
     let mut imported_ids = BTreeSet::new();
     for yaml in imported {
-        let parsed: serde_yaml::Value = serde_yaml::from_str(yaml)?;
+        let parsed: yaml_serde::Value = yaml_serde::from_str(yaml)?;
         for rule in parsed["rules"].as_sequence().context("missing imported rules")? {
             let id = rule["id"].as_str().context("missing imported rule ID")?;
             ensure!(imported_ids.insert(id.to_string()), "duplicate imported rule ID {id}");
@@ -430,7 +430,7 @@ fn first_party_rules(source: &str, imported: &[&str]) -> Result<(String, BTreeMa
         ensure!(provenance.contains_key(id), "first-party rule {id} requires a reviewed exception");
     }
     // Emit only runtime rule data; exception metadata stays in the per-rule provenance manifest.
-    let yaml = serde_yaml::to_string(&BTreeMap::from([(
+    let yaml = yaml_serde::to_string(&BTreeMap::from([(
         "rules",
         rules.into_values().collect::<Vec<_>>(),
     )]))?;
@@ -442,7 +442,7 @@ fn rule_provenance(
     veles: &str,
     betterleaks_url: &str,
     upstream_toml: &str,
-    veles_config: &serde_yaml::Value,
+    veles_config: &yaml_serde::Value,
 ) -> Result<BTreeMap<String, Value>> {
     let upstream: toml::Value = toml::from_str(upstream_toml)?;
     let upstream_ids: BTreeSet<_> = upstream["rules"]
@@ -454,7 +454,7 @@ fn rule_provenance(
     let plugin_ids = veles_config["rules"].as_sequence().context("missing Veles selections")?;
     let mut result = BTreeMap::new();
     for (provider, yaml) in [("betterleaks", betterleaks), ("veles", veles)] {
-        let parsed: serde_yaml::Value = serde_yaml::from_str(yaml)?;
+        let parsed: yaml_serde::Value = yaml_serde::from_str(yaml)?;
         for rule in parsed["rules"].as_sequence().context("missing generated rules")? {
             let id = rule["id"].as_str().context("missing generated rule ID")?;
             let record = if provider == "betterleaks" {
@@ -473,7 +473,7 @@ fn rule_provenance(
                 let unqualified = id.strip_prefix("veles.").context("invalid Veles ID")?;
                 let plugin = plugin_ids
                     .iter()
-                    .filter_map(serde_yaml::Value::as_str)
+                    .filter_map(yaml_serde::Value::as_str)
                     .filter(|plugin| {
                         unqualified == *plugin || unqualified.starts_with(&format!("{plugin}-"))
                     })
@@ -548,7 +548,161 @@ fn rule_bundle(files: &[(&str, &str)]) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::BufRead as _,
+        net::{SocketAddr, TcpListener, TcpStream},
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+            mpsc::{self, Receiver},
+        },
+        thread::{self, JoinHandle},
+        time::Duration,
+    };
+
     use super::*;
+
+    struct DownloadServer {
+        address: SocketAddr,
+        requests: Receiver<String>,
+        stop: Arc<AtomicBool>,
+        worker: Option<JoinHandle<()>>,
+    }
+
+    impl DownloadServer {
+        fn new(responses: Vec<Vec<u8>>) -> Self {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let address = listener.local_addr().unwrap();
+            let (sender, requests) = mpsc::channel();
+            let stop = Arc::new(AtomicBool::new(false));
+            let worker_stop = Arc::clone(&stop);
+            let worker = thread::spawn(move || {
+                for response in responses {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    if worker_stop.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                    stream.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+                    let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                    let mut request = String::new();
+                    loop {
+                        let mut line = String::new();
+                        assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+                        request.push_str(&line);
+                        assert!(request.len() <= 16 * 1024);
+                        if line == "\r\n" {
+                            break;
+                        }
+                    }
+                    sender.send(request).unwrap();
+                    stream.write_all(&response).unwrap();
+                }
+            });
+            Self { address, requests, stop, worker: Some(worker) }
+        }
+
+        fn url(&self, path: &str) -> String {
+            format!("http://{}{path}", self.address)
+        }
+
+        fn request(&self) -> String {
+            self.requests.recv_timeout(Duration::from_secs(5)).unwrap()
+        }
+    }
+
+    impl Drop for DownloadServer {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Relaxed);
+            // Wake a fixture still waiting for a request if the client failed early.
+            let _ = TcpStream::connect(self.address);
+            if let Some(worker) = self.worker.take() {
+                let _ = worker.join();
+            }
+        }
+    }
+
+    fn download_response(status: u16, headers: &[(&str, &str)], body: &[u8]) -> Vec<u8> {
+        let mut response = format!(
+            "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n",
+            body.len()
+        );
+        for (name, value) in headers {
+            response.push_str(&format!("{name}: {value}\r\n"));
+        }
+        response.push_str("\r\n");
+        let mut response = response.into_bytes();
+        response.extend_from_slice(body);
+        response
+    }
+
+    #[test]
+    fn download_text_preserves_bytes_and_sets_user_agent() {
+        let text = "pinned source: café\n";
+        let server = DownloadServer::new(vec![download_response(200, &[], text.as_bytes())]);
+        assert_eq!(download(&server.url("/rules.yml"), false).unwrap().as_deref(), Some(text));
+        let request = server.request().to_ascii_lowercase();
+        assert!(request.starts_with("get /rules.yml http/1.1\r\n"), "{request}");
+        assert!(request.contains("\r\nuser-agent: kingfisher-rule-bundle\r\n"), "{request}");
+    }
+
+    #[test]
+    fn download_archive_preserves_raw_content_encoded_bytes() {
+        let archive = gzip(b"pinned binary source\n").unwrap();
+        let response = download_response(200, &[("Content-Encoding", "gzip")], &archive);
+        let server = DownloadServer::new(vec![response]);
+        let downloaded = download(&server.url("/source.gz"), false).unwrap().unwrap();
+        assert_eq!(downloaded, format!("base64:{}", BASE64.encode(&archive)));
+        assert_eq!(decode_archived_source("source.gz", &downloaded).unwrap(), archive);
+        assert!(!server.request().to_ascii_lowercase().contains("\r\naccept-encoding:"));
+    }
+
+    #[test]
+    fn download_rejects_non_utf8_text() {
+        let server = DownloadServer::new(vec![download_response(200, &[], &[0xff, 0xfe])]);
+        let error = download(&server.url("/rules.yml"), false).unwrap_err();
+        assert!(error.to_string().contains("non-UTF-8 source"), "{error:#}");
+    }
+
+    #[test]
+    fn download_ignores_only_optional_404() {
+        let responses = [404, 404, 403, 500]
+            .into_iter()
+            .map(|status| download_response(status, &[], b"unavailable"))
+            .collect();
+        let server = DownloadServer::new(responses);
+        let url = server.url("/NOTICE");
+        assert_eq!(download(&url, true).unwrap(), None);
+        assert!(download(&url, false).is_err());
+        assert!(download(&url, true).is_err());
+        assert!(download(&url, true).is_err());
+    }
+
+    #[test]
+    fn download_follows_up_to_ten_redirects() {
+        let redirect = download_response(302, &[("Location", "/next")], b"");
+        let mut responses = vec![redirect; 10];
+        responses.push(download_response(200, &[], b"pinned source"));
+        let server = DownloadServer::new(responses);
+        assert_eq!(
+            download(&server.url("/original"), false).unwrap().as_deref(),
+            Some("pinned source")
+        );
+        assert!(server.request().starts_with("GET /original HTTP/1.1\r\n"));
+        for _ in 0..10 {
+            assert!(server.request().starts_with("GET /next HTTP/1.1\r\n"));
+        }
+    }
+
+    #[test]
+    fn download_rejects_more_than_ten_redirects() {
+        let redirect = download_response(302, &[("Location", "/next")], b"");
+        let server = DownloadServer::new(vec![redirect; 11]);
+        assert!(download(&server.url("/original"), false).is_err());
+        for _ in 0..11 {
+            server.request();
+        }
+    }
 
     const FIRST_PARTY_FIXTURE: &str = r#"
 rules:
@@ -568,7 +722,7 @@ exceptions:
     #[test]
     fn first_party_metadata_is_recorded_without_expanding_runtime_yaml() {
         let (yaml, provenance) = first_party_rules(FIRST_PARTY_FIXTURE, &[]).unwrap();
-        let parsed: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        let parsed: yaml_serde::Value = yaml_serde::from_str(&yaml).unwrap();
         assert_eq!(parsed.as_mapping().unwrap().len(), 1);
         assert_eq!(parsed["rules"].as_sequence().unwrap().len(), 1);
         let record = &provenance["kingfisher.connection-string.password.test"];
@@ -582,12 +736,12 @@ exceptions:
 
     #[test]
     fn first_party_exceptions_fail_closed_on_incomplete_metadata() {
-        let baseline: serde_yaml::Value = serde_yaml::from_str(FIRST_PARTY_FIXTURE).unwrap();
+        let baseline: yaml_serde::Value = yaml_serde::from_str(FIRST_PARTY_FIXTURE).unwrap();
         for field in ["reason", "tracking", "removal_condition"] {
             let mut source = baseline.clone();
-            source["exceptions"][0][field] = serde_yaml::Value::String("  ".into());
+            source["exceptions"][0][field] = yaml_serde::Value::String("  ".into());
             let error =
-                first_party_rules(&serde_yaml::to_string(&source).unwrap(), &[]).unwrap_err();
+                first_party_rules(&yaml_serde::to_string(&source).unwrap(), &[]).unwrap_err();
             assert!(error.to_string().contains(field), "{field}: {error:#}");
         }
         for (field, value) in [
@@ -595,22 +749,22 @@ exceptions:
             ("tracking", "https://github.com/mongodb/kingfisher/issues/"),
         ] {
             let mut source = baseline.clone();
-            source["exceptions"][0][field] = serde_yaml::Value::String(value.into());
-            assert!(first_party_rules(&serde_yaml::to_string(&source).unwrap(), &[]).is_err());
+            source["exceptions"][0][field] = yaml_serde::Value::String(value.into());
+            assert!(first_party_rules(&yaml_serde::to_string(&source).unwrap(), &[]).is_err());
         }
         let mut missing = baseline.clone();
         missing["exceptions"][0].as_mapping_mut().unwrap().remove("reason");
-        assert!(first_party_rules(&serde_yaml::to_string(&missing).unwrap(), &[]).is_err());
+        assert!(first_party_rules(&yaml_serde::to_string(&missing).unwrap(), &[]).is_err());
         let mut unreviewed = baseline;
-        unreviewed["exceptions"] = serde_yaml::Value::Sequence(Vec::new());
+        unreviewed["exceptions"] = yaml_serde::Value::Sequence(Vec::new());
         let error =
-            first_party_rules(&serde_yaml::to_string(&unreviewed).unwrap(), &[]).unwrap_err();
+            first_party_rules(&yaml_serde::to_string(&unreviewed).unwrap(), &[]).unwrap_err();
         assert!(error.to_string().contains("requires a reviewed exception"));
     }
 
     #[test]
     fn first_party_ids_and_exception_ownership_are_unique() {
-        let baseline: serde_yaml::Value = serde_yaml::from_str(FIRST_PARTY_FIXTURE).unwrap();
+        let baseline: yaml_serde::Value = yaml_serde::from_str(FIRST_PARTY_FIXTURE).unwrap();
         for (field, expected) in [
             ("rules", "duplicate first-party rule ID"),
             ("exceptions", "duplicate first-party exception"),
@@ -619,13 +773,13 @@ exceptions:
             let first = source[field][0].clone();
             source[field].as_sequence_mut().unwrap().push(first);
             let error =
-                first_party_rules(&serde_yaml::to_string(&source).unwrap(), &[]).unwrap_err();
+                first_party_rules(&yaml_serde::to_string(&source).unwrap(), &[]).unwrap_err();
             assert!(error.to_string().contains(expected), "{error:#}");
         }
         let mut unknown = baseline;
         unknown["exceptions"][0]["rule_ids"][0] =
-            serde_yaml::Value::String("kingfisher.unknown".into());
-        let error = first_party_rules(&serde_yaml::to_string(&unknown).unwrap(), &[]).unwrap_err();
+            yaml_serde::Value::String("kingfisher.unknown".into());
+        let error = first_party_rules(&yaml_serde::to_string(&unknown).unwrap(), &[]).unwrap_err();
         assert!(error.to_string().contains("unknown first-party rule"));
         let error = first_party_rules(
             FIRST_PARTY_FIXTURE,
@@ -637,18 +791,18 @@ exceptions:
 
     #[test]
     fn first_party_rules_require_namespaced_content_detectors_and_examples() {
-        let baseline: serde_yaml::Value = serde_yaml::from_str(FIRST_PARTY_FIXTURE).unwrap();
+        let baseline: yaml_serde::Value = yaml_serde::from_str(FIRST_PARTY_FIXTURE).unwrap();
         for id in ["custom.password", "kingfisher.", "kingfisher..password", "kingfisher.Bad"] {
             let mut source = baseline.clone();
-            source["rules"][0]["id"] = serde_yaml::Value::String(id.into());
+            source["rules"][0]["id"] = yaml_serde::Value::String(id.into());
             let error =
-                first_party_rules(&serde_yaml::to_string(&source).unwrap(), &[]).unwrap_err();
+                first_party_rules(&yaml_serde::to_string(&source).unwrap(), &[]).unwrap_err();
             assert!(error.to_string().contains("namespace"), "{error:#}");
         }
         for field in ["pattern", "examples", "negative_examples"] {
             let mut source = baseline.clone();
             source["rules"][0].as_mapping_mut().unwrap().remove(field);
-            assert!(first_party_rules(&serde_yaml::to_string(&source).unwrap(), &[]).is_err());
+            assert!(first_party_rules(&yaml_serde::to_string(&source).unwrap(), &[]).is_err());
         }
     }
 

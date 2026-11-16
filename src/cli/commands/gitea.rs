@@ -1,5 +1,4 @@
 use clap::{Args, Subcommand, ValueEnum, ValueHint};
-use strum::Display;
 use url::Url;
 
 use crate::cli::commands::output::OutputArgs;
@@ -71,8 +70,7 @@ impl GiteaRepoSpecifiers {
 }
 
 /// Gitea repository type filter
-#[derive(Copy, Clone, Debug, Display, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-#[strum(serialize_all = "kebab-case")]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum GiteaRepoType {
     /// Only source repositories (not forks)
     Source,
@@ -82,6 +80,8 @@ pub enum GiteaRepoType {
     /// Include all repositories
     All,
 }
+
+crate::cli::impl_value_enum_display!(GiteaRepoType);
 
 pub type GiteaOutputFormat = GitHubOutputFormat;
 

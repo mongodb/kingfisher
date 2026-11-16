@@ -1,6 +1,6 @@
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
-use indenter::indented;
+use crate::formatting::prefixed;
 
 use super::*;
 
@@ -256,34 +256,26 @@ impl DetailsReporter {
             if let Some(author) = commit.get("author").filter(|v| !v.is_null()) {
                 let name = author.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let email = author.get("email").and_then(|v| v.as_str()).unwrap_or("");
-                writeln!(indented(f).with_str(" |__"), "Author........: {} <{}>", name, email)?;
+                writeln!(prefixed(f, " |__"), "Author........: {} <{}>", name, email)?;
             }
             if let Some(committer) = commit.get("committer") {
                 let name = committer.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let email = committer.get("email").and_then(|v| v.as_str()).unwrap_or("");
-                writeln!(indented(f).with_str(" |__"), "Committer.....: {} <{}>", name, email)?;
+                writeln!(prefixed(f, " |__"), "Committer.....: {} <{}>", name, email)?;
             }
             if let Some(date) = commit.get("date").and_then(|v| v.as_str()) {
-                writeln!(indented(f).with_str(" |__"), "Date..........: {}", date)?;
+                writeln!(prefixed(f, " |__"), "Date..........: {}", date)?;
             }
         }
         if let Some(file) = git.get("file") {
             if let Some(path) = file.get("path").and_then(|v| v.as_str()) {
-                writeln!(indented(f).with_str(" |__"), "Path..........: {}", path)?;
+                writeln!(prefixed(f, " |__"), "Path..........: {}", path)?;
             }
             if let Some(url) = file.get("url").and_then(|v| v.as_str()) {
-                writeln!(
-                    indented(f).with_str(" |__"),
-                    "Git Link......: {}",
-                    self.style_metadata(url)
-                )?;
+                writeln!(prefixed(f, " |__"), "Git Link......: {}", self.style_metadata(url))?;
             }
             if let Some(cmd) = file.get("git_command").and_then(|v| v.as_str()) {
-                writeln!(
-                    indented(f).with_str(" |__"),
-                    "Git Command...: {}",
-                    self.style_metadata(cmd)
-                )?;
+                writeln!(prefixed(f, " |__"), "Git Command...: {}", self.style_metadata(cmd))?;
             }
         }
         Ok(())
@@ -383,6 +375,47 @@ mod tests {
     }
 
     #[test]
+    fn multiline_git_metadata_preserves_prefixes_and_blank_lines() {
+        struct GitMetadata<'a>(&'a DetailsReporter, &'a serde_json::Value);
+        impl Display for GitMetadata<'_> {
+            fn fmt(&self, formatter: &mut Formatter<'_>) -> FmtResult {
+                self.0.write_git_metadata_value(formatter, self.1)
+            }
+        }
+        let reporter = DetailsReporter {
+            datastore: Arc::new(Mutex::new(findings_store::FindingsStore::new(
+                std::path::PathBuf::new(),
+            ))),
+            styles: Styles::new(false),
+            validation_filter: cli::commands::scan::ValidationFilter::All,
+            audit_context: None,
+        };
+        let metadata = serde_json::json!({
+            "commit": {
+                "author": {"name": "Alíce\n\nBob", "email": "dev\nteam"},
+                "committer": {"name": "", "email": ""},
+                "date": "day\r\ndate",
+            },
+            "file": {
+                "path": "first\n\nsecond\n",
+                "url": "https://example.test/file\ncontinued",
+                "git_command": "git show\n",
+            },
+        });
+        assert_eq!(
+            GitMetadata(&reporter, &metadata).to_string(),
+            concat!(
+                " |__Author........: Alíce\n\n |__Bob <dev\n |__team>\n",
+                " |__Committer.....:  <>\n",
+                " |__Date..........: day\r\n |__date\n",
+                " |__Path..........: first\n\n |__second\n\n",
+                " |__Git Link......: https://example.test/file\n |__continued\n",
+                " |__Git Command...: git show\n\n",
+            )
+        );
+    }
+
+    #[test]
     fn blast_radius_fields_align_colons() {
         let labels = [
             " |__role",
@@ -448,6 +481,7 @@ mod tests {
                 blast_radius_command: Some(
                     "kingfisher blast-radius --rule custom.example 'secret'".to_string(),
                 ),
+                source_region: Default::default(),
             },
         };
         let expected_heading =

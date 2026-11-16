@@ -1,4 +1,11 @@
-testdata/* linguist-vendored
+# GitHub language statistics reflect the Rust engine and native bindings.
+# Exclude SDK facades and support files from stats without changing highlighting or diffs.
+* linguist-detectable=false
+*.rs linguist-detectable=true
+
+# Exclude scan fixtures recursively, including any Rust fixtures.
+/testdata/** linguist-vendored
+
 # Preserve byte hashes of rule generation inputs on Windows.
 /tools/rule-bundle/** text eol=lf
 /crates/kingfisher-rules/build_support/** text eol=lf

@@ -1585,7 +1585,7 @@ impl RuleSyntax {
             Mapped { rules: Vec<RuleSyntax> },
         }
 
-        let parsed: RuleSyntaxDocument = serde_yaml::from_str(&contents).map_err(|e| {
+        let parsed: RuleSyntaxDocument = yaml_serde::from_str(&contents).map_err(|e| {
             let context = e.location().map_or(String::new(), |loc| {
                 format!(" at line {} column {}", loc.line(), loc.column())
             });
@@ -2182,16 +2182,16 @@ content:
   expression: 'let r = http.get("https://example.invalid"); r.status == 200 ? {"result": "valid"} : validate.unknown(r)'
   analyze: 'analysis.capabilities({"read": true})'
 "#;
-        let validation: Validation = serde_yaml::from_str(yaml).unwrap();
+        let validation: Validation = yaml_serde::from_str(yaml).unwrap();
         let Validation::Betterleaks(program) = &validation else { panic!("wrong validator") };
         assert!(matches!(program.expression, BetterleaksExpr::VariableDeclarator { .. }));
         assert!(program.analyze.is_some());
-        let ast_yaml = serde_yaml::to_string(&validation).unwrap();
-        assert_eq!(serde_yaml::from_str::<Validation>(&ast_yaml).unwrap(), validation);
-        let revocation: Revocation = serde_yaml::from_str("type: Betterleaks\ncontent:\n  expression: 'let r = http.delete(\"https://example.invalid\"); r.status == 204 ? {\"result\": \"revoked\"} : revoke.unknown(r)'\n").unwrap();
+        let ast_yaml = yaml_serde::to_string(&validation).unwrap();
+        assert_eq!(yaml_serde::from_str::<Validation>(&ast_yaml).unwrap(), validation);
+        let revocation: Revocation = yaml_serde::from_str("type: Betterleaks\ncontent:\n  expression: 'let r = http.delete(\"https://example.invalid\"); r.status == 204 ? {\"result\": \"revoked\"} : revoke.unknown(r)'\n").unwrap();
         assert!(matches!(revocation, Revocation::Betterleaks(_)));
         assert!(
-            serde_yaml::from_str::<Validation>(
+            yaml_serde::from_str::<Validation>(
                 "type: Betterleaks\ncontent:\n  expression: 'let broken ='\n"
             )
             .is_err()
@@ -2218,8 +2218,8 @@ content:
             });
             let request: HttpRequest = serde_json::from_value(definition.clone()).unwrap();
             assert_eq!(serde_json::to_value(&request).unwrap(), definition);
-            let yaml = serde_yaml::to_string(&request).unwrap();
-            assert_eq!(serde_yaml::from_str::<HttpRequest>(&yaml).unwrap(), request);
+            let yaml = yaml_serde::to_string(&request).unwrap();
+            assert_eq!(yaml_serde::from_str::<HttpRequest>(&yaml).unwrap(), request);
         }
     }
 
@@ -2242,7 +2242,7 @@ content:
     #[test]
     fn http_url_list_with_one_endpoint_preserves_scalar_request_behavior() {
         let request: HttpRequest =
-            serde_yaml::from_str("method: GET\nurl:\n  - https://primary.example/identity\n")
+            yaml_serde::from_str("method: GET\nurl:\n  - https://primary.example/identity\n")
                 .unwrap();
         assert_eq!(request.url, "https://primary.example/identity");
         assert!(request.fallback_urls.is_empty());
@@ -2272,8 +2272,8 @@ content:
                     "response_matcher": [{"type": "StatusMatch", "status": [204]}]}
             }});
             let json_error = serde_json::from_value::<Revocation>(definition.clone()).unwrap_err();
-            let yaml = serde_yaml::to_string(&definition).unwrap();
-            let yaml_error = serde_yaml::from_str::<Revocation>(&yaml).unwrap_err();
+            let yaml = yaml_serde::to_string(&definition).unwrap();
+            let yaml_error = yaml_serde::from_str::<Revocation>(&yaml).unwrap_err();
             for error in [json_error.to_string(), yaml_error.to_string()] {
                 assert!(error.contains("OAuth2 auth is supported for validation only"));
                 assert!(!error.contains(password));
@@ -2283,7 +2283,7 @@ content:
                 "id": "acme.revocation-auth", "name": "Revocation auth fixture",
                 "pattern": "(synthetic-secret)", "revocation": definition
             }]});
-            let yaml = serde_yaml::to_string(&document).unwrap();
+            let yaml = yaml_serde::to_string(&document).unwrap();
             let error = crate::Rules::from_paths_and_contents(
                 [(Path::new("revocation-auth.yml"), yaml.as_bytes())],
                 Confidence::Low,
@@ -2314,8 +2314,8 @@ content:
             let revocation: Revocation = serde_json::from_value(definition).unwrap();
             let serialized = serde_json::to_value(&revocation).unwrap();
             assert_eq!(serde_json::from_value::<Revocation>(serialized).unwrap(), revocation);
-            let yaml = serde_yaml::to_string(&revocation).unwrap();
-            assert_eq!(serde_yaml::from_str::<Revocation>(&yaml).unwrap(), revocation);
+            let yaml = yaml_serde::to_string(&revocation).unwrap();
+            assert_eq!(yaml_serde::from_str::<Revocation>(&yaml).unwrap(), revocation);
             if let Revocation::Http(http) = revocation {
                 assert!(http.auth.is_none());
                 assert!(http.multipart.is_none());

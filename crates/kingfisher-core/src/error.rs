@@ -26,8 +26,8 @@ pub enum Error {
     Other(String),
 }
 
-impl From<gix::open::Error> for Error {
-    fn from(e: gix::open::Error) -> Self {
+impl From<gix::Error> for Error {
+    fn from(e: gix::Error) -> Self {
         Error::Git(e.to_string())
     }
 }

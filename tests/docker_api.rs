@@ -16,8 +16,12 @@ const IMAGE: &str = "local-test:latest";
 // kingfisher:ignore (test fixture, not a real token)
 const SECRET: &str = "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";
 
-// Dependency-interop check for Bollard's AWS-LC TLS feature selection, not the
-// Kingfisher Docker client factory (which rejects TLS environment configuration).
+#[path = "support/docker_db.rs"]
+#[allow(dead_code)]
+mod docker_db;
+
+// Check Bollard's AWS-LC backend and the live-test fixture's TLS transports, not
+// the production Docker client factory (which rejects TLS environment configuration).
 #[tokio::test]
 async fn bollard_aws_lc_interop_preserves_client_certificate_authentication() -> Result<()> {
     use std::{sync::Arc, time::Duration};
@@ -45,21 +49,27 @@ async fn bollard_aws_lc_interop_preserves_client_certificate_authentication() ->
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let address = listener.local_addr()?;
     let server = tokio::spawn(async move {
-        let (socket, _) = listener.accept().await?;
-        let mut stream = tokio_rustls::TlsAcceptor::from(Arc::new(tls)).accept(socket).await?;
-        assert_eq!(stream.get_ref().1.peer_certificates().unwrap().len(), 1);
-        let mut request = Vec::new();
-        let mut buffer = [0; 1024];
-        while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
-            let count = stream.read(&mut buffer).await?;
-            anyhow::ensure!(count > 0 && request.len() < 8192, "incomplete Docker ping request");
-            request.extend_from_slice(&buffer[..count]);
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls));
+        for _ in 0..3 {
+            let (socket, _) = listener.accept().await?;
+            let mut stream = acceptor.accept(socket).await?;
+            assert_eq!(stream.get_ref().1.peer_certificates().unwrap().len(), 1);
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let count = stream.read(&mut buffer).await?;
+                anyhow::ensure!(
+                    count > 0 && request.len() < 8192,
+                    "incomplete Docker ping request"
+                );
+                request.extend_from_slice(&buffer[..count]);
+            }
+            assert!(String::from_utf8_lossy(&request).lines().next().unwrap().contains("/_ping"));
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK")
+                .await?;
+            stream.shutdown().await?;
         }
-        assert!(String::from_utf8_lossy(&request).lines().next().unwrap().contains("/_ping"));
-        stream
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK")
-            .await?;
-        stream.shutdown().await?;
         anyhow::Ok(())
     });
     let work = tempfile::tempdir()?;
@@ -69,15 +79,10 @@ async fn bollard_aws_lc_interop_preserves_client_certificate_authentication() ->
     std::fs::write(&key, client_key.signing_key.serialize_pem())?;
     std::fs::write(&cert, client_key.cert.pem())?;
     std::fs::write(&ca, server_key.cert.pem())?;
-    let docker = bollard::Docker::connect_with_ssl(
-        &format!("https://{address}"),
-        &key,
-        &cert,
-        &ca,
-        5,
-        bollard::API_DEFAULT_VERSION,
-    )?;
-    assert_eq!(docker.ping().await?, "OK");
+    for scheme in ["https", "tcp", "http"] {
+        let docker = docker_db::connect(&format!("{scheme}://{address}"), true, Some(work.path()))?;
+        assert_eq!(tokio::time::timeout(Duration::from_secs(10), docker.ping()).await??, "OK");
+    }
     tokio::time::timeout(Duration::from_secs(10), server).await???;
     Ok(())
 }

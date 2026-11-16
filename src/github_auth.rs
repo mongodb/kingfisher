@@ -132,7 +132,7 @@ struct InstallationTokenError {
 
 fn ensure_jwt_crypto_provider() {
     JWT_CRYPTO_PROVIDER.call_once(|| {
-        let _ = jsonwebtoken::crypto::rust_crypto::DEFAULT_PROVIDER.install_default();
+        let _ = jsonwebtoken::crypto::aws_lc::DEFAULT_PROVIDER.install_default();
     });
 }
 
@@ -675,9 +675,8 @@ mod tests {
 
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use rsa::{
-        RsaPrivateKey,
+        PrivateKey,
         pkcs1::{EncodeRsaPrivateKey, LineEnding},
-        rand_core::OsRng,
     };
     use serde_json::Value;
     use wiremock::{
@@ -688,7 +687,7 @@ mod tests {
     use super::*;
 
     fn test_private_key() -> String {
-        RsaPrivateKey::new(&mut OsRng, 2048)
+        PrivateKey::new(&mut rand::rng(), 2048)
             .expect("generate RSA private key")
             .to_pkcs1_pem(LineEnding::LF)
             .expect("encode RSA private key")

@@ -6,19 +6,14 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use futures::TryStreamExt;
-use gcloud_storage::{
-    client::{Client, ClientConfig, google_cloud_auth::credentials::CredentialsFile},
-    http::{
-        Error as StorageError,
-        objects::{
-            Object,
-            download::Range,
-            get::GetObjectRequest,
-            list::{ListObjectsRequest, ListObjectsResponse},
-        },
-    },
-};
+use gcloud_auth::credentials::CredentialsFile;
 use tracing::{debug, warn};
+
+mod client;
+use client::{
+    Client, ClientConfig, Error as StorageError, GetObjectRequest, ListObjectsRequest,
+    ListObjectsResponse, Object,
+};
 
 fn object_version(object: &Object) -> ObjectVersion {
     ObjectVersion {
@@ -33,14 +28,7 @@ fn object_version(object: &Object) -> ObjectVersion {
 }
 
 fn version_disappeared(error: &StorageError) -> bool {
-    let code = match error {
-        StorageError::Response(response) => Some(response.code),
-        StorageError::HttpClient(error) | StorageError::RawResponse(error, _) => {
-            error.status().map(|s| s.as_u16())
-        }
-        _ => None,
-    };
-    matches!(code, Some(404 | 412))
+    matches!(error.status().map(|status| status.as_u16()), Some(404 | 412))
 }
 
 async fn download_current_object(
@@ -59,9 +47,8 @@ async fn download_current_object(
             bucket: bucket.to_owned(),
             object: object.name.clone(),
             generation: (object.generation > 0).then_some(object.generation),
-            ..Default::default()
         };
-        match client.download_streamed_object(&request, &Range::default()).await {
+        match client.download_streamed_object(&request).await {
             Ok(stream) => {
                 futures::pin_mut!(stream);
                 let mut data = Vec::new();
@@ -217,7 +204,6 @@ where
                 bucket: bucket.to_string(),
                 prefix: (!prefix.is_empty()).then(|| prefix.clone()),
                 page_token: page_token.clone(),
-                ..ListObjectsRequest::default()
             };
 
             let mut response: ListObjectsResponse = client
@@ -311,6 +297,218 @@ mod tests {
 
     fn object(key: &str, generation: i64) -> serde_json::Value {
         json!({"selfLink":"", "mediaLink":"", "name":key, "id":key, "bucket":"bucket", "metageneration":"1", "generation":generation.to_string(), "size":"6"})
+    }
+
+    #[test]
+    fn metadata_preserves_cache_generation_etag_time_and_size_semantics() {
+        let mut metadata = object("secret.env", i64::MAX);
+        metadata["etag"] = json!("fixture-etag");
+        metadata["updated"] = json!("2024-01-01T00:00:00Z");
+        let parsed: Object = serde_json::from_value(metadata.clone()).unwrap();
+        assert_eq!(parsed.updated.unwrap().unix_timestamp(), 1_704_067_200);
+        let version = object_version(&parsed);
+        assert_eq!(version.identity.as_deref(), Some("9223372036854775807"));
+        assert_eq!(version.size, Some(6));
+        assert!(version.modified.is_some());
+
+        metadata["generation"] = json!("0");
+        metadata["size"] = json!("-1");
+        let version = object_version(&serde_json::from_value(metadata.clone()).unwrap());
+        assert_eq!(version.identity.as_deref(), Some("fixture-etag"));
+        assert_eq!(version.size, None);
+
+        metadata.as_object_mut().unwrap().remove("generation");
+        assert!(serde_json::from_value::<Object>(metadata).is_err());
+    }
+
+    #[tokio::test]
+    async fn anonymous_listing_round_trips_reserved_names_prefixes_and_page_tokens() {
+        let server = MockServer::start().await;
+        let prefix = "configs/ +%?#雪/";
+        let key = format!("{prefix}secret.env");
+        let token = "next +/?&=%雪";
+        Mock::given(method("GET"))
+            .and(path("/storage/v1/b/bucket/o"))
+            .and(query_param("prefix", prefix))
+            .and(query_param_is_missing("pageToken"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "items": [object(&key, 23)], "nextPageToken": token,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/storage/v1/b/bucket/o/configs%2F%20%2B%25%3F%23%E9%9B%AA%2Fsecret.env"))
+            .and(query_param("alt", "media"))
+            .and(query_param("generation", "23"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("secret"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/storage/v1/b/bucket/o"))
+            .and(query_param("prefix", prefix))
+            .and(query_param("pageToken", token))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut seen = Vec::new();
+        visit_with_client(
+            &client(&server),
+            "bucket",
+            &PathSelection { include_prefixes: vec![prefix.into()], ..Default::default() },
+            None,
+            None,
+            |name, data| {
+                seen.push((name, data));
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(seen, [(key, b"secret".to_vec())]);
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 3);
+        assert!(requests.iter().all(|request| !request.headers.contains_key("authorization")));
+    }
+
+    #[tokio::test]
+    async fn authenticated_requests_reuse_tokens_and_refresh_expired_credentials() {
+        for expires_in in [0, 3600] {
+            let server = MockServer::start().await;
+            let response_number = std::sync::atomic::AtomicUsize::new(0);
+            Mock::given(method("POST"))
+                .and(path("/token"))
+                .respond_with(move |_: &wiremock::Request| {
+                    let first =
+                        response_number.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+                    ResponseTemplate::new(200).set_body_json(json!({
+                        "access_token": if first { "initial-token" } else { "refreshed-token" },
+                        "token_type": "Bearer",
+                        "expires_in": if first { expires_in } else { 3600 },
+                    }))
+                })
+                .expect(if expires_in == 0 { 2 } else { 1 })
+                .mount(&server)
+                .await;
+            let authorization =
+                if expires_in == 0 { "Bearer refreshed-token" } else { "Bearer initial-token" };
+            Mock::given(method("GET"))
+                .and(path("/storage/v1/b/bucket/o"))
+                .and(wiremock::matchers::header("authorization", authorization))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({"items": [object("secret.env", 1)]})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/storage/v1/b/bucket/o/secret.env"))
+                .and(query_param("alt", "media"))
+                .and(wiremock::matchers::header("authorization", authorization))
+                .respond_with(ResponseTemplate::new(200).set_body_string("secret"))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let credentials = CredentialsFile::new_from_str(
+                &json!({
+                    "type": "authorized_user",
+                    "client_id": "fixture-client",
+                    "client_secret": "fixture-secret",
+                    "refresh_token": "fixture-refresh-token",
+                    "token_uri": format!("{}/token", server.uri()),
+                })
+                .to_string(),
+            )
+            .await
+            .unwrap();
+            let config = ClientConfig::default().with_credentials(credentials).await.unwrap();
+            let client = Client::new(ClientConfig { storage_endpoint: server.uri(), ..config });
+            let mut seen = Vec::new();
+            visit_with_client(
+                &client,
+                "bucket",
+                &PathSelection::default(),
+                None,
+                None,
+                |key, data| {
+                    seen.push((key, data));
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(seen, [("secret.env".into(), b"secret".to_vec())]);
+        }
+    }
+
+    #[tokio::test]
+    async fn token_refresh_failures_do_not_retry_storage_anonymously() {
+        let server = MockServer::start().await;
+        let response_number = std::sync::atomic::AtomicUsize::new(0);
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(move |_: &wiremock::Request| {
+                if response_number.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    ResponseTemplate::new(200).set_body_json(json!({
+                        "access_token": "expired", "token_type": "Bearer", "expires_in": 0,
+                    }))
+                } else {
+                    ResponseTemplate::new(401).set_body_json(json!({"error": "invalid_grant"}))
+                }
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let credentials = CredentialsFile::new_from_str(
+            &json!({
+                "type": "authorized_user", "client_id": "fixture-client",
+                "client_secret": "fixture-secret", "refresh_token": "fixture-refresh-token",
+                "token_uri": format!("{}/token", server.uri()),
+            })
+            .to_string(),
+        )
+        .await
+        .unwrap();
+        let config = ClientConfig::default().with_credentials(credentials).await.unwrap();
+        let client = Client::new(ClientConfig { storage_endpoint: server.uri(), ..config });
+        let error =
+            visit_with_client(&client, "bucket", &PathSelection::default(), None, None, |_, _| {
+                panic!("an expired credential must not visit objects anonymously")
+            })
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("GCS token source failed"));
+    }
+
+    #[tokio::test]
+    async fn empty_listing_omits_optional_query_parameters() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/storage/v1/b/bucket/o"))
+            .and(query_param_is_missing("prefix"))
+            .and(query_param_is_missing("pageToken"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        visit_with_client(
+            &client(&server),
+            "bucket",
+            &PathSelection::default(),
+            None,
+            None,
+            |_, _| panic!("an empty listing must not visit objects"),
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
@@ -613,7 +811,9 @@ mod tests {
             .mount(&server)
             .await;
         Mock::given(query_param("alt", "media"))
-            .respond_with(ResponseTemplate::new(412))
+            .respond_with(ResponseTemplate::new(412).set_body_json(json!({
+                "error": { "code": 412, "errors": [], "message": "object changed" },
+            })))
             .expect(2)
             .mount(&server)
             .await;

@@ -71,8 +71,7 @@
     "kingfisher-secret-scanner-win32-arm64-msvc": "file:./npm/win32-arm64-msvc"
   },
   "devDependencies": {
-    "@napi-rs/cli": "3.10.9",
     "@types/node": "^22.0.0",
-    "typescript": "^6.0.0"
+    "typescript": "^7.0.2"
   }
 }

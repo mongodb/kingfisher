@@ -11,7 +11,6 @@ use std::sync::LazyLock;
 
 use blake3::Hasher;
 use dashmap::DashSet;
-use path_dedot::ParseDot;
 use rand::RngExt;
 // Generate a random salt once and use it for the entire application runtime
 static APP_SALT: LazyLock<String> = LazyLock::new(generate_salt);
@@ -74,10 +73,30 @@ pub fn intern(s: &str) -> &'static str {
     static_str
 }
 
+/// Absolute lexical path for comparisons, including paths that do not exist yet.
+/// This deliberately does not resolve symlinks; callers handle file identity separately.
+pub(crate) fn normalize_absolute_path(path: &Path) -> std::io::Result<PathBuf> {
+    let absolute = std::path::absolute(path)?;
+    // Absolute paths never need a current-directory fallback. Saturating at the
+    // filesystem root preserves the historical handling of `/../../file`.
+    let normalized = gix::path::normalize_saturating(absolute.into(), Path::new(""))
+        .map_err(std::io::Error::other)?;
+    // gix intentionally preserves separators and leading dots; file-identity
+    // checks also need trailing separators removed, as before.
+    Ok(normalized
+        .components()
+        .filter(|component| !matches!(component, std::path::Component::CurDir))
+        .collect())
+}
+
 pub fn is_safe_path(path: &Path) -> std::io::Result<bool> {
-    Ok(path
-        .parse_dot()
-        .map(|p| !p.components().any(|c| matches!(c, std::path::Component::ParentDir)))
+    // Preserve the normalizability check (including the empty-path case), not
+    // a sandbox: callers may intentionally scan outside the current directory.
+    if path.as_os_str().is_empty() {
+        return Ok(true);
+    }
+    Ok(normalize_absolute_path(path)
+        .map(|path| !path.components().any(|c| matches!(c, std::path::Component::ParentDir)))
         .unwrap_or(false))
 }
 
@@ -295,6 +314,80 @@ mod tests {
     };
 
     use super::{is_test_like_path, *};
+
+    #[test]
+    fn cli_utility_path_normalization_does_not_require_existing_components() {
+        let directory = tempfile::tempdir().unwrap();
+        let expected = directory.path().join("report.json");
+        let input = directory.path().join("missing").join("..").join("report.json");
+        assert!(!input.exists());
+        assert_eq!(normalize_absolute_path(&input).unwrap(), expected);
+    }
+
+    #[test]
+    fn cli_utility_path_normalization_matches_relative_and_absolute_inputs() {
+        let cwd = std::env::current_dir().unwrap();
+        for input in [".", "./", "a/..", "a/../."] {
+            assert_eq!(normalize_absolute_path(Path::new(input)).unwrap(), cwd, "{input}");
+        }
+        for input in ["report.json", "./report.json", "a/../report.json"] {
+            assert_eq!(
+                normalize_absolute_path(Path::new(input)).unwrap(),
+                cwd.join("report.json"),
+                "{input}"
+            );
+        }
+    }
+
+    #[test]
+    fn cli_utility_path_normalization_cleans_dots_and_trailing_separators() {
+        let directory = tempfile::tempdir().unwrap();
+        let expected = directory.path().join("missing");
+        for input in [expected.join("."), expected.join("")] {
+            assert_eq!(normalize_absolute_path(&input).unwrap().as_os_str(), expected.as_os_str());
+        }
+    }
+
+    #[test]
+    fn cli_utility_path_normalization_saturates_at_filesystem_root() {
+        let cwd = std::env::current_dir().unwrap();
+        let root = cwd.ancestors().last().unwrap();
+        let input = root.join("..").join("..").join("report.json");
+        assert_eq!(normalize_absolute_path(&input).unwrap(), root.join("report.json"));
+    }
+
+    #[test]
+    fn cli_utility_file_path_check_preserves_parent_relative_inputs() {
+        // This is a file-path normalizability check, not a sandbox: scanning a
+        // parent directory has always been allowed, including paths above CWD.
+        for input in ["", ".", "..", "../report.json", "a/../../report.json"] {
+            assert!(is_safe_path(Path::new(input)).unwrap(), "{input}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_utility_path_normalization_preserves_non_utf8_names() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let cwd = std::env::current_dir().unwrap();
+        let filename = std::ffi::OsString::from_vec(b"report-\xff.json".to_vec());
+        let input = Path::new("missing").join("..").join(&filename);
+        assert_eq!(normalize_absolute_path(&input).unwrap(), cwd.join(filename));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cli_utility_path_normalization_preserves_windows_prefixes() {
+        for (input, expected) in [
+            (r"C:\workspace\missing\..\report.json", r"C:\workspace\report.json"),
+            (r"C:\..\..\report.json", r"C:\report.json"),
+            (r"\\server\share\missing\..\report.json", r"\\server\share\report.json"),
+            (r"\\?\C:\workspace\missing\..\report.json", r"\\?\C:\workspace\report.json"),
+        ] {
+            assert_eq!(normalize_absolute_path(Path::new(input)).unwrap(), Path::new(expected));
+        }
+    }
 
     #[test]
     fn tokio_blocking_threads_limit_scales_and_caps() {

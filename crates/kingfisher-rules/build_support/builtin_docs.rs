@@ -15,15 +15,15 @@ struct DocRule {
     confidence: String,
     #[serde(default = "default_true")]
     visible: bool,
-    validation: Option<serde_yaml::Value>,
-    revocation: Option<serde_yaml::Value>,
+    validation: Option<yaml_serde::Value>,
+    revocation: Option<yaml_serde::Value>,
 }
 
 pub fn generate_builtin_rules_page(snapshots: &[&str]) -> Result<String> {
     let mut rules = Vec::new();
     for (source, yaml) in snapshots.iter().enumerate() {
         let yaml = &**yaml;
-        let snapshot: Snapshot = serde_yaml::from_str(yaml).with_context(|| {
+        let snapshot: Snapshot = yaml_serde::from_str(yaml).with_context(|| {
             format!("failed to read generated rule source #{source} for documentation")
         })?;
         rules.extend(snapshot.rules);

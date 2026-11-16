@@ -64,7 +64,7 @@ fn extract_sqlite(
     control: &ScanControl,
 ) -> Result<Vec<(String, Vec<u8>)>> {
     control.check()?;
-    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    let mut conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .with_context(|| format!("Failed to open SQLite database: {}", path.display()))?;
     configure_lock_wait(&conn, control)?;
     harden_connection(&conn, resources, max_bytes)?;

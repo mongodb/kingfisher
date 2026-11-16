@@ -1,19 +1,7 @@
-use std::{cmp::Reverse, path::Path, sync::LazyLock};
-use tokei::LanguageType;
+use std::path::Path;
 
-// Precompute all (shebang_prefix_bytes, language) pairs once.
-// Sort longest-first so more specific shebangs win.
-static SHEBANG_PREFIXES: LazyLock<Vec<(&'static [u8], LanguageType)>> = LazyLock::new(|| {
-    let mut v = Vec::new();
-    for &(lang, shebangs) in LanguageType::list() {
-        for &sb in shebangs {
-            v.push((sb.as_bytes(), lang));
-        }
-    }
-    // Longest prefix first to prefer e.g. "#!/usr/bin/env python3" over "#!/usr/bin/env python"
-    v.sort_by_key(|(prefix, _)| Reverse(prefix.len()));
-    v
-});
+#[path = "language.rs"]
+mod language;
 
 /// The type of content detected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,45 +83,36 @@ impl ContentInspector {
     pub fn guess_charset(&self, bytes: &[u8]) -> Option<String> {
         std::str::from_utf8(bytes).ok().map(|_| "UTF-8".to_string())
     }
-    /// Guess programming language with broad coverage using `tokei`.
+    /// Guess a programming language using the embedded extension/name catalog.
     ///
-    /// Strategy (no disk I/O):
-    /// 1) Try extension via `LanguageType::from_file_extension`.
-    /// 2) Handle common extensionless filenames (e.g., Makefile, Dockerfile, CMakeLists.txt).
-    /// 3) Parse an in-memory shebang (first line) against `LanguageType::shebangs`.
-    /// 4) Minimal content markers as a last resort.
-    ///
-    /// Returns the canonical `tokei` language name (e.g., `Rust`, `Bash`, `Python`).
+    /// Tries the final extension first, then well-known filenames, then lightweight
+    /// content markers (including Bash/Python shebangs). Performs no disk I/O.
+    /// The names and extension precedence preserve the original tokei 14 catalog.
     #[inline]
     #[must_use]
     pub fn guess_language(&self, path: &Path, content: &[u8]) -> Option<String> {
         // 1) Extension mapping (turbo, no I/O).
         if let Some(ext) = path.extension().and_then(|e| e.to_str())
-            && let Some(lang) = LanguageType::from_file_extension(&ext.to_ascii_lowercase())
+            && let Ok(index) = language::EXTENSIONS
+                .binary_search_by_key(&ext.to_ascii_lowercase().as_str(), |&(extension, _)| {
+                    extension
+                })
         {
-            return Some(lang.name().to_string());
+            return Some(language::EXTENSIONS[index].1.to_string());
         }
 
         // 2) Well-known filenames with no/odd extensions (avoid from_path to keep this pure).
         if let Some(file) = path.file_name().and_then(|f| f.to_str()) {
-            match file {
-                "Makefile" | "makefile" => {
-                    return Some(LanguageType::Makefile.name().to_string());
-                }
-                "Dockerfile" | "dockerfile" => {
-                    return Some(LanguageType::Dockerfile.name().to_string());
-                }
-                "CMakeLists.txt" => {
-                    return Some(LanguageType::CMake.name().to_string());
-                }
-                "Rakefile" | "rakefile" => {
-                    return Some(LanguageType::Rakefile.name().to_string());
-                }
-                // Common ecosystem files; map to their primary language where sensible.
-                "Gemfile" | "gemfile" => {
-                    return Some(LanguageType::Ruby.name().to_string());
-                }
-                _ => {}
+            let language = match file {
+                "Makefile" | "makefile" => Some("Makefile"),
+                "Dockerfile" | "dockerfile" => Some("Dockerfile"),
+                "CMakeLists.txt" => Some("CMake"),
+                "Rakefile" | "rakefile" => Some("Rakefile"),
+                "Gemfile" | "gemfile" => Some("Ruby"),
+                _ => None,
+            };
+            if let Some(language) = language {
+                return Some(language.to_string());
             }
         }
 
@@ -141,33 +120,25 @@ impl ContentInspector {
         // detection cheap for large files while preserving extension-based accuracy.
         let sample = &content[..content.len().min(Self::LANGUAGE_SAMPLE_BYTES)];
 
-        // 3) Shebang detection (in-memory): match by longest prefix, byte-wise (no UTF-8 needed).
-        if let Some(first_line) = sample.split(|&b| b == b'\n').next()
-            && first_line.starts_with(b"#!")
-        {
-            for (prefix, lang) in SHEBANG_PREFIXES.iter() {
-                if first_line.starts_with(prefix) {
-                    return Some(lang.name().to_string());
-                }
-            }
-        }
-
-        // 4) Lightweight content markers to catch a few ubiquitous cases without I/O.
+        // The former first-line loop used LanguageType::list() (extensions), not
+        // shebangs, so it could never match a line beginning "#!". Preserve the
+        // actual content-marker behavior and its precedence without that dead loop.
+        // 3) Lightweight content markers to catch a few ubiquitous cases without I/O.
         let s = String::from_utf8_lossy(sample);
         if s.contains("<?php") {
-            return Some(LanguageType::Php.name().to_string());
+            return Some("PHP".to_string());
         }
         if s.contains("package main") {
-            return Some(LanguageType::Go.name().to_string());
+            return Some("Go".to_string());
         }
         if s.contains("public class") {
-            return Some(LanguageType::Java.name().to_string());
+            return Some("Java".to_string());
         }
         if s.contains("#!/usr/bin/env bash") || s.contains("#!/bin/bash") {
-            return Some(LanguageType::Bash.name().to_string());
+            return Some("BASH".to_string());
         }
         if s.contains("#!/usr/bin/env python") {
-            return Some(LanguageType::Python.name().to_string());
+            return Some("Python".to_string());
         }
 
         None
@@ -209,6 +180,71 @@ mod tests {
         let ins = ContentInspector::default();
         assert_eq!(ins.guess_charset("ok".as_bytes()), Some("UTF-8".into()));
         assert_eq!(ins.guess_charset(&[0xFF, 0xFE, 0xFD]), None);
+    }
+
+    /// Pins the extension table that was checked against tokei 14.0.0's
+    /// `languages.json`, so accidental edits or reordering are caught. Update the
+    /// count and digest only after re-checking the table against tokei.
+    #[test]
+    fn language_extension_table_matches_the_verified_tokei_snapshot() {
+        let mut digest: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a 64
+        for &(extension, language) in language::EXTENSIONS {
+            for byte in extension.bytes().chain(*b"\t").chain(language.bytes()).chain(*b"\n") {
+                digest ^= u64::from(byte);
+                digest = digest.wrapping_mul(0x0100_0000_01b3);
+            }
+        }
+        assert_eq!(language::EXTENSIONS.len(), 517);
+        assert_eq!(digest, 0xddb5_6e21_f437_4857);
+    }
+
+    /// Every table entry is reachable through the public inspector, in either case.
+    #[test]
+    fn legacy_language_catalog_preserves_all_extensions() {
+        let ins = ContentInspector::default();
+        assert!(language::EXTENSIONS.len() > 500);
+        for &(extension, expected) in language::EXTENSIONS {
+            // The public inspector has always considered only Path::extension(),
+            // not a whole multipart suffix such as "cs.st".
+            if extension.contains('.') {
+                continue;
+            }
+            for extension in [extension.to_string(), extension.to_ascii_uppercase()] {
+                let path = PathBuf::from(format!("sample.{extension}"));
+                assert_eq!(ins.guess_language(&path, b""), Some(expected.to_string()), "{path:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_language_priority_and_sample_bounds() {
+        let ins = ContentInspector::default();
+        for (filename, expected) in [
+            ("Makefile", "Makefile"),
+            ("makefile", "Makefile"),
+            ("Dockerfile", "Dockerfile"),
+            ("dockerfile", "Dockerfile"),
+            ("CMakeLists.txt", "Plain Text"),
+            ("Rakefile", "Rakefile"),
+            ("rakefile", "Rakefile"),
+            ("Gemfile", "Ruby"),
+            ("gemfile", "Ruby"),
+        ] {
+            assert_eq!(ins.guess_language(Path::new(filename), b""), Some(expected.to_string()));
+        }
+        assert_eq!(ins.guess_language(Path::new("main.RS"), b"#!/bin/bash\n"), Some("Rust".into()));
+        assert_eq!(
+            ins.guess_language(Path::new("script"), b"#!/bin/bash\r\necho hi"),
+            Some("BASH".into())
+        );
+        assert_eq!(
+            ins.guess_language(Path::new("script"), b"#!/usr/bin/env python3\n"),
+            Some("Python".into())
+        );
+        assert_eq!(ins.guess_language(Path::new("unknown"), &[0xff]), None);
+        let mut beyond_sample = vec![b' '; ContentInspector::LANGUAGE_SAMPLE_BYTES];
+        beyond_sample.extend_from_slice(b"<?php");
+        assert_eq!(ins.guess_language(Path::new("unknown"), &beyond_sample), None);
     }
 
     #[test]

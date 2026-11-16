@@ -254,7 +254,7 @@ def rewrite_links(content: str, *, root_level: bool = False) -> str:
             content,
         )
     # Source-only guides and Rust examples are browsed in the repository.
-    for guide in ("PUBLISHING.md", "WIZARD.md", "benchmark/README.md"):
+    for guide in ("PUBLISHING.md", "benchmark/README.md"):
         content = content.replace(
             "](" + guide,
             "](https://github.com/mongodb/kingfisher/blob/main/docs/" + guide,

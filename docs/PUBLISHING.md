@@ -22,10 +22,10 @@ The manifests currently prepare these releases; a Git tag does not override Carg
 
 | Package | Version | Published targets |
 | ------- | ------- | ----------------- |
-| `kingfisher-core` | `1.0.6` | `kingfisher_core` library |
-| `kingfisher-rules` | `3.2.0` | `kingfisher_rules` library |
-| `kingfisher-scanner` | `3.0.3` | `kingfisher_scanner` library |
-| `kingfisher-bin` | `2.18.1` | `kingfisher` executable and library |
+| `kingfisher-core` | `2.0.0` | `kingfisher_core` library |
+| `kingfisher-rules` | `3.2.1` | `kingfisher_rules` library |
+| `kingfisher-scanner` | `4.0.0` | `kingfisher_scanner` library |
+| `kingfisher-bin` | `2.19.0` | `kingfisher` executable and library |
 
 The Python SDK (`kingfisher-secret-scanner`) is independently versioned at
 `1.6.3` in `crates/kingfisher-python/Cargo.toml`; Python modules share that version.
@@ -34,6 +34,18 @@ The stable npm SDK uses **1.0.1** in `crates/kingfisher-node/Cargo.toml` and
 release tags do not publish the CLI or Python SDK.
 
 The libraries follow semantic versioning and do not inherit the CLI version.
+Core 2.0.0 and scanner 4.0.0 migrate public Git types to `gix` 0.90;
+scanner 4.0.0 also exposes `jsonwebtoken` 12 decoding keys under `validation`. The root
+package follows CLI version 2.19.0 and also replaces the public `gouqi` Jira models
+with local DTOs. Consumers of its application library must migrate those types. These
+are Rust source/type migrations: existing Kingfisher YAML, Betterleaks TOML, CLI
+behavior, and Python/npm runtime APIs remain compatible. Rules 3.2.1 updates
+private dependencies without a public Rust API break; its generic YAML loader
+still returns `anyhow::Result`. See the
+[dependency modernization migration](LIBRARY.md#dependency-modernization-migration),
+including the parser-source note for callers that explicitly downcast errors.
+
+Earlier releases established these separate contracts:
 Rules/scanner 3.0.0 add public Rust schema fields and Expr variants; upgrade both
 crates together. Existing YAML/TOML files remain compatible. Core 1.0.6 refreshes
 dependency minimums without changing its public API. Python SDK 1.6.0 adds
@@ -73,7 +85,7 @@ Makefile targets mount this directory read-only; source builds remain explicit.
 After publishing, consumers can install the CLI with:
 
 ```sh
-cargo install --locked kingfisher-bin --version 2.18.1
+cargo install --locked kingfisher-bin --version 2.19.0
 ```
 
 This installs the `kingfisher` command. See [library usage](LIBRARY.md#quick-start)
@@ -180,16 +192,21 @@ are independent: after the releases above are published, for example:
 
 ```sh
 for feature_set in --only-explicit-features --all-features; do
-  cargo semver-checks -p kingfisher-core --baseline-version 1.0.3 "$feature_set"
-  cargo semver-checks -p kingfisher-rules --baseline-version 2.0.0 "$feature_set"
-  cargo semver-checks -p kingfisher-scanner --baseline-version 2.0.0 "$feature_set"
+  cargo semver-checks -p kingfisher-core --baseline-version 2.0.0 "$feature_set"
+  cargo semver-checks -p kingfisher-rules --baseline-version 3.2.1 "$feature_set"
+  cargo semver-checks -p kingfisher-scanner --baseline-version 4.0.0 "$feature_set"
 done
 ```
 
 Use an installed `cargo-semver-checks` release compatible with the Rust toolchain.
-For the rules/scanner 3.0.0 release, review the intentional break against
-the published 2.0.0 releases and the [3.0 migration notes](LIBRARY.md#migrating-to-rules-and-scanner-30);
-do not treat a major bump as permission for unrelated breaks. The historical
+Before the releases above are published, compare core against 1.0.6, rules against
+3.2.0, and scanner against 3.0.3. Review the intentional core/scanner dependency-type
+breaks and the root library's changes against `kingfisher-bin` 2.18.1 using the
+[dependency migration notes](LIBRARY.md#dependency-modernization-migration).
+Rules 3.2.1 must remain compatible with its published 3.2.0 baseline.
+For the earlier rules/scanner 3.0.0 release, the intentional break was against
+the published 2.0.0 releases; retain the [3.0 migration notes](LIBRARY.md#migrating-to-rules-and-scanner-30).
+Do not treat a major bump as permission for unrelated breaks. The historical
 [pre-1.0 migration](LIBRARY.md#migrating-from-the-01-api) remains documented.
 CI compares PRs against their base revision so later changes cannot silently break
 unchanged major versions. A passing static check does not replace behavior tests,
@@ -472,7 +489,7 @@ publishing, first create fresh archives:
 
 ```sh
 cargo package --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner -p kingfisher-bin
-python3 scripts/publish-crates.py --tag v2.18.1
+python3 scripts/publish-crates.py --tag v2.19.0
 python3 -m unittest discover -s scripts/tests -v
 ```
 

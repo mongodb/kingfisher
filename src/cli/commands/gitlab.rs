@@ -1,5 +1,4 @@
 use clap::{Args, Subcommand, ValueEnum, ValueHint};
-use strum::Display;
 use url::Url;
 
 use crate::cli::commands::output::{GitHubOutputFormat, OutputArgs};
@@ -83,8 +82,7 @@ impl GitLabRepoSpecifiers {
 }
 
 /// GitLab repository type filter
-#[derive(Copy, Clone, Debug, Display, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-#[strum(serialize_all = "kebab-case")]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum GitLabRepoType {
     /// All repositories the user/group has access to
     All,
@@ -93,6 +91,8 @@ pub enum GitLabRepoType {
     /// Only repositories where the user is a member
     Member,
 }
+
+crate::cli::impl_value_enum_display!(GitLabRepoType);
 
 /// Output formats for GitLab commands - reusing GitHub's formats
 pub type GitLabOutputFormat = GitHubOutputFormat;

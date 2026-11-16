@@ -24,7 +24,7 @@ struct CapabilityOverlay {
 #[derive(Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RuleCapabilities {
-    revocation: Option<serde_yaml::Value>,
+    revocation: Option<yaml_serde::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -42,7 +42,7 @@ struct ImportedRule {
     #[serde(skip_serializing_if = "Option::is_none")]
     validation: Option<Validation>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    revocation: Option<serde_yaml::Value>,
+    revocation: Option<yaml_serde::Value>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     depends_on_rule: Vec<DependsOnRule>,
     #[serde(skip_serializing_if = "is_true")]
@@ -142,7 +142,7 @@ where
     F: FnMut(&str) -> Result<String>,
 {
     let config: ImportConfig =
-        serde_yaml::from_str(config).context("invalid Veles import config")?;
+        yaml_serde::from_str(config).context("invalid Veles import config")?;
     if config.version != 1 {
         bail!("unsupported Veles import config version {}", config.version);
     }
@@ -158,7 +158,7 @@ where
         bail!("Veles import config contains duplicate rule IDs");
     }
     let mut capability_overlay: CapabilityOverlay =
-        serde_yaml::from_str(capabilities).context("invalid Veles capability overlay")?;
+        yaml_serde::from_str(capabilities).context("invalid Veles capability overlay")?;
     if capability_overlay.version != 1 {
         bail!("unsupported Veles capability overlay version {}", capability_overlay.version);
     }
@@ -205,7 +205,7 @@ where
         );
     }
 
-    let yaml = serde_yaml::to_string(&Snapshot { rules })?;
+    let yaml = yaml_serde::to_string(&Snapshot { rules })?;
     Ok(format!(
         "# Generated from pinned source {RAW_BASE_URL}/{}/; do not edit.\n\
          # Selected Veles plugin IDs are declared in data/veles-rules.yml.\n{yaml}",
@@ -1250,7 +1250,7 @@ rules:
         )
         .unwrap();
 
-        let snapshot: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        let snapshot: yaml_serde::Value = yaml_serde::from_str(&yaml).unwrap();
         let rule = &snapshot["rules"][0];
         assert_eq!(rule["id"], "veles.secrets/npmjsaccesstoken");
         assert!(rule["visible"].as_bool().unwrap_or(true));

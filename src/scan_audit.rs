@@ -570,7 +570,7 @@ pub fn git_snapshot(root: &Path, args: &scan::ScanArgs, fetched: bool) -> GitAud
         clone_mode,
         shallow: repository
             .filter(|_| audit_before_deadline(deadline))
-            .map(gix::Repository::is_shallow),
+            .and_then(|repository| repository.is_shallow().ok()),
         fetched_commit_count,
         target_snapshots: Vec::new(),
     }
@@ -743,6 +743,8 @@ fn git_commit_count(
 
 #[cfg(test)]
 mod tests {
+    use crate::git_test_fixture as fixture;
+
     use super::*;
     use std::time::Duration;
     use tempfile::tempdir;
@@ -751,15 +753,23 @@ mod tests {
     fn audit_commit_resolution_handles_refs_tags_and_invalid_input() {
         let temp = tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();
-        let repo = git2::Repository::init(&root).unwrap();
-        let signature = git2::Signature::now("tester", "tester@example.com").unwrap();
-        let tree_id = repo.index().unwrap().write_tree().unwrap();
-        let tree = repo.find_tree(tree_id).unwrap();
+        let repo = gix::init(&root).unwrap();
+        let signature = fixture::signature("tester", "tester@example.com");
+        let tree_id = fixture::write_tree(&repo, &fixture::index(&repo).unwrap()).unwrap();
+        let tree = tree_id;
         let commit =
-            repo.commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[]).unwrap();
-        let object = repo.find_object(commit, None).unwrap();
-        repo.tag("release", &object, &signature, "annotated tag", false).unwrap();
-        repo.reference("refs/remotes/origin/feature", commit, false, "remote branch").unwrap();
+            fixture::commit(&repo, Some("HEAD"), &signature, &signature, "initial", &tree, &[])
+                .unwrap();
+        let object = commit;
+        fixture::tag(&repo, "release", object, &signature, "annotated tag").unwrap();
+        fixture::reference(
+            &repo,
+            "refs/remotes/origin/feature",
+            commit,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "remote branch",
+        )
+        .unwrap();
         let deadline = Some(Instant::now() + Duration::from_secs(30));
 
         for reference in ["HEAD", "release", "feature", "origin/feature", &commit.to_string()] {
@@ -784,12 +794,13 @@ mod tests {
 
         let temp = tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();
-        let repo = git2::Repository::init(&root).unwrap();
-        let signature = git2::Signature::now("tester", "tester@example.com").unwrap();
-        let tree_id = repo.index().unwrap().write_tree().unwrap();
-        let tree = repo.find_tree(tree_id).unwrap();
+        let repo = gix::init(&root).unwrap();
+        let signature = fixture::signature("tester", "tester@example.com");
+        let tree_id = fixture::write_tree(&repo, &fixture::index(&repo).unwrap()).unwrap();
+        let tree = tree_id;
         let commit =
-            repo.commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[]).unwrap();
+            fixture::commit(&repo, Some("HEAD"), &signature, &signature, "initial", &tree, &[])
+                .unwrap();
 
         for options in [
             vec!["--git-repo-timeout=30"],
@@ -816,6 +827,25 @@ mod tests {
         }
     }
 
+    #[test]
+    fn audit_shallow_path_encoding_failures_are_nonfatal() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let repo = gix::init(&root).unwrap();
+        let config_path = repo.git_dir().join("config");
+        drop(repo);
+
+        let mut config = std::fs::read(&config_path).unwrap();
+        config.extend_from_slice(b"\n[gitoxide \"core\"]\n shallowFile = \xff\n");
+        std::fs::write(&config_path, config).unwrap();
+
+        let snapshot = git_snapshot(&root, &scan_args(&[]), false);
+        assert_eq!(snapshot.scope, "all_fetched_git_objects");
+        // Unix accepts arbitrary path bytes, so this names a missing shallow file.
+        // Windows cannot represent this path; that failure must remain unknown.
+        assert_eq!(snapshot.shallow, if cfg!(unix) { Some(false) } else { None });
+    }
+
     fn scan_args(options: &[&str]) -> scan::ScanArgs {
         use clap::Parser;
 
@@ -832,13 +862,13 @@ mod tests {
         args
     }
 
-    fn commit(repo: &git2::Repository, parents: &[git2::Oid]) -> git2::Oid {
-        let signature = git2::Signature::now("tester", "tester@example.com").unwrap();
-        let tree_id = repo.treebuilder(None).unwrap().write().unwrap();
-        let tree = repo.find_tree(tree_id).unwrap();
-        let parents: Vec<_> = parents.iter().map(|id| repo.find_commit(*id).unwrap()).collect();
+    fn commit(repo: &gix::Repository, parents: &[gix::ObjectId]) -> gix::ObjectId {
+        let signature = fixture::signature("tester", "tester@example.com");
+        let tree_id = repo.empty_tree().edit().unwrap().write().unwrap().detach();
+        let tree = tree_id;
         let parent_refs: Vec<_> = parents.iter().collect();
-        repo.commit(None, &signature, &signature, "audit fixture", &tree, &parent_refs).unwrap()
+        fixture::commit(repo, None, &signature, &signature, "audit fixture", &tree, &parent_refs)
+            .unwrap()
     }
 
     fn git_value(root: &Path, args: &[&str]) -> String {
@@ -850,6 +880,25 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         String::from_utf8(output.stdout).unwrap().trim().to_string()
+    }
+
+    // Worktree creation/locking uses the same Git oracle already required by
+    // these audit tests, with the filesystem argument passed without UTF-8 loss.
+    fn git_path_value(root: &Path, before: &[&str], path: &Path, after: &[&str]) {
+        // Worktree creation must not execute inherited post-checkout hooks.
+        let hooks = tempdir().unwrap();
+        let mut hooks_config = std::ffi::OsString::from("core.hooksPath=");
+        hooks_config.push(hooks.path());
+        let output = std::process::Command::new("git")
+            .current_dir(root)
+            .arg("-c")
+            .arg(hooks_config)
+            .args(before)
+            .arg(path)
+            .args(after)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     }
 
     fn assert_count_matches_git(root: &Path, branch: Option<&str>, expected: u64) {
@@ -874,41 +923,62 @@ mod tests {
     fn audit_counts_unique_reachable_commits_and_peels_packed_tags() {
         let temp = tempdir().unwrap();
         let root = temp.path();
-        let repo = git2::Repository::init(root).unwrap();
+        let repo = gix::init(root).unwrap();
         let initial = commit(&repo, &[]);
         let left = commit(&repo, &[initial]);
         // Distinguish sibling commits even when written in the same second.
-        let signature = git2::Signature::now("tester", "tester@example.com").unwrap();
-        let tree = repo.find_commit(left).unwrap().tree().unwrap();
-        let right = repo
-            .commit(
-                None,
-                &signature,
-                &signature,
-                "other branch",
-                &tree,
-                &[&repo.find_commit(initial).unwrap()],
-            )
-            .unwrap();
+        let signature = fixture::signature("tester", "tester@example.com");
+        let tree = repo.find_commit(left).unwrap().tree_id().unwrap().detach();
+        let right = fixture::commit(
+            &repo,
+            None,
+            &signature,
+            &signature,
+            "other branch",
+            &tree,
+            &[&initial],
+        )
+        .unwrap();
         let merge = commit(&repo, &[left, right]);
         let tag_only = commit(&repo, &[right]);
         let detached = commit(&repo, &[initial, left]);
         let unreachable = commit(&repo, &[merge]);
-        repo.reference("refs/heads/main", merge, true, "main").unwrap();
-        repo.reference("refs/remotes/origin/feature", right, true, "remote").unwrap();
-        repo.tag(
-            "release",
-            &repo.find_object(tag_only, None).unwrap(),
-            &signature,
-            "tag-only history",
-            false,
+        fixture::reference(
+            &repo,
+            "refs/heads/main",
+            merge,
+            gix::refs::transaction::PreviousValue::Any,
+            "main",
         )
         .unwrap();
-        repo.tag_lightweight("tree-only", tree.as_object(), false).unwrap();
-        let blob = repo.blob(b"not a commit").unwrap();
-        repo.tag_lightweight("blob-only", &repo.find_object(blob, None).unwrap(), false).unwrap();
-        repo.set_head_detached(unreachable).unwrap();
-        repo.set_head_detached(detached).unwrap();
+        fixture::reference(
+            &repo,
+            "refs/remotes/origin/feature",
+            right,
+            gix::refs::transaction::PreviousValue::Any,
+            "remote",
+        )
+        .unwrap();
+        fixture::tag(&repo, "release", tag_only, &signature, "tag-only history").unwrap();
+        fixture::reference(
+            &repo,
+            &format!("refs/tags/{}", "tree-only"),
+            tree,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "lightweight tag",
+        )
+        .unwrap();
+        let blob = repo.write_blob(b"not a commit").map(gix::Id::detach).unwrap();
+        fixture::reference(
+            &repo,
+            &format!("refs/tags/{}", "blob-only"),
+            blob,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "lightweight tag",
+        )
+        .unwrap();
+        fixture::detach_head(&repo, unreachable).unwrap();
+        fixture::detach_head(&repo, detached).unwrap();
 
         assert_count_matches_git(root, None, 6);
         assert_count_matches_git(root, Some("main"), 4);
@@ -936,25 +1006,48 @@ mod tests {
     fn audit_shallow_counts_stop_only_at_the_boundary_commits() {
         let temp = tempdir().unwrap();
         let root = temp.path();
-        let repo = git2::Repository::init(root).unwrap();
+        let repo = gix::init(root).unwrap();
         let initial = commit(&repo, &[]);
         let middle = commit(&repo, &[initial]);
         let shallow_tip = commit(&repo, &[middle]);
         let merge = commit(&repo, &[shallow_tip, middle]);
-        repo.reference("refs/heads/main", merge, true, "main").unwrap();
-        repo.reference("refs/heads/boundary", shallow_tip, true, "shallow tip").unwrap();
-        repo.set_head("refs/heads/main").unwrap();
-        std::fs::write(repo.path().join("shallow"), format!("{shallow_tip}\n")).unwrap();
+        fixture::reference(
+            &repo,
+            "refs/heads/main",
+            merge,
+            gix::refs::transaction::PreviousValue::Any,
+            "main",
+        )
+        .unwrap();
+        fixture::reference(
+            &repo,
+            "refs/heads/boundary",
+            shallow_tip,
+            gix::refs::transaction::PreviousValue::Any,
+            "shallow tip",
+        )
+        .unwrap();
+        fixture::set_head(&repo, "refs/heads/main").unwrap();
+        std::fs::write(repo.git_dir().join("shallow"), format!("{shallow_tip}\n")).unwrap();
         assert_count_matches_git(root, None, 4);
         assert_count_matches_git(root, Some("main"), 4);
         assert_count_matches_git(root, Some("boundary"), 1);
 
         // A genuine truncated clone: the boundary's parent need not exist.
-        repo.set_head("refs/heads/boundary").unwrap();
-        repo.find_reference("refs/heads/main").unwrap().delete().unwrap();
+        fixture::set_head(&repo, "refs/heads/boundary").unwrap();
+        repo.edit_references_as(
+            [gix::refs::transaction::RefEdit::delete(
+                "refs/heads/main".try_into().unwrap(),
+                gix::refs::transaction::PreviousValue::Any,
+            )],
+            Some(
+                fixture::signature("tester", "tester@example.com").to_ref(&mut Default::default()),
+            ),
+        )
+        .unwrap();
         let middle_hex = middle.to_string();
         std::fs::remove_file(
-            repo.path().join("objects").join(&middle_hex[..2]).join(&middle_hex[2..]),
+            repo.git_dir().join("objects").join(&middle_hex[..2]).join(&middle_hex[2..]),
         )
         .unwrap();
         assert_count_matches_git(root, None, 1);
@@ -964,26 +1057,40 @@ mod tests {
     fn audit_counts_worktree_heads_and_private_refs_from_either_worktree() {
         let temp = tempdir().unwrap();
         let root = temp.path();
-        let repo = git2::Repository::init(root).unwrap();
+        let repo = gix::init(root).unwrap();
         let initial = commit(&repo, &[]);
         let main_detached = commit(&repo, &[initial]);
         let linked_detached = commit(&repo, &[main_detached]);
         let private_tip = commit(&repo, &[linked_detached]);
-        repo.reference("refs/heads/main", initial, true, "main").unwrap();
-        repo.set_head("refs/heads/main").unwrap();
+        fixture::reference(
+            &repo,
+            "refs/heads/main",
+            initial,
+            gix::refs::transaction::PreviousValue::Any,
+            "main",
+        )
+        .unwrap();
+        fixture::set_head(&repo, "refs/heads/main").unwrap();
         let linked = root.join("linked worktree");
-        repo.worktree("linked", &linked, None).unwrap();
-        let linked_repo = git2::Repository::open(&linked).unwrap();
-        linked_repo.set_head_detached(linked_detached).unwrap();
-        linked_repo.reference("refs/worktree/private", private_tip, true, "private ref").unwrap();
-        repo.set_head_detached(main_detached).unwrap();
+        git_path_value(root, &["worktree", "add", "-b", "linked"], &linked, &["main"]);
+        let linked_repo = gix::open(&linked).unwrap();
+        fixture::detach_head(&linked_repo, linked_detached).unwrap();
+        fixture::reference(
+            &linked_repo,
+            "refs/worktree/private",
+            private_tip,
+            gix::refs::transaction::PreviousValue::Any,
+            "private ref",
+        )
+        .unwrap();
+        fixture::detach_head(&repo, main_detached).unwrap();
         // --all includes other worktree HEADs, but only the current worktree's
         // private refs.
         assert_count_matches_git(root, None, 3);
         assert_count_matches_git(&linked, None, 4);
         // Main HEAD must still be counted when it is the only reference to a commit.
         git_value(&linked, &["update-ref", "-d", "refs/worktree/private"]);
-        linked_repo.set_head_detached(initial).unwrap();
+        fixture::detach_head(&linked_repo, initial).unwrap();
         assert_count_matches_git(&linked, None, 2);
     }
 
@@ -991,21 +1098,27 @@ mod tests {
     fn audit_counts_heads_of_locked_and_removed_worktrees() {
         let temp = tempdir().unwrap();
         let root = temp.path();
-        let repo = git2::Repository::init(root).unwrap();
+        let repo = gix::init(root).unwrap();
         let initial = commit(&repo, &[]);
         let detached = commit(&repo, &[initial]);
-        repo.reference("refs/heads/main", initial, true, "main").unwrap();
-        repo.set_head("refs/heads/main").unwrap();
+        fixture::reference(
+            &repo,
+            "refs/heads/main",
+            initial,
+            gix::refs::transaction::PreviousValue::Any,
+            "main",
+        )
+        .unwrap();
+        fixture::set_head(&repo, "refs/heads/main").unwrap();
         let linked = root.join("linked worktree");
-        let worktree = repo.worktree("linked", &linked, None).unwrap();
-        let linked_repo = git2::Repository::open(&linked).unwrap();
-        linked_repo.set_head_detached(detached).unwrap();
-        worktree.lock(Some("offline worktree")).unwrap();
+        git_path_value(root, &["worktree", "add", "-b", "linked"], &linked, &["main"]);
+        let linked_repo = gix::open(&linked).unwrap();
+        fixture::detach_head(&linked_repo, detached).unwrap();
+        git_path_value(root, &["worktree", "lock", "--reason", "offline worktree"], &linked, &[]);
         assert_count_matches_git(root, None, 2);
 
         // Close handles before removing the checkout, especially on Windows.
         drop(linked_repo);
-        drop(worktree);
         std::fs::remove_dir_all(&linked).unwrap();
         // Its private git directory still has a HEAD that Git counts.
         assert_count_matches_git(root, None, 2);
@@ -1015,15 +1128,22 @@ mod tests {
     fn audit_handles_bare_empty_missing_and_nested_repositories() {
         let temp = tempdir().unwrap();
         let root = temp.path().join("bare repository");
-        let repo = git2::Repository::init_bare(&root).unwrap();
+        let repo = gix::init_bare(&root).unwrap();
         assert_count_matches_git(&root, None, 0);
         let snapshot = git_snapshot(&root, &scan_args(&["--staged"]), false);
         assert_eq!(snapshot.base_ref.as_deref(), Some("4b825dc642cb6eb9a060e54bf8d69288fbee4904"));
         assert!(snapshot.base_sha.is_none());
         assert!(snapshot.tip_sha.is_none());
         let initial = commit(&repo, &[]);
-        repo.reference("refs/heads/main", initial, true, "main").unwrap();
-        repo.set_head("refs/heads/main").unwrap();
+        fixture::reference(
+            &repo,
+            "refs/heads/main",
+            initial,
+            gix::refs::transaction::PreviousValue::Any,
+            "main",
+        )
+        .unwrap();
+        fixture::set_head(&repo, "refs/heads/main").unwrap();
         assert_count_matches_git(&root, None, 1);
         let staged = git_snapshot(&root, &scan_args(&["--staged"]), false);
         assert_eq!(staged.base_ref, Some(initial.to_string()));
@@ -1031,10 +1151,17 @@ mod tests {
         assert!(staged.fetched_commit_count.is_none());
 
         let working = temp.path().join("working repository");
-        let working_repo = git2::Repository::init(&working).unwrap();
+        let working_repo = gix::init(&working).unwrap();
         let initial = commit(&working_repo, &[]);
-        working_repo.reference("refs/heads/main", initial, true, "main").unwrap();
-        working_repo.set_head("refs/heads/main").unwrap();
+        fixture::reference(
+            &working_repo,
+            "refs/heads/main",
+            initial,
+            gix::refs::transaction::PreviousValue::Any,
+            "main",
+        )
+        .unwrap();
+        fixture::set_head(&working_repo, "refs/heads/main").unwrap();
         let nested = working.join("subdirectory");
         std::fs::create_dir(&nested).unwrap();
         assert_count_matches_git(&nested, None, 1);
@@ -1049,12 +1176,26 @@ mod tests {
     fn audit_preserves_explicit_boundaries_and_snapshot_scopes() {
         let temp = tempdir().unwrap();
         let root = temp.path();
-        let repo = git2::Repository::init(root).unwrap();
+        let repo = gix::init(root).unwrap();
         let initial = commit(&repo, &[]);
         let tip = commit(&repo, &[initial]);
-        repo.reference("refs/heads/main", tip, true, "main").unwrap();
-        repo.reference("refs/remotes/origin/base", initial, true, "base").unwrap();
-        repo.set_head("refs/heads/main").unwrap();
+        fixture::reference(
+            &repo,
+            "refs/heads/main",
+            tip,
+            gix::refs::transaction::PreviousValue::Any,
+            "main",
+        )
+        .unwrap();
+        fixture::reference(
+            &repo,
+            "refs/remotes/origin/base",
+            initial,
+            gix::refs::transaction::PreviousValue::Any,
+            "base",
+        )
+        .unwrap();
+        fixture::set_head(&repo, "refs/heads/main").unwrap();
         for options in [
             vec!["--since-commit", "base"],
             vec!["--branch", "main", "--since-commit", "base"],
@@ -1077,10 +1218,17 @@ mod tests {
     #[test]
     fn audit_snapshot_works_without_git_on_path() {
         let temp = tempdir().unwrap();
-        let repo = git2::Repository::init(temp.path()).unwrap();
+        let repo = gix::init(temp.path()).unwrap();
         let initial = commit(&repo, &[]);
-        repo.reference("refs/heads/main", initial, true, "main").unwrap();
-        repo.set_head("refs/heads/main").unwrap();
+        fixture::reference(
+            &repo,
+            "refs/heads/main",
+            initial,
+            gix::refs::transaction::PreviousValue::Any,
+            "main",
+        )
+        .unwrap();
+        fixture::set_head(&repo, "refs/heads/main").unwrap();
         let empty_path = temp.path().join("empty path");
         std::fs::create_dir(&empty_path).unwrap();
         let output = std::process::Command::new(std::env::current_exe().unwrap())
@@ -1119,18 +1267,25 @@ mod tests {
     #[test]
     fn audit_does_not_report_partial_counts_or_expired_metadata() {
         let temp = tempdir().unwrap();
-        let repo = git2::Repository::init(temp.path()).unwrap();
+        let repo = gix::init(temp.path()).unwrap();
         let initial = commit(&repo, &[]);
         let tip = commit(&repo, &[initial]);
-        repo.reference("refs/heads/main", tip, true, "main").unwrap();
-        repo.set_head("refs/heads/main").unwrap();
+        fixture::reference(
+            &repo,
+            "refs/heads/main",
+            tip,
+            gix::refs::transaction::PreviousValue::Any,
+            "main",
+        )
+        .unwrap();
+        fixture::set_head(&repo, "refs/heads/main").unwrap();
         let gix_repo = gix::open(temp.path()).unwrap();
         let expired = Some(Instant::now() - Duration::from_secs(1));
         assert!(git_commit_sha(&gix_repo, expired, "HEAD").is_none());
         assert!(git_commit_count(&gix_repo, expired, None).is_none());
         let initial_hex = initial.to_string();
         std::fs::remove_file(
-            repo.path().join("objects").join(&initial_hex[..2]).join(&initial_hex[2..]),
+            repo.git_dir().join("objects").join(&initial_hex[..2]).join(&initial_hex[2..]),
         )
         .unwrap();
         assert!(git_commit_count(&gix_repo, None, None).is_none());

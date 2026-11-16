@@ -71,7 +71,7 @@ ARCHIVE_CMD = $(TAR_CMD) $(TAR_OPTS)
 SUDO_CMD := $(shell command -v sudo 2>/dev/null)
 
 .PHONY: \
-        default help release crates kingfisher-secret-scanner npm create-dockerignore setup-zig wizard-gui \
+        default help release crates kingfisher-secret-scanner npm create-dockerignore setup-zig \
         ubuntu-x64 ubuntu-arm64 linux-x64 linux-arm64 linux linux-all \
         darwin-arm64 darwin-x64 darwin-dev darwin darwin-all \
         require-windows-host windows-x64 windows-arm64 windows-test-x64 windows-test-arm64 windows-test windows \
@@ -97,7 +97,6 @@ help:
 	@echo "  darwin-arm64       Build macOS arm64 archive"
 	@echo "  darwin-all         Build macOS x64 and arm64 archives"
 	@echo "  darwin-dev         Build a macOS arm64 dev binary"
-	@echo "  wizard-gui         Build a release GUI binary for the detected host platform"
 	@echo "  windows-x64        Build Windows x64 archive from MSYS2"
 	@echo "  windows-arm64      Build Windows arm64 archive from MSYS2"
 	@echo "  windows            Build Windows x64 and arm64 archives"
@@ -129,13 +128,7 @@ crates kingfisher-secret-scanner npm: release
 create-dockerignore:
 	@printf '%s\n' target/ .git/ .vscode/ bin/ > .dockerignore
 
-# Rust's host triple preserves the native ABI (including GNU/MSVC on Windows).
-# The GUI uses native desktop libraries, so do not send it through musl/Docker.
-HOST_TARGET = $(shell rustc -vV | sed -n 's/^host: //p')
 DARWIN_FEATURES := system-alloc
-
-wizard-gui: check-rust
-	cargo build --release --target $(HOST_TARGET) --features "$(strip gui $(if $(filter darwin,$(OS)),$(DARWIN_FEATURES)))" --bin $(PROJECT_NAME)
 
 prepare-release-notices:
 	@mkdir -p target/release/notices

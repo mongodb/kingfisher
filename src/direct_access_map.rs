@@ -232,6 +232,7 @@ pub fn build_viewer_report_bytes(results: &[DirectAccessMapResult]) -> Result<Ve
                 validate_command: None,
                 revoke_command: None,
                 blast_radius_command: None,
+                source_region: Default::default(),
             },
         });
 

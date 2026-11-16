@@ -245,7 +245,7 @@ mod tests {
     }
 
     fn finding() -> OwnedBlobMatch {
-        let rule: RuleSyntax = serde_yaml::from_str(
+        let rule: RuleSyntax = yaml_serde::from_str(
             r#"
 name: Synthetic candidate test
 id: custom.candidate.test

@@ -8,10 +8,11 @@ description: "Embed secret detection, live validation, and explicit revocation i
 For in-process Python detection, validation and revocation, see the [Python SDK](../reference/python-bindings.md).
 For native JavaScript/TypeScript and VS Code embedding, see the [Node SDK](../reference/javascript-bindings.md).
 
-The prepared library releases are **kingfisher-core 1.0.6**,
-**kingfisher-rules 3.2.0**, and **kingfisher-scanner 3.0.3**.
+The prepared library releases are **kingfisher-core 2.0.0**,
+**kingfisher-rules 3.2.1**, and **kingfisher-scanner 4.0.0**.
 They require Rust **1.99** or newer and are versioned independently of the
-`kingfisher-bin` CLI, currently **2.18.1**. See [publishing](https://github.com/mongodb/kingfisher/blob/main/docs/PUBLISHING.md).
+`kingfisher-bin` CLI, currently **2.19.0**. See [publishing](https://github.com/mongodb/kingfisher/blob/main/docs/PUBLISHING.md) and the
+[dependency modernization migration](#dependency-modernization-migration).
 
 ## Crate Overview
 
@@ -66,7 +67,7 @@ Add the scanner crate to your application's `Cargo.toml`:
 
 ```toml
 [dependencies]
-kingfisher-scanner = "3.0.3"
+kingfisher-scanner = "4.0.0"
 anyhow = "1"
 ```
 
@@ -123,12 +124,12 @@ additional validator features your project needs.
 To install the CLI from crates.io:
 
 ```sh
-cargo install --locked kingfisher-bin --version 2.18.1
+cargo install --locked kingfisher-bin --version 2.19.0
 kingfisher scan path/to/project --no-validate --format json --no-update-check
 ```
 
 For the `kingfisher-bin` library example in your own application, use
-`kingfisher = { package = "kingfisher-bin", version = "2.18.1" }` and `anyhow = "1"`.
+`kingfisher = { package = "kingfisher-bin", version = "2.19.0" }` and `anyhow = "1"`.
 The focused library examples use the crate versions listed above;
 `kingfisher-rules` and `kingfisher-scanner` examples also use `anyhow = "1"`.
 
@@ -137,17 +138,17 @@ The focused library examples use the crate versions listed above;
 Start with a complete example above and copy it into `src/main.rs` in a small Rust
 application. These are public-API consumers; no CLI process or private Kingfisher
 module is required. Choose dependencies from this table in addition to
-`kingfisher-scanner = "3.0.3"` and `anyhow = "1"`:
+`kingfisher-scanner = "4.0.0"` and `anyhow = "1"`:
 
 | Recipe | Additional dependencies / features |
 | ------ | ---------------------------------- |
 | `scan_content` | None |
 | `detection_policy` | Scanner feature `context` |
-| `inspect_rules` | `serde_json = "1"`; `kingfisher-rules = "3.2.0"` for loading custom YAML/TOML |
+| `inspect_rules` | `serde_json = "1"`; `kingfisher-rules = "3.2.1"` for loading custom YAML/TOML |
 | `scan_files` | `serde_json = "1"` |
-| `scan_custom_rules` | `kingfisher-rules = "3.2.0"` |
+| `scan_custom_rules` | `kingfisher-rules = "3.2.1"` |
 | `scan_async` | `tokio = { version = "1.53", features = ["macros", "rt", "sync"] }` |
-| `local_validation` | Scanner feature `validation`; `kingfisher-rules = "3.2.0"` |
+| `local_validation` | Scanner feature `validation`; `kingfisher-rules = "3.2.1"` |
 | `http_validation` | Complete manifest below; also copy `fixtures/acme-http.yml` and `support/mod.rs` into `src/fixtures/` and `src/support/` |
 | `validate_file` | Scanner feature `validation`; `serde_json = "1"`; `tokio = { version = "1.53", features = ["macros", "rt"] }` |
 | `git_inputs` | Scanner feature `git` |
@@ -323,8 +324,8 @@ rust-version = "1.99"
 
 [dependencies]
 anyhow = "1"
-kingfisher-scanner = { version = "3.0.3", features = ["validation"] }
-kingfisher-rules = "3.2.0"
+kingfisher-scanner = { version = "4.0.0", features = ["validation"] }
+kingfisher-rules = "3.2.1"
 serde_json = "1"
 tokio = { version = "1.53", features = ["macros", "rt", "net", "io-util", "time"] }
 ```
@@ -543,7 +544,7 @@ Compile once and share the database. Preserve catalog metadata with
 `RulesDatabase::from_rule_collection`; converting the loaded collection into a
 `Vec<Rule>` loses its database-level source prefilter.
 
-For custom files, add `kingfisher-rules = "3.2.0"` and use:
+For custom files, add `kingfisher-rules = "3.2.1"` and use:
 
 ```rust
 use kingfisher_rules::{Confidence, Rules, RulesDatabase};
@@ -604,7 +605,7 @@ services or when every file occurrence must be reported.
 
 ## Scanning Methods
 
-For reuse across processes, add `kingfisher-rules = "3.2.0"` to your dependencies and load the collection with
+For reuse across processes, add `kingfisher-rules = "3.2.1"` to your dependencies and load the collection with
 `kingfisher_rules::RulesDatabase::from_rule_collection_with_cache` and
 `kingfisher_rules::RuleCacheConfig::from_dir_or_env(None)` (or `RuleCacheConfig::new(path)`).
 This is the CLI/Python compiled content-database cache and honors `KF_RULE_CACHE_DIR`.
@@ -691,7 +692,7 @@ No validator features are enabled by default:
 
 ```toml
 [dependencies]
-kingfisher-scanner = { version = "3.0.3", features = ["validation"] }
+kingfisher-scanner = { version = "4.0.0", features = ["validation"] }
 ```
 
 `validation` enables all supported validators and revocation: HTTP, gRPC,
@@ -708,7 +709,7 @@ logging or serializing it:
 ```toml
 [dependencies]
 anyhow = "1"
-kingfisher-scanner = { version = "3.0.3", features = ["validation"] }
+kingfisher-scanner = { version = "4.0.0", features = ["validation"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -807,7 +808,7 @@ retained credential inputs. Validation never calls revocation automatically.
 ```toml
 [dependencies]
 anyhow = "1"
-kingfisher-scanner = { version = "3.0.3", features = ["validation"] }
+kingfisher-scanner = { version = "4.0.0", features = ["validation"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -905,7 +906,7 @@ input limits and bound worker counts for untrusted or large workloads.
 The full application's library is available separately:
 
 ```toml
-kingfisher = { package = "kingfisher-bin", version = "2.18.1" }
+kingfisher = { package = "kingfisher-bin", version = "2.19.0" }
 ```
 
 It carries CLI dependencies and all validator features. The stable embedding
@@ -934,9 +935,10 @@ compiling all validators. Python SDK 1.0.2 delegated revocation to the shared Ru
 runner.
 
 
-The first published `1.0.0` established the stable contract. The rules and scanner
-3.0.0 releases start their next stable major; core stays on the compatible 1.x API at 1.0.6. Within each
-stable major:
+The first published `1.0.0` established the stable contract. Rules and scanner
+3.0.0 established the schema generation described below while core remained at
+1.0.6. The current dependency modernization moves core to 2.x and scanner to 4.x;
+rules remains on 3.x. Within each stable major:
 
 - Existing reachable public Rust items, signatures, fields, trait implementations,
   and feature names remain compatible. Hidden-but-public items are not exempt.
@@ -962,6 +964,61 @@ builds, and `cargo-semver-checks` against the pull request's base revision. Afte
 publication, release checks must also compare against the last published compatible
 library version (see [publishing](https://github.com/mongodb/kingfisher/blob/main/docs/PUBLISHING.md)). Static API checks do not prove all
 behavior; review and behavioral tests remain required.
+
+### Dependency modernization migration
+
+Upgrade direct dependencies to core `2.0.0`, rules `3.2.1`, and scanner `4.0.0`.
+The full application package follows CLI version `kingfisher-bin` `2.19.0`.
+Focused-crate major bumps cover exposed Rust dependency types, not a rule-file migration:
+existing Kingfisher YAML, Betterleaks TOML, CLI flags, and Python/npm runtime
+APIs remain compatible. TOON report compatibility is described below.
+The focused crates still require Rust 1.99+.
+
+- **Git types:** core and scanner now use `gix` 0.90. Align any direct `gix`
+  dependency when constructing `CommitMetadata`, converting `BlobId` to/from Git
+  object IDs, or using scanner `git::GitCommit`, `git::GitInput`, and `git::GitEvent`.
+  Public `gix::ObjectId` and `gix::date::Time` come from new incompatible dependency
+  versions; old values cannot be passed directly. Core's error conversion is now
+  `From<gix::Error>`, replacing `From<gix::open::Error>`. The full application also
+  re-exports the new `gix`, `Repository`, and `ThreadSafeRepository` types.
+- **Scanner/core pairing:** scanner 4.x re-exports core 2.x types, including `Blob`
+  and `BlobId`. Update direct core dependencies rather than passing core 1.x values
+  into the new scanner. Rules stays on the compatible 3.x public schema.
+- **JWT keys:** scanner validation now uses `jsonwebtoken` 12. Align direct
+  dependencies when constructing `jwt::ValidateOptions::fallback_decoding_key`;
+  its `DecodingKey` type comes from that major version. HMAC key constructors
+  return `Result` and reject empty keys. JWT verification also rejects unsupported
+  critical header extensions and malformed audience claims.
+- **Application Jira integration:** `kingfisher::jira::JiraIssue` is a local DTO,
+  no longer an alias for `gouqi::Issue`. It retains `self_link`, `key`, `id`, the
+  complete raw `fields` map, and typed `field::<T>(name)` access. The latter now
+  returns `Option<serde_json::Result<T>>`; replace other `gouqi` convenience methods
+  with typed field or raw JSON access. `comments()` returns local `JiraComments`;
+  `fetch_changelog` returns local `JiraChangelog`. Nested user/comment/history types
+  are local too, and comment bodies are `serde_json::Value`. `JiraHistory::author`
+  is `Option<JiraUser>` so anonymous edits parse, and `fetch_changelog` follows all
+  pages. Update explicit type annotations; exported issue, comment, and changelog
+  artifact formats are preserved.
+- **YAML error inspection:** the parser is now `yaml_serde`, while rule-loading
+  functions retain `anyhow::Result` and `RulesError` variants are unchanged.
+  Concrete parser sources are implementation details; callers that explicitly
+  downcast them should use `yaml_serde::Error` instead of `serde_yaml::Error`.
+  Ordinary YAML/TOML loading and error-context handling need no changes.
+- **TOON reports:** CLI 2.x retains the `toon_format` 0.5 wire format, including pipe
+  delimiters, two-space indentation, safe dotted-key folding (depth two), and existing
+  empty-array and nested-row layouts. No TOON parser or snapshot migration is required.
+- **CLI enum display:** formatting no longer uses the `strum::Display` derive,
+  but the public trait remains `std::fmt::Display`. Existing `to_string()` output
+  and `clap::ValueEnum` spellings are retained; there is no replacement strum trait
+  to import or implement.
+
+JWT validation shares the AWS-LC backend with other clients. The optional
+`validation` feature also retains current RSA verification support so existing
+weak RSA credentials remain detectable; this does not enable weak-key signing.
+
+The CLI flags, existing serialized report fields, and SDK runtime interfaces do
+not change merely because these Rust dependencies changed. Python and npm SDK
+versions remain independent of the Cargo library and CLI versions.
 
 ### Migrating to rules and scanner 3.0
 

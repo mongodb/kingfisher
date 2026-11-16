@@ -196,6 +196,8 @@ fn summarize(
 
 #[cfg(test)]
 mod tests {
+    use crate::git_test_fixture as fixture;
+
     use super::*;
     #[test]
     fn only_exact_ancestor_coverage_allows_skipping() {
@@ -218,39 +220,42 @@ mod tests {
     #[test]
     fn real_tree_summaries_bound_unique_sets_and_retain_malformed_trees() -> Result<()> {
         let temp = tempfile::tempdir()?;
-        let git = git2::Repository::init_bare(temp.path())?;
+        let git = gix::init_bare(temp.path())?;
         let blobs: Vec<_> = (0..5)
-            .map(|i| git.blob(format!("candidate contents long enough number {i}").as_bytes()))
+            .map(|i| {
+                git.write_blob(format!("candidate contents long enough number {i}").as_bytes())
+                    .map(gix::Id::detach)
+            })
             .collect::<std::result::Result<_, _>>()?;
         let tree = |count: usize| -> Result<_> {
-            let mut builder = git.treebuilder(None)?;
+            let mut builder = git.empty_tree().edit()?;
             for (i, oid) in blobs.iter().take(count).enumerate() {
-                builder.insert(format!("file-{i}"), *oid, 0o100644)?;
+                fixture::insert(&mut builder, format!("file-{i}"), *oid, 0o100644)?;
             }
-            Ok(builder.write()?)
+            Ok(builder.write()?.detach())
         };
         let single = tree(1)?;
         let four = tree(4)?;
         let five = tree(5)?;
-        let mut builder = git.treebuilder(None)?;
+        let mut builder = git.empty_tree().edit()?;
         for i in 0..8 {
-            builder.insert(format!("alias-{i}"), single, 0o040000)?;
+            fixture::insert(&mut builder, format!("alias-{i}"), single, 0o040000)?;
         }
-        let aliases = builder.write()?;
-        let malformed = git.odb()?.write(git2::ObjectType::Tree, b"not a valid tree entry")?;
+        let aliases = builder.write()?.detach();
+        use gix::prelude::Write;
+        let malformed = git.objects.write_buf(gix::objs::Kind::Tree, b"not a valid tree entry")?;
         let repo = gix::open_opts(temp.path(), gix::open::Options::isolated())?.into_sync();
         let index = RepositoryIndex::new_with_deadline(&repo, None, temp.path())?;
         let summaries = CandidateSummaries::build(&index, &repo, None, temp.path())?;
-        let oid = |id: git2::Oid| gix::ObjectId::from_hex(id.to_string().as_bytes());
-        let tree_index = |id| index.get_tree_index(&oid(id).unwrap()).unwrap();
+        let tree_index = |id: gix::ObjectId| index.get_tree_index(&id).unwrap();
         let mut seen = RoaringBitmap::new();
         assert!(!summaries.covered(tree_index(single), &seen));
-        seen.insert(index.get_blob_index(&oid(blobs[0])?).unwrap().as_usize() as u32);
+        seen.insert(index.get_blob_index(&blobs[0]).unwrap().as_usize() as u32);
         assert!(summaries.covered(tree_index(single), &seen));
         assert!(summaries.covered(tree_index(aliases), &seen));
         assert!(!summaries.covered(tree_index(four), &seen));
         for blob in blobs {
-            seen.insert(index.get_blob_index(&oid(blob)?).unwrap().as_usize() as u32);
+            seen.insert(index.get_blob_index(&blob).unwrap().as_usize() as u32);
         }
         assert!(summaries.covered(tree_index(four), &seen));
         assert!(!summaries.covered(tree_index(five), &seen));

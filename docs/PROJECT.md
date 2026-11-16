@@ -53,7 +53,7 @@ Kingfisher's additions cover the full workflow:
 | **[Custom rules](RULES.md)** | Support for both Kingfisher YAML and Betterleaks TOML. Kingfisher's rule schema also supports HTTP/gRPC validation, Liquid templates, component dependencies, filters, checksums, and revocation definitions. |
 | **[CI and developer workflows](ADVANCED.md)** | [Baselines](BASELINE.md) and [finding fingerprints](FINGERPRINT.md) for tracking known findings, plus staged-file, branch, and commit-range scanning for focused checks. |
 | **[Repository coverage and audit](AUDIT_LOG.md)** | Per-repository discovery, fetch, and scan status, resolved Git revisions, scan scope, timing, and incremental audit logs. |
-| **Visual triage** | A local browser viewer with finding filters and an interactive blast-radius graph, plus an optional [native scan wizard and report workspace](WIZARD.md). |
+| **Visual triage** | A [local browser viewer](USAGE.md#report-viewer-local-and-hosted) with finding filters and an interactive blast-radius graph. |
 | **[Additional report formats](USAGE.md)** | Token-efficient TOON for agents and LLMs, BSON, and standalone HTML audit reports, with credential validation and blast-radius context in supported outputs. |
 | **[Notifications](ALERTS.md)** | Filtered scan summaries and finding details sent to Slack, Teams, Discord, Mattermost, Google Chat, or generic webhooks. |
 | **[Rust](LIBRARY.md), [Python](PYPI.md), and [JavaScript/TypeScript](JAVASCRIPT.md) SDKs** | Composable scanning APIs backed by the same core, rules, and scanner crates, with separate validation and revocation. Python and Node call the native engine in process, not through the CLI; detection stays offline. The stable Node SDK **1.0.1** is versioned independently. |

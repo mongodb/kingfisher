@@ -100,7 +100,7 @@ fn regex_builder_errors_keep_context_and_the_size_limit() {
 #[test]
 fn rule_constructor_matches_minimal_yaml_defaults() {
     let loaded: RuleSyntax =
-        serde_yaml::from_str("id: acme.defaults\nname: Defaults\npattern: '(secret_[a-z]+)'\n")
+        yaml_serde::from_str("id: acme.defaults\nname: Defaults\npattern: '(secret_[a-z]+)'\n")
             .unwrap();
     let constructed = RuleSyntax::new("acme.defaults", "Defaults", "(secret_[a-z]+)");
     assert_eq!(loaded, constructed);

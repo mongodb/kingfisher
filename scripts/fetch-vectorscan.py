@@ -7,10 +7,12 @@ The sys build script verifies the archive again via VECTORSCAN_PREBUILT_DIR.
 """
 import argparse
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
 import re
+import ssl
 import subprocess
 import tempfile
 import time
@@ -57,7 +59,10 @@ def retry(operation):
             error.close()
             if (error.code not in {408, 429} and not 500 <= error.code < 600) or attempt == 2:
                 raise
-        except (urllib.error.URLError, TimeoutError, ConnectionError):
+        # A body cut short mid-transfer raises http.client.IncompleteRead (an
+        # HTTPException), and TLS resets raise ssl.SSLError; both are transient.
+        except (urllib.error.URLError, TimeoutError, ConnectionError,
+                http.client.HTTPException, ssl.SSLError):
             if attempt == 2:
                 raise
         time.sleep(attempt + 1)
@@ -141,6 +146,10 @@ def fetch(version, name, checksum, directory, opener=None):
                     if size > MAX_ARCHIVE:
                         raise ValueError("Vectorscan archive exceeds size limit")
                     output.write(chunk)
+            if size < asset["size"]:
+                # http.client returns b"" at an early end of stream instead of raising
+                # IncompleteRead, so report the short body as the transient error it is.
+                raise http.client.IncompleteRead(b"", asset["size"] - size)
             if size != asset["size"]:
                 raise ValueError("Vectorscan archive size does not match release metadata")
 

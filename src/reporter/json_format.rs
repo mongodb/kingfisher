@@ -425,6 +425,127 @@ mod tests {
     }
 
     #[test]
+    fn sarif_document_preserves_envelope_and_builtin_descriptors() -> Result<()> {
+        let reporter = setup_mock_reporter(Vec::new());
+        let args = create_default_args();
+        let mut output = Vec::new();
+        reporter.sarif_format(&mut output, false, &args)?;
+        assert_eq!(output.last(), Some(&b'\n'));
+        let document: serde_json::Value = serde_json::from_slice(&output)?;
+        let mut expected_driver = serde_json::json!({
+            "name": "kingfisher",
+            "semanticVersion": env!("CARGO_PKG_VERSION"),
+            "fullName": format!("Kingfisher {}", env!("CARGO_PKG_VERSION")),
+            "informationUri": env!("CARGO_PKG_HOMEPAGE"),
+            "downloadUri": env!("CARGO_PKG_REPOSITORY"),
+            "shortDescription": {"text": env!("CARGO_PKG_DESCRIPTION")},
+            "rules": []
+        });
+        assert_eq!(
+            document,
+            serde_json::json!({
+                "$schema": "https://schemastore.azurewebsites.net/schemas/json/sarif-2.1.0.json",
+                "version": "2.1.0",
+                "runs": [{"tool": {"driver": expected_driver}, "results": []}]
+            })
+        );
+
+        let rules = crate::defaults::get_builtin_rules(None)?;
+        let rule = rules.iter_rules().next().expect("a builtin rule");
+        let finding = create_mock_match(&rule.name, &rule.id, true);
+        let blob_metadata = Arc::new(BlobMetadata {
+            id: finding.blob_id,
+            num_bytes: 1024,
+            mime_essence: Some("text/plain".to_string()),
+            language: Some("Rust".to_string()),
+        });
+        reporter.datastore.lock().unwrap().record(
+            vec![(
+                Arc::new(OriginSet::new(Origin::from_file(PathBuf::from("fixture.rs")), vec![])),
+                blob_metadata,
+                finding,
+            )],
+            true,
+        );
+        let mut output = Vec::new();
+        reporter.sarif_format(&mut output, false, &args)?;
+        let document: serde_json::Value = serde_json::from_slice(&output)?;
+        expected_driver["rules"] = serde_json::json!([{
+            "id": rule.id,
+            "shortDescription": {"text": finding_title(&rule.id)},
+            "fullDescription": {"text": rule.name},
+            "help": {"text": rule.references.join("\n")}
+        }]);
+        assert_eq!(document["runs"][0]["tool"]["driver"], expected_driver);
+        let results = document["runs"][0]["results"].as_array().expect("SARIF results");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["ruleId"], rule.id);
+        assert!(document["runs"][0].get("properties").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn sarif_document_emits_only_selected_run_properties() -> Result<()> {
+        use crate::access_map::{
+            AccessMapResult, AccessSummary, PermissionSummary, ScanAccessMapResult, Severity,
+        };
+
+        let reporter = setup_mock_reporter(Vec::new());
+        let result = AccessMapResult {
+            cloud: "example".to_string(),
+            fingerprint: Some("public-fixture-fingerprint".to_string()),
+            identity: AccessSummary {
+                id: "reader@example.test".to_string(),
+                access_type: "user".to_string(),
+                project: None,
+                tenant: None,
+                account_id: None,
+            },
+            roles: Vec::new(),
+            permissions: PermissionSummary::default(),
+            resources: Vec::new(),
+            severity: Severity::Low,
+            recommendations: Vec::new(),
+            risk_notes: Vec::new(),
+            token_details: None,
+            provider_metadata: None,
+        };
+        let expected = serde_json::to_value(access_map_entry_from_result(&result))?;
+        reporter.datastore.lock().unwrap().set_access_map_results(vec![ScanAccessMapResult {
+            result,
+            finding_fingerprints: Vec::new(),
+            mapping_succeeded: true,
+        }]);
+        let mut args = create_default_args();
+        let mut output = Vec::new();
+        reporter.sarif_format(&mut output, false, &args)?;
+        let document: serde_json::Value = serde_json::from_slice(&output)?;
+        assert!(document["runs"][0].get("properties").is_none());
+
+        args.access_map = true;
+        let mut output = Vec::new();
+        reporter.sarif_format(&mut output, false, &args)?;
+        let document: serde_json::Value = serde_json::from_slice(&output)?;
+        assert_eq!(
+            document["runs"][0]["properties"],
+            serde_json::json!({"access_map": [expected]})
+        );
+
+        let mut audit =
+            crate::scan_audit::ScanAuditCollector::new("2026-01-01T00:00:00Z".to_string(), None)?;
+        audit.discover_local(std::path::Path::new("fixture-repository"));
+        reporter.datastore.lock().unwrap().set_scan_audit(audit.finish()?);
+        let mut output = Vec::new();
+        reporter.sarif_format(&mut output, false, &args)?;
+        let document: serde_json::Value = serde_json::from_slice(&output)?;
+        let properties = &document["runs"][0]["properties"];
+        assert_eq!(properties.as_object().expect("run properties").len(), 2);
+        assert_eq!(properties["access_map"][0], expected);
+        assert_eq!(properties["repository_audit"]["summary"]["discovered"], 1);
+        Ok(())
+    }
+
+    #[test]
     fn repository_audit_is_emitted_by_every_report_format() -> Result<()> {
         let reporter = setup_mock_reporter(Vec::new());
         let mut collector =

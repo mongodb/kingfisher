@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use clap::{Args, ValueEnum, ValueHint};
-use strum::Display;
 
 use crate::util::get_writer_for_file_or_stdout;
 
@@ -35,8 +34,7 @@ impl<Format: ValueEnum + Send + Sync> OutputArgs<Format> {
 // -----------------------------------------------------------------------------
 // Report Output Format
 // -----------------------------------------------------------------------------
-#[derive(Copy, Clone, Debug, Display, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-#[strum(serialize_all = "kebab-case")]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum ReportOutputFormat {
     /// A human-friendly text-based format
     Pretty,
@@ -63,8 +61,7 @@ pub enum ReportOutputFormat {
 // -----------------------------------------------------------------------------
 // GitHub Output Format
 // -----------------------------------------------------------------------------
-#[derive(Copy, Clone, Debug, Display, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-#[strum(serialize_all = "kebab-case")]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum GitHubOutputFormat {
     /// A human-friendly text-based format
     Pretty,
@@ -81,3 +78,5 @@ pub enum GitHubOutputFormat {
     /// SARIF format (experimental)
     Sarif,
 }
+
+crate::cli::impl_value_enum_display!(ReportOutputFormat, GitHubOutputFormat);

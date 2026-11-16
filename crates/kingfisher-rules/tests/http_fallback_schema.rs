@@ -53,7 +53,7 @@ fn boolean_reuse_and_independent_validation_round_trip() {
     assert_eq!(configurations[1].1, expected);
     assert!(syntax.selected_revocation(Some("secondary")).unwrap().is_none());
     let round_trip: RuleSyntax =
-        serde_yaml::from_str(&serde_yaml::to_string(syntax).unwrap()).unwrap();
+        yaml_serde::from_str(&yaml_serde::to_string(syntax).unwrap()).unwrap();
     assert_eq!(&round_trip, syntax);
 }
 
@@ -214,7 +214,7 @@ fn revocation_reuse_is_independent_defaults_off_and_changes_only_the_url() {
     assert_eq!(selected.as_ref(), &expected);
     assert_eq!(syntax.revocation, original.rules["custom.legacy"].revocation);
     let round_trip: RuleSyntax =
-        serde_yaml::from_str(&serde_yaml::to_string(syntax).unwrap()).unwrap();
+        yaml_serde::from_str(&yaml_serde::to_string(syntax).unwrap()).unwrap();
     assert_eq!(&round_trip, syntax);
 }
 

@@ -36,7 +36,6 @@ use aws_smithy_runtime_api::{
 use aws_smithy_types::config_bag::ConfigBag;
 use aws_smithy_types::error::metadata::ProvideErrorMetadata;
 use aws_types::region::Region;
-use base32::Alphabet;
 use byteorder::{BigEndian, ByteOrder};
 use http::{
     StatusCode,
@@ -1341,6 +1340,35 @@ async fn execute_sts_validation(sts_client: &StsClient) -> Result<AwsStsValidati
     Err(anyhow!("AWS validation failed"))
 }
 
+fn decode_rfc4648_base32_unpadded(input: &str) -> Option<Vec<u8>> {
+    if !input.is_ascii() {
+        return None;
+    }
+    // Compute floor(len * 5 / 8) without overflowing intermediate arithmetic.
+    let output_len = input.len() / 8 * 5 + input.len() % 8 * 5 / 8;
+    let mut output = Vec::with_capacity(output_len);
+    let mut pending = 0u16;
+    let mut bits = 0u32;
+    for byte in input.bytes() {
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'2'..=b'7' => byte - b'2' + 26,
+            _ => return None,
+        };
+        // At most seven leftover bits plus this five-bit symbol are retained.
+        pending = (pending << 5) | u16::from(value);
+        bits += 5;
+        if bits >= 8 {
+            bits -= 8;
+            output.push((pending >> bits) as u8);
+            pending &= (1u16 << bits) - 1;
+        }
+    }
+    // Preserve the legacy decoder's permissive lengths and ignored tail bits;
+    // adding canonical-length or zero-tail checks would change AWS key handling.
+    Some(output)
+}
+
 /// Converts an AWS Key ID to an AWS Account Number.
 ///
 /// It assumes that the Key ID has a specific format and extracts the account
@@ -1368,9 +1396,8 @@ pub fn aws_key_to_account_number(aws_key_id: &str) -> Result<String, Box<dyn std
     let trimmed_aws_key_id = &aws_key_id[4..];
 
     // Decode the trimmed Key ID from base32
-    let decoded =
-        base32::decode(Alphabet::Rfc4648 { padding: false }, &trimmed_aws_key_id.to_uppercase())
-            .ok_or("Error decoding AWSKeyID")?;
+    let decoded = decode_rfc4648_base32_unpadded(&trimmed_aws_key_id.to_uppercase())
+        .ok_or("Error decoding AWSKeyID")?;
 
     if decoded.len() < 6 {
         return Err("Decoded AWSKeyID is too short".into());
@@ -1553,6 +1580,101 @@ mod tests {
                 region
             );
         }
+    }
+
+    #[test]
+    fn base32_unpadded_decoder_preserves_rfc4648_vectors_and_legacy_tails() {
+        let vectors: &[(&str, &[u8])] = &[
+            ("", b""),
+            ("MY", b"f"),
+            ("MZXQ", b"fo"),
+            ("MZXW6", b"foo"),
+            ("MZXW6YQ", b"foob"),
+            ("MZXW6YTB", b"fooba"),
+            ("MZXW6YTBOI", b"foobar"),
+            ("AD7YAAD7AE", &[0x00, 0xff, 0x80, 0x00, 0x7f, 0x01]),
+            // The historical unpadded decoder accepts impossible RFC 4648
+            // lengths and discards unused bits, including nonzero tail bits.
+            ("A", b""),
+            ("7", b""),
+            ("AAA", &[0x00]),
+            ("AAAAAA", &[0x00, 0x00, 0x00]),
+            ("MZ", b"f"),
+            ("MZX", b"f"),
+            ("MZXR", b"fo"),
+            ("MZXW7", b"foo"),
+            ("MZXW6Z", b"foo"),
+            ("MZXW6YR", b"foob"),
+            ("MZXW6YTB7", b"fooba"),
+        ];
+        for &(input, expected) in vectors {
+            assert_eq!(
+                decode_rfc4648_base32_unpadded(input).as_deref(),
+                Some(expected),
+                "{input:?}"
+            );
+        }
+        for length in 0..=32 {
+            assert_eq!(
+                decode_rfc4648_base32_unpadded(&"7".repeat(length)),
+                Some(vec![0xff; length * 5 / 8]),
+                "length {length}"
+            );
+        }
+    }
+
+    #[test]
+    fn base32_unpadded_decoder_rejects_case_padding_and_invalid_symbols() {
+        for input in [
+            "my", "mY", "MY======", "MZXQ====", "=", "========", "AA=AA", "AA0AA", "AA1AA",
+            "AA8AA", "AA9AA", "AA+AA", "AA/AA", "AA-AA", "AA_AA", "AA AA", "AA\tAA", "AA\nAA",
+            "AA\0AA", "AAéAA", "ＡＡ",
+        ] {
+            assert!(decode_rfc4648_base32_unpadded(input).is_none(), "accepted {input:?}");
+        }
+        // Validate every ASCII byte, including otherwise-discarded tail symbols.
+        for byte in 0..=127u8 {
+            let input = format!("AAAAAAAA{}", char::from(byte));
+            let valid = byte.is_ascii_uppercase() || (b'2'..=b'7').contains(&byte);
+            assert_eq!(decode_rfc4648_base32_unpadded(&input).is_some(), valid, "byte {byte}");
+        }
+    }
+
+    #[test]
+    fn aws_account_number_preserves_base32_normalization_and_edge_lengths() {
+        for key in ["AKIAXYZDQCEN4B6JSJQI", "AKIAxyzdqcen4b6jsjqi", "akiaxYzDqCeN4b6JsJqI"] {
+            assert_eq!(aws_key_to_account_number(key).unwrap(), "534261010715");
+        }
+        for length in 10..=18 {
+            // Preserve accepted nonstandard lengths rather than silently adding
+            // canonical RFC 4648 length checks to account-number discovery.
+            let key = format!("AKIA{}", "A".repeat(length));
+            assert_eq!(aws_key_to_account_number(&key).unwrap(), "000000000000");
+        }
+        for suffix in ["7777777777", "7777777777777777"] {
+            assert_eq!(
+                aws_key_to_account_number(&format!("AKIA{suffix}")).unwrap(),
+                "1099511627775"
+            );
+        }
+        // Historically, the I/J legacy-key guard precedes case normalization.
+        for (suffix, account) in
+            [("iAAAAAAAAAAAAAAA", "549755813888"), ("jAAAAAAAAAAAAAAA", "618475290624")]
+        {
+            assert_eq!(aws_key_to_account_number(&format!("AKIA{suffix}")).unwrap(), account);
+        }
+        for suffix in ["IAAAAAAAAAAAAAAA", "JAAAAAAAAAAAAAAA"] {
+            assert!(aws_key_to_account_number(&format!("AKIA{suffix}")).is_err());
+        }
+        for suffix in ["A", "MY", "AAA", "AAAAAA", "AAAAAAAAA"] {
+            let error = aws_key_to_account_number(&format!("AKIA{suffix}")).unwrap_err();
+            assert_eq!(error.to_string(), "Decoded AWSKeyID is too short");
+        }
+        for suffix in ["AAAAAAAAAA=", "AAAAAAAAA0", "AAAAAAAAA_", "AAAAAAAAA ", "AAAAAAAAA\0"] {
+            let error = aws_key_to_account_number(&format!("AKIA{suffix}")).unwrap_err();
+            assert_eq!(error.to_string(), "Error decoding AWSKeyID");
+        }
+        assert!(aws_key_to_account_number("AKIAAAAAAAAAAé").is_err());
     }
 
     #[test]

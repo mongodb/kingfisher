@@ -129,7 +129,7 @@ jobs:
             -e VECTORSCAN_BUILD_FROM_SOURCE=1
             -e CARGO_PROFILE_RELEASE_PANIC=unwind
             -e CARGO_PROFILE_RELEASE_LTO=false
-            -e CURL_HOME="${{ github.workspace }}/.github/maturin-curl"
+            -e "CURL_HOME=${{ github.workspace }}/.github/maturin-curl"
       # manylinux builds Vectorscan from source to preserve the glibc 2.28 floor.
       - uses: ./.github/actions/vectorscan-prebuilt
         if: runner.os != 'Linux'

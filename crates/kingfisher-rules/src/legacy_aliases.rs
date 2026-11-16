@@ -35,7 +35,7 @@ struct LegacyAliasFile {
 
 fn parse() -> Result<BTreeMap<String, Vec<String>>> {
     let parsed: LegacyAliasFile =
-        serde_yaml::from_str(LEGACY_ALIASES_YAML).context("invalid legacy rule alias table")?;
+        yaml_serde::from_str(LEGACY_ALIASES_YAML).context("invalid legacy rule alias table")?;
     if parsed.version != 1 {
         bail!("unsupported legacy rule alias table version {}", parsed.version);
     }

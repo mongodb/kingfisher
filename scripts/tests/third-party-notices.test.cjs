@@ -148,6 +148,8 @@ test('strict checks reject stale entries, missing crates, empty text and any unr
   const good = block(p);
   assert.throws(() => notices.validate(new Map(), expected(p), {}), /Missing third-party/);
   assert.throws(() => notices.validate(new Map([['current@1.0.0', good], ['stale@1.0.0', good]]), expected(p), {}), /Stale\/first-party/);
+  assert.throws(() => notices.validate(new Map([['current@1.0.0', good]]), expected(p),
+    { 'removed@0.1.0': {} }), /Stale license overrides must be pruned: removed@0\.1\.0/);
   for (const text of ['NOT FOUND', ' NOT FOUND\n', '']) {
     const entries = new Map([['current@1.0.0', block(p, [{ license: 'MIT', text: 'available' }, { license: 'Apache-2.0', text }])]]);
     assert.throws(() => notices.validate(entries, expected(p), {}), /Incomplete\/mismatched/);
@@ -206,6 +208,20 @@ test('non-Cargo notices are copied verbatim, hashed, and independent of Cargo pr
   }
 });
 
+test('incorporated language data retains its full MIT license after removing the Cargo dependency', () => {
+  const root = path.resolve(__dirname, '..', '..');
+  const source = 'crates/kingfisher-core/data/tokei-LICENSE-MIT';
+  assert.ok(notices.nonCargoSources.includes(source));
+  const text = fs.readFileSync(path.join(root, source), 'utf8');
+  assert.match(text, /Copyright \(c\) 2016 Erin Power/);
+  assert.match(text, /Permission is hereby granted, free of charge/);
+  assert.match(text, /THE SOFTWARE IS PROVIDED "AS IS"/);
+  const supplementary = notices.nonCargoSection(root);
+  assert.ok(supplementary.includes(JSON.stringify(source)));
+  assert.ok(supplementary.includes(JSON.stringify(text)));
+  assert.ok(supplementary.includes(JSON.stringify(notices.sha256(text))));
+});
+
 test('override metadata is trackable and verbatim archives survive Git staging and LF/CRLF checkouts', () => {
   const root = path.resolve(__dirname, '..', '..');
   const archivePath = 'scripts/license-overrides';
@@ -256,6 +272,7 @@ test('every pinned license/evidence archive matches its recorded hash and exact-
   const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'index.json'), 'utf8'));
   assert.equal(manifest.schemaVersion, 1);
   assert.ok(Object.keys(manifest.packages).length > 0);
+  const referencedArchives = new Set();
   for (const [key, override] of Object.entries(manifest.packages)) {
     assert.match(key, /@\d/);
     assert.match(override.crateChecksum, /^[a-f0-9]{64}$/);
@@ -263,6 +280,7 @@ test('every pinned license/evidence archive matches its recorded hash and exact-
     assert.ok(notices.satisfies(override.declaredLicense, new Set(override.licenses.map(l => l.license))), key);
     for (const record of [...override.licenses, ...(override.evidence || [])]) {
       assert.equal(path.basename(record.file), record.file);
+      referencedArchives.add(record.file);
       const text = fs.readFileSync(path.join(directory, record.file), 'utf8');
       assert.equal(notices.sha256(text), record.sha256, `${key}/${record.file}`);
       assert.match(record.source, /^https:\/\/(raw\.githubusercontent\.com\/[^/]+\/[^/]+\/[a-f0-9]{40}\/|docs\.rs\/crate\/)/);
@@ -273,4 +291,6 @@ test('every pinned license/evidence archive matches its recorded hash and exact-
       assert.match(override.reason, /No copyright owner or year is inferred/);
     }
   }
+  assert.deepEqual(fs.readdirSync(directory).filter(file => file.endsWith('.txt')).sort(),
+    [...referencedArchives].sort(), 'Unreferenced license/evidence archives must be pruned');
 });

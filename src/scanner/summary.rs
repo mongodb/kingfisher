@@ -6,7 +6,6 @@ use std::{
 use chrono::Local;
 use indicatif::HumanBytes;
 use serde_json::json;
-use thousands::Separable;
 use tokio::time::Instant;
 use tracing::debug;
 
@@ -16,6 +15,7 @@ use crate::{
         global,
     },
     findings_store,
+    formatting::comma_grouped,
     matcher::MatcherStats,
     rule_profiling::ConcurrentRuleProfiler,
     rules_database::RulesDatabase,
@@ -257,28 +257,28 @@ pub fn print_scan_summary(
             safe_println!("==========================================");
             safe_println!(
                 " |Findings added..............: {}",
-                delta.findings.separate_with_commas()
+                comma_grouped(delta.findings as u128)
             );
             safe_println!(
                 " |__Successful Validations....: {}",
-                delta.successful_validations.separate_with_commas()
+                comma_grouped(delta.successful_validations as u128)
             );
             safe_println!(
                 " |__Failed Validations........: {}",
-                delta.failed_validations.separate_with_commas()
+                comma_grouped(delta.failed_validations as u128)
             );
             safe_println!(
                 " |__Skipped Validations.......: {}",
-                delta.skipped_validations.separate_with_commas()
+                comma_grouped(delta.skipped_validations as u128)
             );
             safe_println!(
                 " |Blobs Scanned (delta)......: {}",
-                delta.blobs_scanned.separate_with_commas()
+                comma_grouped(delta.blobs_scanned as u128)
             );
             safe_println!(" |Bytes Scanned (delta)......: {}", HumanBytes(delta.bytes_scanned));
             safe_println!(
                 " |Baseline findings...........: {}",
-                baseline.findings.separate_with_commas()
+                comma_grouped(baseline.findings as u128)
             );
         }
 
@@ -288,24 +288,24 @@ pub fn print_scan_summary(
             safe_println!("==========================================");
             safe_println!(
                 " |Findings....................: {}",
-                totals.findings.separate_with_commas()
+                comma_grouped(totals.findings as u128)
             );
             safe_println!(
                 " |__Successful Validations....: {}",
-                totals.successful_validations.separate_with_commas()
+                comma_grouped(totals.successful_validations as u128)
             );
             safe_println!(
                 " |__Failed Validations........: {}",
-                totals.failed_validations.separate_with_commas()
+                comma_grouped(totals.failed_validations as u128)
             );
             safe_println!(
                 " |__Skipped Validations.......: {}",
-                totals.skipped_validations.separate_with_commas()
+                comma_grouped(totals.skipped_validations as u128)
             );
-            safe_println!(" |Rules Applied...............: {}", num_rules.separate_with_commas());
+            safe_println!(" |Rules Applied...............: {}", comma_grouped(num_rules as u128));
             safe_println!(
                 " |__Blobs Scanned.............: {}",
-                totals.blobs_scanned.separate_with_commas()
+                comma_grouped(totals.blobs_scanned as u128)
             );
             safe_println!(" |Bytes Scanned...............: {}", HumanBytes(totals.bytes_scanned));
             safe_println!(

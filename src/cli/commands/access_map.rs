@@ -5,7 +5,6 @@ use clap::{
     Args, ValueEnum, ValueHint,
     builder::{PossibleValue, PossibleValuesParser, TypedValueParser},
 };
-use strum::Display;
 
 use crate::util::get_writer_for_file_or_stdout;
 
@@ -111,8 +110,7 @@ impl AccessMapOutputArgs {
     }
 }
 
-#[derive(Copy, Clone, Debug, Display, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-#[strum(serialize_all = "kebab-case")]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum AccessMapOutputFormat {
     /// Pretty-printed JSON
     Json,
@@ -120,6 +118,8 @@ pub enum AccessMapOutputFormat {
     /// Standalone HTML blast-radius report
     Html,
 }
+
+crate::cli::impl_value_enum_display!(AccessMapOutputFormat);
 
 /// Supported cloud providers for identity mapping.
 #[derive(Clone, Debug, PartialEq, Eq)]

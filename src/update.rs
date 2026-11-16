@@ -7,7 +7,8 @@
 use std::ffi::OsString;
 use std::io::{ErrorKind, Write};
 
-use self_update::{backends::github::Update, cargo_crate_version, errors::Error as UpdError};
+mod release;
+use release::Updater;
 use semver::Version;
 use tracing::error;
 use tracing::warn;
@@ -53,7 +54,7 @@ impl Default for UpdateStatus {
             message: None,
             styled_message: None,
             is_outdated: false,
-            running_version: cargo_crate_version!().to_string(),
+            running_version: env!("CARGO_PKG_VERSION").to_string(),
             latest_version: None,
             check_status: UpdateCheckStatus::Disabled,
             was_self_updated: false,
@@ -71,7 +72,7 @@ fn styled_heading(styles: &Styles, text: &str) -> String {
 /// * Self-update is performed only when `global_args.self_update` is set and `--no-update-check`
 ///   was not passed. Download or replacement failures are reported to the user.
 pub fn check_for_update(global_args: &GlobalArgs, base_url: Option<&str>) -> UpdateStatus {
-    let running_version = cargo_crate_version!().to_string();
+    let running_version = env!("CARGO_PKG_VERSION").to_string();
 
     if global_args.no_update_check {
         return UpdateStatus {
@@ -92,54 +93,7 @@ pub fn check_for_update(global_args: &GlobalArgs, base_url: Option<&str>) -> Upd
     let use_color = !global_args.quiet && global_args.use_color(std::io::stderr());
     let styles = Styles::new(use_color);
 
-    let mut builder = Update::configure();
-    builder
-        .repo_owner("mongodb")
-        .repo_name("kingfisher")
-        .bin_name("kingfisher")
-        .show_download_progress(false)
-        .no_confirm(true) // Don't prompt for confirmation when self-updating
-        .current_version(cargo_crate_version!());
-
-    // Allow tests to point at a mock HTTP server.
-    if let Some(url) = base_url {
-        builder.api_base_url(url);
-    }
-
-    // ──────────────────────────────────────────────────────
-    // Map the current Rust target triple to our simplified asset names.
-    // ──────────────────────────────────────────────────────
-    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-    builder.target("linux-arm64");
-
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    builder.target("linux-x64");
-
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    builder.target("darwin-arm64");
-
-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    builder.target("darwin-x64");
-
-    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-    builder.target("windows-x64");
-
-    #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
-    builder.target("windows-arm64");
-
-    // ──────────────────────────────────────────────────────
-    // Disambiguate archive format to avoid picking .deb packages.
-    // Linux and macOS releases use `.tgz`; Windows uses `.zip`.
-    // ──────────────────────────────────────────────────────
-    #[cfg(target_os = "windows")]
-    builder.asset_identifier("zip");
-
-    // Linux releases also ship as .deb and .rpm packages; select the .tgz asset for self-updates
-    #[cfg(not(target_os = "windows"))]
-    builder.asset_identifier("tgz");
-
-    // Build the updater.
-    let Ok(updater) = builder.build() else {
+    let Ok(updater) = Updater::new(base_url) else {
         let plain = "Failed to configure update checker".to_string();
         let styled_message = styled_heading(&styles, &plain);
         let _ = writeln!(std::io::stderr(), "{}", styled_message);
@@ -155,22 +109,7 @@ pub fn check_for_update(global_args: &GlobalArgs, base_url: Option<&str>) -> Upd
     };
 
     // Query GitHub.
-    let Ok(releases) = updater.get_latest_release() else {
-        let plain = "Failed to check for updates".to_string();
-        let styled_message = styled_heading(&styles, &plain);
-        let _ = writeln!(std::io::stderr(), "{}", styled_message);
-        return UpdateStatus {
-            message: Some(plain),
-            styled_message: Some(styled_message),
-            is_outdated: false,
-            running_version,
-            latest_version: None,
-            check_status: UpdateCheckStatus::Failed,
-            was_self_updated: false,
-        };
-    };
-
-    let Some(release) = releases.latest() else {
+    let Ok(release) = updater.get_latest_release() else {
         let plain = "Failed to check for updates".to_string();
         let styled_message = styled_heading(&styles, &plain);
         let _ = writeln!(std::io::stderr(), "{}", styled_message);
@@ -186,7 +125,7 @@ pub fn check_for_update(global_args: &GlobalArgs, base_url: Option<&str>) -> Upd
     };
 
     // ───────────── Case 1: running == latest ─────────────
-    if release.version() == running_version {
+    if release.version.to_string() == running_version {
         let plain = format!("Kingfisher {running_version} is up to date");
         let _ = writeln!(std::io::stderr(), "{plain}");
         return UpdateStatus {
@@ -194,18 +133,16 @@ pub fn check_for_update(global_args: &GlobalArgs, base_url: Option<&str>) -> Upd
             styled_message: Some(plain),
             is_outdated: false,
             running_version,
-            latest_version: Some(release.version().to_string()),
+            latest_version: Some(release.version.to_string()),
             check_status: UpdateCheckStatus::Ok,
             was_self_updated: false,
         };
     }
 
-    // If semantic version parsing fails, let the updater decide whether to apply an update.
-    if let (Ok(curr), Ok(latest)) =
-        (Version::parse(&running_version), Version::parse(release.version()))
-    {
+    if let Ok(curr) = Version::parse(&running_version) {
+        let latest = &release.version;
         // ───────── Case 2: running > latest (dev build) ─────────
-        if curr > latest {
+        if curr > *latest {
             let plain =
                 format!("Running Kingfisher {curr} which is newer than latest released {latest}");
             let styled_message = styled_heading(&styles, &plain);
@@ -215,7 +152,7 @@ pub fn check_for_update(global_args: &GlobalArgs, base_url: Option<&str>) -> Upd
                 styled_message: Some(styled_message),
                 is_outdated: false,
                 running_version,
-                latest_version: Some(release.version().to_string()),
+                latest_version: Some(release.version.to_string()),
                 check_status: UpdateCheckStatus::Ok,
                 was_self_updated: false,
             };
@@ -224,35 +161,25 @@ pub fn check_for_update(global_args: &GlobalArgs, base_url: Option<&str>) -> Upd
     }
 
     // ───────────── Case 3: latest > running ─────────────
-    let plain = format!("New Kingfisher release {} available", release.version());
+    let plain = format!("New Kingfisher release {} available", release.version);
     let styled_message = styled_heading(&styles, &plain);
     let _ = writeln!(std::io::stderr(), "{}", styled_message);
 
     // Attempt self-update when allowed and feasible.
     let mut was_self_updated = false;
     if global_args.self_update {
-        match updater.update() {
-            Ok(status) => {
-                if status.is_updated() {
-                    let message = format!("Updated to version {}", status.version());
-                    let _ = writeln!(std::io::stderr(), "{}", styled_heading(&styles, &message));
-                    was_self_updated = true;
-                } else {
-                    // Reported `UpToDate` despite the version-comparison branch — race or
-                    // tag mismatch. Skip re-exec to avoid pointless fork+exec.
-                    let _ = writeln!(
-                        std::io::stderr(),
-                        "{}",
-                        styled_heading(
-                            &styles,
-                            &format!("Already at version {} — no update applied", status.version()),
-                        )
-                    );
-                }
+        match updater.install(&release, |path| self_replace::self_replace(path)) {
+            Ok(()) => {
+                let message = format!("Updated to version {}", release.version);
+                let _ = writeln!(std::io::stderr(), "{}", styled_heading(&styles, &message));
+                was_self_updated = true;
             }
-            Err(e) => match e {
-                UpdError::Io(ref io_err) => match io_err.kind() {
-                    ErrorKind::PermissionDenied => {
+            Err(e) => {
+                let io_kind = e.chain().find_map(|cause| {
+                    cause.downcast_ref::<std::io::Error>().map(std::io::Error::kind)
+                });
+                match io_kind {
+                    Some(ErrorKind::PermissionDenied) => {
                         let _ = writeln!(
                             std::io::stderr(),
                             "{}",
@@ -264,7 +191,7 @@ pub fn check_for_update(global_args: &GlobalArgs, base_url: Option<&str>) -> Upd
                             )
                         );
                     }
-                    ErrorKind::NotFound => {
+                    Some(ErrorKind::NotFound) => {
                         let _ = writeln!(
                             std::io::stderr(),
                             "{}",
@@ -276,10 +203,9 @@ pub fn check_for_update(global_args: &GlobalArgs, base_url: Option<&str>) -> Upd
                             )
                         );
                     }
-                    _ => error!("Failed to update: {e}"),
-                },
-                _ => error!("Failed to update: {e}"),
-            },
+                    _ => error!("Failed to update: {e:#}"),
+                }
+            }
         }
     }
 
@@ -288,7 +214,7 @@ pub fn check_for_update(global_args: &GlobalArgs, base_url: Option<&str>) -> Upd
         styled_message: Some(styled_message),
         is_outdated: true,
         running_version,
-        latest_version: Some(release.version().to_string()),
+        latest_version: Some(release.version.to_string()),
         check_status: UpdateCheckStatus::Ok,
         was_self_updated,
     }

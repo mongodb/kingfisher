@@ -1,7 +1,9 @@
+#[path = "../src/git_test_fixture.rs"]
+mod fixture;
+
 use std::{fs, path::Path, time::Duration};
 
 use anyhow::Result;
-use git2::{Repository, Signature};
 use serde_json::{Value, json};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -23,13 +25,13 @@ fn fixtures_with_secrets(root: &Path, repositories: [(&str, &str); 3]) -> Result
     for (name, secret) in repositories {
         // Bare repositories avoid working-tree line endings and leave no open
         // handles when the subprocess clones them, including on Windows.
-        let repo = Repository::init_bare(root.join(name))?;
-        let blob = repo.blob(secret.as_bytes())?;
-        let mut tree = repo.treebuilder(None)?;
-        tree.insert("secret.txt", blob, 0o100644)?;
-        let tree = repo.find_tree(tree.write()?)?;
-        let signature = Signature::now("Scanner test", "scanner@example.com")?;
-        repo.commit(Some("HEAD"), &signature, &signature, "fixture", &tree, &[])?;
+        let repo = gix::init_bare(root.join(name))?;
+        let blob = repo.write_blob(secret.as_bytes()).map(gix::Id::detach)?;
+        let mut tree = repo.empty_tree().edit()?;
+        fixture::insert(&mut tree, "secret.txt", blob, 0o100644)?;
+        let tree = tree.write()?.detach();
+        let signature = fixture::signature("Scanner test", "scanner@example.com");
+        fixture::commit(&repo, Some("HEAD"), &signature, &signature, "fixture", &tree, &[])?;
     }
     fs::write(
         root.join("rules.yml"),
@@ -497,20 +499,14 @@ async fn public_repositories_are_not_looked_up_on_other_provider_instances() -> 
         } else {
             server.uri()
         };
+        // Transport credentials are scoped separately, never embedded in URLs.
+        // Rewrite the clean URL for every provider so clones stay in local fixtures.
         command.env("GIT_CONFIG_VALUE_0", repo_url).env(token, "synthetic-instance-token").args([
             "--git-url",
             repo_url,
             flag,
             &api_url,
         ]);
-        if provider == "bitbucket" {
-            // The Bitbucket Git transport embeds basic credentials before Git
-            // applies insteadOf. Match that actual URL, not the clean input.
-            command.env(
-                "GIT_CONFIG_VALUE_0",
-                "https://x-token-auth:synthetic-instance-token@bitbucket.org/acme/original.git",
-            );
-        }
         let findings = findings(&mut command, &clones, "json")?;
         assert_eq!(findings.len(), 1);
         assert!(findings[0]["git_metadata"].get("repository_id").is_none());

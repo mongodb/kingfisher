@@ -579,7 +579,7 @@ fn enumerate(
         } else {
             for reference in repo.references()?.all()? {
                 control.check()?;
-                let mut reference = reference.map_err(anyhow::Error::from_boxed)?;
+                let mut reference = reference?;
                 let object = reference.peel_to_id()?.object()?;
                 if object.kind == gix::object::Kind::Commit {
                     tips.push(object.id);

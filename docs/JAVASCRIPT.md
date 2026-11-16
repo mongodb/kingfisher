@@ -536,9 +536,10 @@ build and test locally; they do not publish packages.
 `npm run build` uses the unwind-capable `node-release` Cargo profile. Native
 functions contain synchronous Rust panics, and asynchronous workers reject on
 failure; this does not contain a native crash or make abrupt worker termination safe.
-Builds use the locked Cargo dependencies and generate the private
-loader/declarations and the host `.node` file. Public
-declarations and integration tests cover the facade independently.
+Builds invoke Cargo directly with locked dependencies and copy its reported native
+artifact to the target-specific `.node` filename. The private loader/declarations
+are checked in, not regenerated; keep them aligned when changing native bindings.
+Public declarations and integration tests cover the facade independently.
 
 The SDK pins published **Vectorscan 0.1.4**. Cargo verifies native archives using
 checksums embedded in the immutable sys crate; ordinary builds need no local

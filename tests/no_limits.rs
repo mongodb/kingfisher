@@ -1,3 +1,6 @@
+#[path = "../src/git_test_fixture.rs"]
+mod fixture;
+
 use std::{
     io::{Cursor, Write},
     path::Path,
@@ -211,12 +214,13 @@ async fn git_clone_and_update_deadlines_require_explicit_opt_out() -> Result<()>
             let url = format!("{}/stalled.git", server.uri());
             let clone_root = temp.path().join("clones");
             if update {
+                std::fs::create_dir_all(&clone_root)?;
                 let git_url =
                     GitUrl::try_from(url::Url::parse(&url)?).map_err(anyhow::Error::msg)?;
                 let destination =
                     FindingsStore::new(clone_root.clone()).clone_destination(&git_url);
-                let repo = git2::Repository::init_bare(destination)?;
-                repo.remote("origin", &url)?;
+                let repo = gix::init_bare(destination)?;
+                fixture::origin(&repo, &url)?;
                 drop(repo);
             }
             let rules = temp.path().join("rules.yml");
@@ -253,11 +257,15 @@ async fn git_clone_and_update_deadlines_require_explicit_opt_out() -> Result<()>
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
             assert_eq!(
-                stdout.contains("git execution timed out after 1 seconds"),
+                stdout.contains("Git operation timed out after 1 seconds"),
                 !no_timeouts,
                 "{stdout}\n{stderr}"
             );
-            assert_eq!(stderr.contains("exceeded 1s timeout"), !no_timeouts, "{stderr}");
+            assert_eq!(
+                stderr.contains("Git operation timed out after 1 seconds"),
+                !no_timeouts,
+                "{stderr}"
+            );
             if update {
                 assert!(stderr.contains("Updating clone of"), "{stderr}");
             }
@@ -346,18 +354,19 @@ fn max_file_size_applies_to_git_history_blobs() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let repo_path = dir.path().join("repo.git");
     {
-        let repo = git2::Repository::init_bare(&repo_path)?;
+        let repo = gix::init_bare(&repo_path)?;
         let mut small = format!("token={SMALL_SECRET}\n").into_bytes();
         small.resize(64, b' ');
-        let small = repo.blob(&small)?;
-        let large =
-            repo.blob(format!("{}\ntoken={SECRET}\n", "padding ".repeat(100)).as_bytes())?;
-        let mut tree = repo.treebuilder(None)?;
-        tree.insert("small.txt", small, 0o100644)?;
-        tree.insert("large.txt", large, 0o100644)?;
-        let tree = repo.find_tree(tree.write()?)?;
-        let signature = git2::Signature::now("Kingfisher Test", "kingfisher@example.invalid")?;
-        repo.commit(Some("HEAD"), &signature, &signature, "fixture", &tree, &[])?;
+        let small = repo.write_blob(&small).map(gix::Id::detach)?;
+        let large = repo
+            .write_blob(format!("{}\ntoken={SECRET}\n", "padding ".repeat(100)).as_bytes())
+            .map(gix::Id::detach)?;
+        let mut tree = repo.empty_tree().edit()?;
+        fixture::insert(&mut tree, "small.txt", small, 0o100644)?;
+        fixture::insert(&mut tree, "large.txt", large, 0o100644)?;
+        let tree = tree.write()?.detach();
+        let signature = fixture::signature("Kingfisher Test", "kingfisher@example.invalid");
+        fixture::commit(&repo, Some("HEAD"), &signature, &signature, "fixture", &tree, &[])?;
     }
     let config = dir.path().join("kingfisher.yml");
     std::fs::write(&config, "scan:\n  no_limits: true\nfilters:\n  max_file_size_mb: 0.0001\n")?;
@@ -599,13 +608,13 @@ async fn unlimited_scan_preserves_git_clone_timeout() -> Result<()> {
             tokio::time::timeout(Duration::from_secs(10), socket.read_to_end(&mut request))
                 .await
                 .expect("the Git clone timeout must close the stalled connection");
-        // Killing Git may close the socket gracefully or reset it, particularly
-        // on Windows. Both prove that the stalled connection was terminated.
+        // Cancelling acquisition may close the socket gracefully or reset it,
+        // particularly on Windows. Both prove that the stalled connection was terminated.
         if let Err(error) = closed {
             assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset, "{error}");
         }
-        // Under load, Git can connect but be killed before writing any request
-        // bytes. Socket termination, not a nonempty request, proves cleanup.
+        // Under load, acquisition can connect but time out before writing any
+        // request bytes. Socket termination, not a nonempty request, proves cleanup.
     });
     tokio::task::spawn_blocking(move || {
         assert_cmd::Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
@@ -623,8 +632,8 @@ async fn unlimited_scan_preserves_git_clone_timeout() -> Result<()> {
             .args(["--format=toon", "--jobs=2"])
             .env("KF_GIT_CLONE_TIMEOUT_SECS", "3")
             .assert()
-            .stdout(predicate::str::contains("git execution timed out after 3 seconds"))
-            .stderr(predicate::str::contains("exceeded 3s timeout"));
+            .stdout(predicate::str::contains("Git operation timed out after 3 seconds"))
+            .stderr(predicate::str::contains("Git operation timed out after 3 seconds"));
     })
     .await?;
     tokio::time::timeout(Duration::from_secs(5), server).await??;
