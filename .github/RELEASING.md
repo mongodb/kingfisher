@@ -47,8 +47,11 @@ coordinator's completed gates and exact artifacts; it is not an independent publ
    [package preparation checks](../docs/PUBLISHING.md).
 2. Include regenerated rule-bundle provenance when required, including after root `Cargo.toml`
    or `Cargo.lock` changes. Run `python3 scripts/update-rule-bundle.py --check`.
-3. Confirm CI passed and identify the merged commit you intend to release. Ensure that commit
-   includes the tag-triggered release workflow before creating the tag.
+3. Confirm CI passed and that **Release build gate** and **Authorize the complete release
+   cohort** both succeeded on the intended merged `main` commit; an overall green run with
+   those jobs skipped is not release-ready. The **Public GitHub Release** job is expected to
+   skip on `main`, not the two gates. Ensure that commit includes the tag-triggered release
+   workflow before creating the tag.
 4. Use a new tag matching the root Cargo version exactly, including the `v` prefix.
    Do not move an existing release tag to a different commit.
 

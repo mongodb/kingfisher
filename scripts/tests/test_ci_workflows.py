@@ -82,8 +82,14 @@ class CiWorkflowTests(unittest.TestCase):
         gate = job(self.release, "release-ready")
         gate_needs = re.search(r"(?m)^    needs: \[([^\]]+)\]", gate)
         self.assertIsNotNone(gate_needs)
-        self.assertIn("tests", {name.strip() for name in gate_needs.group(1).split(",")})
-        self.assertNotRegex(gate, r"(?m)^    if:")
+        required = {name.strip() for name in gate_needs.group(1).split(",")}
+        self.assertIn("tests", required)
+        condition = gate.split("    runs-on:", 1)[0]
+        self.assertRegex(condition, r"(?m)^    if:")
+        self.assertIn("always() && !cancelled()", condition)
+        for dependency in required:
+            with self.subTest(dependency=dependency):
+                self.assertIn(f"needs.{dependency}.result == 'success'", condition)
         self.assertNotIn("workflows/wizard.yml", self.release)
 
 

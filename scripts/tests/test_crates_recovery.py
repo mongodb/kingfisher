@@ -398,10 +398,19 @@ class RecoveryWorkflowTests(unittest.TestCase):
             self.assertIn("phase: build", self.job(name))
         gate = self.job("release-ready")
         self.assertIn("needs: [validate-release, tests, linux-x64, linux-arm64, windows, macos-x64, macos-arm64, node-sdk, python-sdk, prepare-crates, prepare-pypi]", gate)
-        self.assertNotRegex(gate.split("    steps:", 1)[0], r"(?m)^    if:")
+        gate_condition = gate.split("    runs-on:", 1)[0]
+        self.assertIn("always() && !cancelled()", gate_condition)
+        for dependency in ("validate-release", "tests", "linux-x64", "linux-arm64", "windows",
+                           "macos-x64", "macos-arm64", "node-sdk", "python-sdk", "prepare-crates", "prepare-pypi"):
+            with self.subTest(dependency=dependency):
+                self.assertIn(f"needs.{dependency}.result == 'success'", gate_condition)
         release_job = self.job("release")
         self.assertIn("needs: [validate-release, release-ready]", release_job)
-        self.assertIn("if: needs.validate-release.outputs.cli-release == 'true'", release_job)
+        release_condition = release_job.split("    runs-on:", 1)[0]
+        for guard in ("always() && !cancelled()", "needs.validate-release.result == 'success'",
+                      "needs.release-ready.result == 'success'", "needs.validate-release.outputs.cli-release == 'true'"):
+            with self.subTest(guard=guard):
+                self.assertIn(guard, release_condition)
         self.assertIn("skipIfReleaseExists: true", release_job)
         for name in ("publish-docker", "publish-pypi"):
             self.assertIn("needs: [release, publish-ready]", self.job(name))

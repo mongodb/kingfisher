@@ -58,7 +58,9 @@ class PythonSdkReleaseTests(unittest.TestCase):
         self.assertLess(publish.index("check-release-source.py"), publish.index("pypa/gh-action-pypi-publish@"))
         coordinator = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         caller = coordinator.split("  publish-python-sdk:\n", 1)[1].split("  publish-docker:\n", 1)[0]
-        for guard in ("needs: [publish-ready, python-sdk]", "if: needs.python-sdk.outputs.publish == 'true'",
+        for guard in ("needs: [publish-ready, python-sdk]", "always() && !cancelled()",
+                      "needs.publish-ready.result == 'success'", "needs.python-sdk.result == 'success'",
+                      "needs.python-sdk.outputs.publish == 'true'",
                       "uses: ./.github/workflows/python-sdk.yml", "phase: publish", "publish: true"):
             self.assertIn(guard, caller)
         self.assertIn("name: python-sdk-pending", publish)

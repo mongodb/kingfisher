@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.19.1]
+
+### Fixed
+
+- Run the complete release gate and downstream publishers when optional recovery jobs are
+  skipped, while still blocking publication after any required build fails, is cancelled, or skips.
+- Exercise transitive GitHub Actions skip propagation in release-cohort regression tests,
+  including main, CLI/SDK tags, registry no-ops, and metadata-only recovery.
+
+### Changed
+
+- Prepare CLI/application 2.19.1 with the changes staged for
+  [v2.19.0](https://github.com/mongodb/kingfisher/blob/main/CHANGELOG.md#v2190). Preserve the
+  original v2.19.0 tag, which did not publish release assets; library and SDK versions remain
+  independent and unchanged.
+
 ## [v2.19.0]
 
 ### Changed
