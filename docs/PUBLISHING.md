@@ -25,7 +25,7 @@ The manifests currently prepare these releases; a Git tag does not override Carg
 | `kingfisher-core` | `2.0.0` | `kingfisher_core` library |
 | `kingfisher-rules` | `3.2.1` | `kingfisher_rules` library |
 | `kingfisher-scanner` | `4.0.0` | `kingfisher_scanner` library |
-| `kingfisher-bin` | `2.19.0` | `kingfisher` executable and library |
+| `kingfisher-bin` | `2.19.1` | `kingfisher` executable and library |
 
 The Python SDK (`kingfisher-secret-scanner`) is independently versioned at
 `1.6.4` in `crates/kingfisher-python/Cargo.toml`; Python modules share that version.
@@ -36,7 +36,7 @@ independent, but release triggers share the coordinated build gate below.
 The libraries follow semantic versioning and do not inherit the CLI version.
 Core 2.0.0 and scanner 4.0.0 migrate public Git types to `gix` 0.90;
 scanner 4.0.0 also exposes `jsonwebtoken` 12 decoding keys under `validation`. The root
-package follows CLI version 2.19.0 and also replaces the public `gouqi` Jira models
+package follows CLI version 2.19.1 and also replaces the public `gouqi` Jira models
 with local DTOs. Consumers of its application library must migrate those types. These
 are Rust source/type migrations: existing Kingfisher YAML, Betterleaks TOML, CLI
 behavior, and Python/npm runtime APIs remain compatible. Rules 3.2.1 updates
@@ -85,7 +85,7 @@ Makefile targets mount this directory read-only; source builds remain explicit.
 After publishing, consumers can install the CLI with:
 
 ```sh
-cargo install --locked kingfisher-bin --version 2.19.0
+cargo install --locked kingfisher-bin --version 2.19.1
 ```
 
 This installs the `kingfisher` command. See [library usage](LIBRARY.md#quick-start)
@@ -595,7 +595,7 @@ publishing, first create fresh archives:
 
 ```sh
 cargo package --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner -p kingfisher-bin
-python3 scripts/publish-crates.py --tag v2.19.0
+python3 scripts/publish-crates.py --tag v2.19.1
 python3 -m unittest discover -s scripts/tests -v
 ```
 

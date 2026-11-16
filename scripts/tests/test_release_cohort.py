@@ -177,7 +177,9 @@ def expression_value(expression, context, results, cancelled=False):
                 if node.func.id == "cancelled":
                     return cancelled
                 if node.func.id == "success":
-                    return all(value == "success" for value in results.values())
+                    return not cancelled and all(value == "success" for value in results.values())
+                if node.func.id == "failure":
+                    return any(value == "failure" for value in results.values())
             if node.func.id == "startsWith" and len(arguments) == 2:
                 return arguments[0].startswith(arguments[1])
         raise AssertionError(f"Unsupported expression node: {ast.dump(node)}")
@@ -187,13 +189,27 @@ def expression_value(expression, context, results, cancelled=False):
 
 def job_runs(workflow, name, context, results, cancelled=False):
     condition = field(workflow.jobs[name], "if") or "true"
+    # Job success() includes all transitive needs, even a skipped ancestor behind
+    # a successful always() job (actions/runner#2205), but not unrelated jobs.
+    ancestors = {dependency: results[dependency] for dependency in workflow.ancestors(name)}
     # GitHub implicitly adds success() unless an explicit status check is used.
     if not re.search(r"\b(?:always|cancelled|success|failure)\s*\(", condition):
-        if any(results[dependency] != "success" for dependency in workflow.needs[name]):
-            return False
-        if cancelled:
-            return False
-    return expression_value(condition, context, results, cancelled)
+        condition = f"success() && ({condition})"
+    return expression_value(condition, context, ancestors, cancelled)
+
+
+def workflow_results(workflow, context, cancelled=False):
+    """Activate the coordinator DAG; runnable jobs finish successfully offline."""
+    results = {}
+    while len(results) != len(workflow.jobs):
+        ready = [name for name in workflow.jobs if name not in results and workflow.needs[name] <= results.keys()]
+        if not ready:
+            raise AssertionError("No runnable dependency ordering")
+        for name in ready:
+            # Reusable build callers reflect their observed successful builds,
+            # not a skipped optional publisher inside the called workflow.
+            results[name] = "success" if job_runs(workflow, name, context, results, cancelled) else "skipped"
+    return results
 
 
 class ReleaseCohortTests(unittest.TestCase):
@@ -205,6 +221,7 @@ class ReleaseCohortTests(unittest.TestCase):
         return {
             "github.repository": "mongodb/kingfisher",
             "github.event_name": "workflow_dispatch" if recovery else "push",
+            "github.ref": "refs/tags/v2.19.0" if cli else "refs/heads/main",
             "inputs.crates_only": recovery,
             "inputs.publish": False,
             "needs.validate-release.outputs.cli-release": str(cli).lower(),
@@ -228,10 +245,8 @@ class ReleaseCohortTests(unittest.TestCase):
 
     def test_every_build_gate_is_mandatory_before_a_public_release(self):
         self.assertEqual(self.release.needs["release-ready"], BUILD_GATES)
-        self.assertIsNone(field(self.release.jobs["release-ready"], "if"))
         self.assertEqual(field(self.release.jobs["release-ready"], "permissions"), "{}")
         self.assertIn("release-ready", self.release.needs["release"])
-        self.assertNotIn("always()", field(self.release.jobs["release"], "if") or "")
         for name in BUILD_GATES | {"release-ready"}:
             with self.subTest(job=name):
                 self.assertNotIn("continue-on-error:", self.release.jobs[name])
@@ -242,6 +257,42 @@ class ReleaseCohortTests(unittest.TestCase):
                 self.assertIn("release-ready", ancestors)
                 if sink != "release":
                     self.assertIn("publish-ready", ancestors)
+
+    def test_end_to_end_activation_with_optional_skipped_ancestors(self):
+        for ref, cli, recovery in (
+            ("refs/heads/main", False, False),
+            ("refs/tags/v2.19.0", True, False),
+            ("refs/tags/python-v1.0.2", False, False),
+            ("refs/tags/npm-v1.0.2", False, False),
+            ("refs/heads/main", False, True),
+        ):
+            context = self.context(cli, recovery)
+            context["github.ref"] = ref
+            results = workflow_results(self.release, context)
+            active = BUILD_GATES | {"release-ready", "publish-ready", "publish-crates"}
+            if recovery:
+                active |= {"validate-crates-recovery"}
+            else:
+                active |= {"publish-node-sdk", "publish-python-sdk"}
+            if cli:
+                active |= {"release", "publish-docker", "publish-pypi"}
+            for name in self.release.jobs:
+                with self.subTest(ref=ref, recovery=recovery, job=name):
+                    self.assertEqual(results[name], "success" if name in active else "skipped")
+
+    def test_registry_noops_do_not_skip_builds_or_unrelated_publishers(self):
+        for noops in (("node-sdk",), ("python-sdk",), ("node-sdk", "python-sdk")):
+            context = self.context(cli=True)
+            for sdk in noops:
+                context[f"needs.{sdk}.outputs.publish"] = "false"
+            results = workflow_results(self.release, context)
+            for name in BUILD_GATES | {"release-ready", "release", "publish-ready"} | PUBLISHERS:
+                with self.subTest(noops=noops, job=name):
+                    expected = "skipped" if name in {f"publish-{sdk}" for sdk in noops} else "success"
+                    self.assertEqual(results[name], expected)
+        # npm's separately tagged handoff must never authorize another registry.
+        for sink in PUBLISHERS - {"publish-node-sdk"}:
+            self.assertNotIn("publish-node-sdk", self.release.ancestors(sink))
 
     def test_publication_capabilities_are_confined_to_gated_sinks(self):
         for name, body in self.release.jobs.items():
@@ -281,6 +332,41 @@ class ReleaseCohortTests(unittest.TestCase):
                         results["publish-ready"] = "skipped"
                         for sink in PUBLISHERS:
                             self.assertFalse(job_runs(self.release, sink, context, results), sink)
+
+    def test_each_mandatory_direct_need_must_succeed_even_with_other_gates_green(self):
+        targets = PUBLISHERS | {"prepare-crates", "release-ready", "release", "publish-ready"}
+        for cli, recovery in ((False, False), (True, False), (False, True)):
+            context = self.context(cli, recovery)
+            for target in targets:
+                for dependency in self.release.needs[target]:
+                    if dependency == "validate-crates-recovery" and not recovery:
+                        continue
+                    for status in ("failure", "cancelled", "skipped"):
+                        if target == "publish-ready" and dependency == "release" and not cli and status == "skipped":
+                            continue  # Only a non-CLI release may intentionally skip this need.
+                        with self.subTest(cli=cli, recovery=recovery, job=target, need=dependency, status=status):
+                            results = self.results(cli, recovery)
+                            results[dependency] = status
+                            self.assertFalse(job_runs(self.release, target, context, results))
+
+    def test_cancellation_closes_every_barrier_and_publisher(self):
+        for cli, recovery in ((False, False), (True, False), (False, True)):
+            context, results = self.context(cli, recovery), self.results(cli, recovery)
+            for name in PUBLISHERS | {"prepare-crates", "release-ready", "release", "publish-ready"}:
+                with self.subTest(cli=cli, recovery=recovery, job=name):
+                    self.assertFalse(job_runs(self.release, name, context, results, cancelled=True))
+
+    def test_fork_and_build_only_runs_cannot_activate_publication(self):
+        for repository in ("mongodb/kingfisher", "fork/kingfisher"):
+            context = self.context()
+            context["github.repository"] = repository
+            # The source guard never authorizes a fork or build-only dispatch.
+            context["github.event_name"] = "workflow_dispatch"
+            context["needs.validate-release.outputs.publish"] = "false"
+            results = workflow_results(self.release, context)
+            for name in PUBLISHERS | {"release", "publish-ready"}:
+                with self.subTest(repository=repository, job=name):
+                    self.assertEqual(results[name], "skipped")
 
     def test_always_barrier_accepts_only_intentional_release_skip(self):
         for cli, recovery in ((False, False), (True, False), (False, True)):
@@ -566,11 +652,43 @@ class ReleaseReaderTests(unittest.TestCase):
             expression_value("contains('unsafe', 'syntax')", {}, {})
 
     def test_implicit_success_and_explicit_always_have_different_skip_semantics(self):
-        workflow = Workflow("name: fixture\njobs:\n  a:\n    runs-on: x\n  safe:\n    needs: a\n    if: true\n  bypass:\n    needs: a\n    if: always()\n")
+        workflow = Workflow("name: fixture\njobs:\n  a:\n    runs-on: x\n  safe:\n    needs: a\n    if: true\n  explicit:\n    needs: a\n    if: success()\n  bypass:\n    needs: a\n    if: always()\n")
         for status in ("failure", "cancelled", "skipped"):
             results = {"a": status}
             self.assertFalse(job_runs(workflow, "safe", {}, results))
+            self.assertFalse(job_runs(workflow, "explicit", {}, results))
             self.assertTrue(job_runs(workflow, "bypass", {}, results))
+        self.assertFalse(job_runs(workflow, "explicit", {}, {"a": "success"}, cancelled=True))
+        self.assertTrue(job_runs(workflow, "explicit", {}, {"a": "success", "unrelated": "skipped"}))
+
+    def test_skipped_ancestor_survives_guarded_success_at_every_generation(self):
+        workflow = Workflow("""name: fixture
+jobs:
+  optional:
+    if: false
+  guarded:
+    needs: optional
+    if: always() && !cancelled() && needs.optional.result == 'skipped'
+  implicit:
+    needs: guarded
+  explicit:
+    needs: guarded
+    if: success() && needs.guarded.result == 'success'
+  guarded-dependent:
+    needs: guarded
+    if: !cancelled() && needs.guarded.result == 'success'
+  implicit-sink:
+    needs: guarded-dependent
+  guarded-sink:
+    needs: guarded-dependent
+    if: always() && !cancelled() && needs.guarded-dependent.result == 'success'
+""")
+        results = workflow_results(workflow, {})
+        self.assertEqual(results, {
+            "optional": "skipped", "guarded": "success", "implicit": "skipped",
+            "explicit": "skipped", "guarded-dependent": "success",
+            "implicit-sink": "skipped", "guarded-sink": "success",
+        })
 
 
 if __name__ == "__main__":

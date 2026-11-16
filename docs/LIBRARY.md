@@ -8,7 +8,7 @@ For native JavaScript/TypeScript and VS Code embedding, see the [Node SDK](JAVAS
 The prepared library releases are **kingfisher-core 2.0.0**,
 **kingfisher-rules 3.2.1**, and **kingfisher-scanner 4.0.0**.
 They require Rust **1.99** or newer and are versioned independently of the
-`kingfisher-bin` CLI, currently **2.19.0**. See [publishing](PUBLISHING.md) and the
+`kingfisher-bin` CLI, currently **2.19.1**. See [publishing](PUBLISHING.md) and the
 [dependency modernization migration](#dependency-modernization-migration).
 
 ## Crate Overview
@@ -121,12 +121,12 @@ additional validator features your project needs.
 To install the CLI from crates.io:
 
 ```sh
-cargo install --locked kingfisher-bin --version 2.19.0
+cargo install --locked kingfisher-bin --version 2.19.1
 kingfisher scan path/to/project --no-validate --format json --no-update-check
 ```
 
 For the `kingfisher-bin` library example in your own application, use
-`kingfisher = { package = "kingfisher-bin", version = "2.19.0" }` and `anyhow = "1"`.
+`kingfisher = { package = "kingfisher-bin", version = "2.19.1" }` and `anyhow = "1"`.
 The focused library examples use the crate versions listed above;
 `kingfisher-rules` and `kingfisher-scanner` examples also use `anyhow = "1"`.
 
@@ -903,7 +903,7 @@ input limits and bound worker counts for untrusted or large workloads.
 The full application's library is available separately:
 
 ```toml
-kingfisher = { package = "kingfisher-bin", version = "2.19.0" }
+kingfisher = { package = "kingfisher-bin", version = "2.19.1" }
 ```
 
 It carries CLI dependencies and all validator features. The stable embedding
@@ -965,7 +965,7 @@ behavior; review and behavioral tests remain required.
 ### Dependency modernization migration
 
 Upgrade direct dependencies to core `2.0.0`, rules `3.2.1`, and scanner `4.0.0`.
-The full application package follows CLI version `kingfisher-bin` `2.19.0`.
+The full application package follows CLI version `kingfisher-bin` `2.19.1`.
 Focused-crate major bumps cover exposed Rust dependency types, not a rule-file migration:
 existing Kingfisher YAML, Betterleaks TOML, CLI flags, and Python/npm runtime
 APIs remain compatible. TOON report compatibility is described below.

@@ -53,7 +53,9 @@ class NodeSdkReleaseTests(unittest.TestCase):
         coordinator = (ROOT / ".github/workflows/release.yml").read_text()
         caller = job(coordinator, "publish-node-sdk")
         self.assertEqual({"publish-ready", "node-sdk"}, needed_jobs(caller))
-        self.assertIn("if: needs.node-sdk.outputs.publish == 'true'", caller)
+        for guard in ("always() && !cancelled()", "needs.publish-ready.result == 'success'",
+                      "needs.node-sdk.result == 'success'", "needs.node-sdk.outputs.publish == 'true'"):
+            self.assertIn(guard, caller)
         self.assertIn("run: python3 scripts/dispatch-node-sdk.py", caller)
         self.assertIn("NPM_ARTIFACT_ID: ${{ needs.node-sdk.outputs.artifact_id }}", caller)
         self.assertIn("actions: write", caller)

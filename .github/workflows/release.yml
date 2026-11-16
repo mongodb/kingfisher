@@ -499,13 +499,21 @@ jobs:
       contents: read
       id-token: write
 
+  # Skipped optional ancestors propagate through successful always() jobs.
+  # Override implicit success() here and downstream, checking every required need.
   release-ready:
     name: Release build gate
     needs: [validate-release, tests, linux-x64, linux-arm64, windows, macos-x64, macos-arm64, node-sdk, python-sdk, prepare-crates, prepare-pypi]
+    if: >-
+      always() && !cancelled() && needs.validate-release.result == 'success' &&
+      needs.tests.result == 'success' && needs.linux-x64.result == 'success' &&
+      needs.linux-arm64.result == 'success' && needs.windows.result == 'success' &&
+      needs.macos-x64.result == 'success' && needs.macos-arm64.result == 'success' &&
+      needs.node-sdk.result == 'success' && needs.python-sdk.result == 'success' &&
+      needs.prepare-crates.result == 'success' && needs.prepare-pypi.result == 'success'
     runs-on: ubuntu-24.04
     permissions: {}
     steps:
-      # No always(): failure, cancellation, or a skipped required build closes the gate.
       - name: All binary, crate, PyPI and npm builds/tests passed for this revision
         env:
           TESTED_SHA: ${{ github.sha }}
@@ -514,7 +522,9 @@ jobs:
   release:
     name: Public GitHub Release
     needs: [validate-release, release-ready]
-    if: needs.validate-release.outputs.cli-release == 'true'
+    if: >-
+      always() && !cancelled() && needs.validate-release.result == 'success' &&
+      needs.release-ready.result == 'success' && needs.validate-release.outputs.cli-release == 'true'
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ needs.validate-release.outputs.tag }}
@@ -619,7 +629,7 @@ jobs:
     needs: [validate-release, release-ready, release, validate-crates-recovery]
     if: >-
       always() && !cancelled() && github.repository == 'mongodb/kingfisher' &&
-      needs.release-ready.result == 'success' &&
+      needs.validate-release.result == 'success' && needs.release-ready.result == 'success' &&
       ((needs.validate-release.outputs.cli-release == 'true' && needs.release.result == 'success') ||
        (needs.validate-release.outputs.cli-release != 'true' && needs.release.result == 'skipped')) &&
       (needs.validate-release.outputs.publish == 'true' ||
@@ -633,7 +643,9 @@ jobs:
   publish-node-sdk:
     name: Publish npm packages through the existing trusted workflow
     needs: [publish-ready, node-sdk]
-    if: needs.node-sdk.outputs.publish == 'true'
+    if: >-
+      always() && !cancelled() && needs.publish-ready.result == 'success' &&
+      needs.node-sdk.result == 'success' && needs.node-sdk.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -653,7 +665,9 @@ jobs:
 
   publish-python-sdk:
     needs: [publish-ready, python-sdk]
-    if: needs.python-sdk.outputs.publish == 'true'
+    if: >-
+      always() && !cancelled() && needs.publish-ready.result == 'success' &&
+      needs.python-sdk.result == 'success' && needs.python-sdk.outputs.publish == 'true'
     uses: ./.github/workflows/python-sdk.yml
     with:
       phase: publish
@@ -666,6 +680,9 @@ jobs:
   # ──────────────── Publish Docker image ────────────────
   publish-docker:
     needs: [release, publish-ready]
+    if: >-
+      always() && !cancelled() && needs.release.result == 'success' &&
+      needs.publish-ready.result == 'success'
     uses: ./.github/workflows/release-docker.yml
     with:
       tag: ${{ needs.release.outputs.tag }}
@@ -677,6 +694,9 @@ jobs:
   # ──────────────── Publish PyPI wheels ────────────────
   publish-pypi:
     needs: [release, publish-ready]
+    if: >-
+      always() && !cancelled() && needs.release.result == 'success' &&
+      needs.publish-ready.result == 'success'
     uses: ./.github/workflows/pypi.yml
     with:
       tag: ${{ needs.release.outputs.tag }}
@@ -691,7 +711,7 @@ jobs:
     needs: [validate-release, publish-ready, validate-crates-recovery]
     if: >-
       always() && !cancelled() && github.repository == 'mongodb/kingfisher' &&
-      needs.publish-ready.result == 'success' &&
+      needs.validate-release.result == 'success' && needs.publish-ready.result == 'success' &&
       ((!inputs.crates_only && needs.validate-release.outputs.publish == 'true') ||
        (github.event_name == 'workflow_dispatch' && inputs.crates_only &&
         needs.validate-crates-recovery.result == 'success'))
