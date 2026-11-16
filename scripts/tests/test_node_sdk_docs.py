@@ -80,16 +80,20 @@ class NodeSdkDocsTests(unittest.TestCase):
         for name in [manifest["name"], *manifest["optionalDependencies"]]:
             self.assertIn(f"`{name}`", setup)
         normalized = " ".join(setup.split())
-        for required in ("`mongodb`", "`kingfisher`", "`node-sdk.yml`", "`npm`",
+        for required in ("`mongodb`", "`kingfisher`", "`release.yml`", "`node-sdk.yml`", "`npm`",
                          "Allow npm publish", "48 hours", "id-token: write",
                          "npm-v1.0.0", "npm-v1.0.1", "tags unchanged", "original commit",
-                         "same tested artifact", "disallow tokens",
+                         "same producer artifacts",
                          "account-level 2FA", "Prevent self-review", "unapproved",
                          "Never approve", "npm audit signatures", "private development remote",
                          "GitHub-hosted runner", "Do not add an npm write-token secret",
-                         "publish automatically", "no release tag is required",
-                         "both the **branch** `main` and the **tag** pattern `npm-v*`",
-                         "read-only preflight", "no-op on main/tag pushes"):
+                         "**An npm release tag is required**", "tag pattern `npm-v*` only",
+                         "No CI job creates or moves tags", "No existing npmjs account",
+                         "original top-level `node-sdk.yml`", "exact returned run ID",
+                         "cross-run by validated artifact ID", "again after its protected approval",
+                         "Failed, cancelled, or timed-out parents reject stale children",
+                         "read-only preflight", "skips upload, but its full native and sealed-tarball",
+                         "test matrix still gates the other coordinated releases"):
             self.assertIn(required, normalized)
         self.assertNotIn("javascript/PUBLISHING.md", guide)
 

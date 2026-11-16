@@ -2,9 +2,18 @@ name: build-and-release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+    tags: ["v*", "python-v*", "npm-v*"]
   workflow_dispatch:
     inputs:
+      publish:
+        description: Publish all pending packages after every build/test gate passes (main only)
+        type: boolean
+        default: false
+      expected_version:
+        description: Pinned Python SDK version (required when publish is true)
+        type: string
+        default: ""
       crates_only:
         description: Recover crates.io publication only; keep the public tag and assets unchanged
         type: boolean
@@ -14,7 +23,7 @@ on:
         type: string
         default: ""
       expected_sha:
-        description: Reviewed main commit SHA (required for crates-only recovery)
+        description: Reviewed full main SHA (required for publication or crates-only recovery)
         type: string
         default: ""
 
@@ -38,10 +47,11 @@ env:
 jobs:
   validate-release:
     name: Verify release ref and version
-    if: ${{ !inputs.crates_only }}
     runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.version.outputs.tag }}
+      cli-release: ${{ steps.version.outputs.cli-release }}
+      publish: ${{ steps.version.outputs.publish }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -49,28 +59,16 @@ jobs:
       - name: Require a commit merged into main
         shell: bash
         run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
-      - name: Require a tag matching the root Cargo version
+      - name: Validate the pinned main commit and matching CLI or SDK version tag
         id: version
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import os
-          import tomllib
-
-          with open("Cargo.toml", "rb") as manifest:
-              version = tomllib.load(manifest)["package"]["version"]
-          tag = f"v{version}"
-          if os.environ["GITHUB_REF"] != f"refs/tags/{tag}":
-              raise SystemExit(f"::error::Release must run on refs/tags/{tag}, matching Cargo.toml")
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              output.write(f"tag={os.environ['GITHUB_REF_NAME']}\n")
-          PY
+        run: python3 scripts/check-release-source.py --github-event
       - name: Require changelog notes for the release tag
+        if: steps.version.outputs.cli-release == 'true'
         env:
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: python3 scripts/release-notes.py --tag "$RELEASE_TAG" > /dev/null
       - name: Reject releases recorded for another commit
+        if: steps.version.outputs.cli-release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
@@ -427,9 +425,95 @@ jobs:
           name: kingfisher-windows-${{ matrix.arch }}
           path: dist/kingfisher-windows-${{ matrix.arch }}.zip
 
+  # Reusable build phases never authenticate or upload to a registry. They run
+  # against the caller's exact github.sha and retain the tested artifacts here.
+  node-sdk:
+    needs: [validate-release]
+    uses: ./.github/workflows/node-sdk.yml
+    with:
+      phase: build
+    permissions:
+      contents: read
+      # Reusable permission ceiling; its build jobs themselves have contents: read only.
+      id-token: write
+
+  python-sdk:
+    needs: [validate-release]
+    uses: ./.github/workflows/python-sdk.yml
+    with:
+      phase: build
+    permissions:
+      contents: read
+      id-token: write
+
+  prepare-crates:
+    name: Verify all crates and plan registry uploads
+    needs: [validate-release, validate-crates-recovery]
+    if: >-
+      always() && !cancelled() && needs.validate-release.result == 'success' &&
+      (!inputs.crates_only || needs.validate-crates-recovery.result == 'success')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    env:
+      CARGO_BUILD_JOBS: 2
+      RELEASE_TAG: ${{ needs.validate-release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends cmake pkg-config perl curl
+      - name: Test libraries for registry-only recovery
+        if: inputs.crates_only
+        run: cargo test --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner
+      - name: Verify rule bundle and extracted packages before authenticating
+        run: |
+          cargo run --locked -p kingfisher-rule-bundle -- --check
+          cargo package --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner -p kingfisher-bin
+      - name: Plan all crate uploads (read-only)
+        run: python3 scripts/publish-crates.py --tag "$RELEASE_TAG"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: crates-registry-staging
+          path: target/package/kingfisher-*.crate
+          if-no-files-found: error
+
+  prepare-pypi:
+    needs: [validate-release, linux-x64, linux-arm64, windows, macos-x64, macos-arm64]
+    uses: ./.github/workflows/pypi.yml
+    with:
+      tag: ${{ needs.validate-release.outputs.tag }}
+      phase: build
+      use_artifacts: true
+    permissions:
+      contents: read
+      id-token: write
+
+  release-ready:
+    name: Release build gate
+    needs: [validate-release, tests, linux-x64, linux-arm64, windows, macos-x64, macos-arm64, node-sdk, python-sdk, prepare-crates, prepare-pypi]
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      # No always(): failure, cancellation, or a skipped required build closes the gate.
+      - name: All binary, crate, PyPI and npm builds/tests passed for this revision
+        env:
+          TESTED_SHA: ${{ github.sha }}
+        run: printf 'All release builds and read-only package plans passed for %s\n' "$TESTED_SHA"
+
   release:
     name: Public GitHub Release
-    needs: [validate-release, tests, linux-x64, linux-arm64, windows, macos-x64, macos-arm64]
+    needs: [validate-release, release-ready]
+    if: needs.validate-release.outputs.cli-release == 'true'
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ needs.validate-release.outputs.tag }}
@@ -529,38 +613,92 @@ jobs:
           RELEASE_TAG: ${{ needs.validate-release.outputs.tag }}
         run: gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
 
+  publish-ready:
+    name: Authorize the complete release cohort
+    needs: [validate-release, release-ready, release, validate-crates-recovery]
+    if: >-
+      always() && !cancelled() && github.repository == 'mongodb/kingfisher' &&
+      needs.release-ready.result == 'success' &&
+      ((needs.validate-release.outputs.cli-release == 'true' && needs.release.result == 'success') ||
+       (needs.validate-release.outputs.cli-release != 'true' && needs.release.result == 'skipped')) &&
+      (needs.validate-release.outputs.publish == 'true' ||
+       (github.event_name == 'workflow_dispatch' && inputs.crates_only &&
+        needs.validate-crates-recovery.result == 'success'))
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - run: echo 'The same-revision build cohort is eligible for publication.'
+
+  publish-node-sdk:
+    name: Publish npm packages through the existing trusted workflow
+    needs: [publish-ready, node-sdk]
+    if: needs.node-sdk.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Hand off tested archives only through an existing matching npm tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NPM_VERSION: ${{ needs.node-sdk.outputs.version }}
+          NPM_ARTIFACT_ID: ${{ needs.node-sdk.outputs.artifact_id }}
+        run: python3 scripts/dispatch-node-sdk.py
+
+  publish-python-sdk:
+    needs: [publish-ready, python-sdk]
+    if: needs.python-sdk.outputs.publish == 'true'
+    uses: ./.github/workflows/python-sdk.yml
+    with:
+      phase: publish
+      publish: true
+      expected_sha: ${{ inputs.expected_sha || '' }}
+    permissions:
+      contents: read
+      id-token: write
+
   # ──────────────── Publish Docker image ────────────────
   publish-docker:
-    needs: [release]
+    needs: [release, publish-ready]
     uses: ./.github/workflows/release-docker.yml
     with:
       tag: ${{ needs.release.outputs.tag }}
+      phase: publish
     permissions:
       contents: read
       packages: write
 
   # ──────────────── Publish PyPI wheels ────────────────
   publish-pypi:
-    needs: [release]
+    needs: [release, publish-ready]
     uses: ./.github/workflows/pypi.yml
     with:
       tag: ${{ needs.release.outputs.tag }}
+      phase: publish
+      use_artifacts: true
     permissions:
       contents: read
       id-token: write
 
   publish-crates:
     name: Publish crates.io packages
-    needs: [release, validate-crates-recovery]
+    needs: [validate-release, publish-ready, validate-crates-recovery]
     if: >-
       always() && !cancelled() && github.repository == 'mongodb/kingfisher' &&
-      ((!inputs.crates_only && needs.release.result == 'success') ||
+      needs.publish-ready.result == 'success' &&
+      ((!inputs.crates_only && needs.validate-release.outputs.publish == 'true') ||
        (github.event_name == 'workflow_dispatch' && inputs.crates_only &&
         needs.validate-crates-recovery.result == 'success'))
     runs-on: ubuntu-24.04
     environment: crates-io
     concurrency:
       group: crates-io-publish
+      queue: max
       cancel-in-progress: false
     permissions:
       contents: read
@@ -568,15 +706,17 @@ jobs:
       id-token: write
     env:
       CARGO_BUILD_JOBS: 2
-      RELEASE_TAG: ${{ needs.release.outputs.tag || needs.validate-crates-recovery.outputs.tag }}
+      RELEASE_TAG: ${{ needs.validate-release.outputs.tag }}
     steps:
       # Normal releases use the tested tag; recovery uses the validated metadata-only commit.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-      - name: Verify release tag identifies the tested commit
-        if: ${{ !inputs.crates_only }}
+      - name: Recheck the pinned release source
+        run: python3 scripts/check-release-source.py
+      - name: Verify CLI release tag identifies the tested commit
+        if: needs.validate-release.outputs.cli-release == 'true'
         run: test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$(git rev-parse HEAD)"
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
@@ -586,13 +726,11 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends cmake pkg-config perl curl
-      - name: Test libraries for registry-only recovery
-        if: inputs.crates_only
-        run: cargo test --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner
-      - name: Verify rule bundle and extracted packages before authenticating
-        run: |
-          cargo run --locked -p kingfisher-rule-bundle -- --check
-          cargo package --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner -p kingfisher-bin
+      - name: Download the already verified crate archives
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: crates-registry-staging
+          path: target/package
       - name: Recheck registry recovery before planning or authenticating
         if: inputs.crates_only
         env:

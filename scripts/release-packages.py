@@ -193,6 +193,26 @@ def selected_main(root, remote, sha):
         raise ValueError("Stale checkout: committed HEAD must equal the selected workflow main SHA")
 
 
+def workflow_push_tags(text):
+    """Read the repository's block-style push.tags without accepting comments/jobs."""
+    triggers = re.search(r"(?m)^on:[ \t]*(?:#.*)?\n((?:[ \t]+[^\n]*\n|\n)*)", text)
+    if not triggers:
+        return set()
+    push = re.search(r"(?m)^  push:[ \t]*\n((?:[ \t]{4,}[^\n]*\n|\n)*)", triggers.group(1))
+    if not push:
+        return set()
+    tags = re.search(r"(?m)^    tags:[ \t]*([^\n]*)\n((?:[ \t]{6,}[^\n]*\n|\n)*)", push.group(1))
+    if not tags:
+        return set()
+    inline = tags.group(1).split("#", 1)[0].strip()
+    if inline:
+        if not (inline.startswith("[") and inline.endswith("]")):
+            return set()
+        return {value.strip().strip("\"'") for value in inline[1:-1].split(",")}
+    return {match.group(1).strip().strip("\"'") for match in re.finditer(
+        r"(?m)^      -[ \t]+([^\n#]+)(?:#.*)?$", tags.group(2))}
+
+
 def readiness(root, sha, workflow, inputs):
     if shutil.which("gh") is None:
         raise ValueError("Install GitHub CLI (gh) and authenticate with Actions write permission")
@@ -234,6 +254,8 @@ def readiness(root, sha, workflow, inputs):
                     supported.add(match.group(1))
     if not set(inputs) <= supported:
         raise ValueError(f"{workflow} at main lacks guarded dispatch inputs: {', '.join(sorted(set(inputs) - supported))}")
+    if workflow == "release.yml" and not inputs and "npm-v*" not in workflow_push_tags(text):
+        raise ValueError("release.yml at main lacks the coordinator's npm-v* push tag route")
 
 
 def fresh_crates_plan(root, sha, inferred):
@@ -396,7 +418,7 @@ def npm_release(root, remote, sha):
     version = npm_version(root, sha)
     tag = f"npm-v{version}"
     ref = f"refs/tags/{tag}"
-    workflow = "node-sdk.yml"
+    workflow = "release.yml"
     selected_main(root, remote, sha)
     readiness(root, sha, workflow, set())
     git(root, "check-ref-format", ref)
@@ -421,7 +443,7 @@ def npm_release(root, remote, sha):
             or (local.returncode == 0 and git(root, "rev-parse", ref).stdout.strip() != local.stdout.strip())):
         raise ValueError("Local npm tag changed during preflight; publication stopped")
     git(root, "push", remote, f"{ref}:{ref}")
-    print(f"Pushed {tag} ({sha}) to {remote}. Follow Node SDK in GitHub Actions; "
+    print(f"Pushed {tag} ({sha}) to {remote}. Follow the Release coordinator in GitHub Actions; "
           "approve the protected npm deployment after all builds and package checks pass.")
     print("No local npm publish was run; npm Trusted Publishing must already be configured.")
 
@@ -435,7 +457,7 @@ def release(package, remote="origin", *, root=ROOT):
     inferred = versions(root, sha)
     selected_main(root, remote, sha)
     if package == "kingfisher-secret-scanner":
-        workflow = "python-sdk.yml"
+        workflow = "release.yml"
         inputs = {"publish", "expected_sha", "expected_version"}
         readiness(root, sha, workflow, inputs)
         version = inferred["kingfisher-python"]

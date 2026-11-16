@@ -1,4 +1,5 @@
 """Exercise npm release tagging locally; no registry, GitHub, or publishing writes."""
+import base64
 import importlib.util
 import json
 import os
@@ -39,7 +40,7 @@ class NpmReleaseTests(unittest.TestCase):
                            ("core.autocrlf", "false")):
             self.git("config", key, value)
         self.write_metadata("0.1.0")
-        self.write(".github/workflows/node-sdk.yml", "name: Node SDK\non:\n  workflow_dispatch:\njobs: {}\n")
+        self.write(".github/workflows/release.yml", "name: Release\non:\n  push:\n    tags: ['v*', 'python-v*', 'npm-v*']\n  workflow_dispatch:\njobs: {}\n")
         self.write("README.md", "npm release fixture\n")
         self.commit()
         self.git("init", "--bare", self.remote.as_posix())
@@ -124,7 +125,7 @@ class NpmReleaseTests(unittest.TestCase):
 
     def readiness(self, root, sha, workflow, inputs):
         self.assertEqual(Path(root), self.root)
-        self.assertEqual(workflow, "node-sdk.yml")
+        self.assertEqual(workflow, "release.yml")
         self.assertEqual(inputs, set())
         if self.after_readiness:
             self.after_readiness()
@@ -351,6 +352,43 @@ class NpmReleaseTests(unittest.TestCase):
         self.assertNotEqual(self.git("rev-parse", "npm-v0.1.0"), original)
         self.assert_no_remote_tags()
         self.assertFalse(any(args[1] == "push" for args in self.commands))
+
+
+class NpmCoordinatorReadinessTests(unittest.TestCase):
+    def readiness(self, text):
+        sha = "a" * 40
+        def github(_root, path):
+            if path == "":
+                return {"full_name": launcher.REPOSITORY, "private": False, "fork": False,
+                        "default_branch": "main", "permissions": {"push": True}}
+            if path == "/commits/main":
+                return {"sha": sha}
+            if path == "/actions/workflows/release.yml":
+                return {"state": "active", "path": ".github/workflows/release.yml"}
+            if path == f"/contents/.github/workflows/release.yml?ref={sha}":
+                return {"encoding": "base64", "content": base64.b64encode(text.encode()).decode()}
+            raise AssertionError(path)
+        with patch.object(launcher.shutil, "which", return_value="gh"), \
+                patch.object(launcher, "command", return_value=subprocess.CompletedProcess([], 0, "", "")), \
+                patch.object(launcher, "github", side_effect=github), \
+                patch.object(launcher, "committed", return_value=text):
+            launcher.readiness(ROOT, sha, "release.yml", set())
+
+    def test_coordinator_must_advertise_npm_tag_route_in_selected_push_trigger(self):
+        for tags in ("    tags: ['v*', 'python-v*', 'npm-v*']\n",
+                     '    tags: ["npm-v*"] # release route\n',
+                     "    tags:\n      - 'v*'\n      - 'npm-v*'\n"):
+            with self.subTest(tags=tags):
+                self.readiness("name: Release\non:\n  push:\n    branches: [main]\n" + tags + "jobs: {}\n")
+        for text in ("on:\n  workflow_dispatch:\n# npm-v*\njobs: {}\n",
+                     "on:\n  push:\n    tags: ['v*', 'python-v*']\njobs: {}\n",
+                     "on:\n  push:\n    branches: ['npm-v*']\njobs: {}\n",
+                     "on:\n  push:\n    branches: [main]\njobs:\n  fake:\n    tags: ['npm-v*']\n",
+                     "on:\n  push:\n    # tags: ['npm-v*']\njobs: {}\n",
+                     "on:\n  workflow_dispatch:\njobs:\n  push:\n    tags: ['npm-v*']\n",
+                     "env:\n  push:\n    tags: ['npm-v*']\njobs: {}\n"):
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, "npm-v\\* push tag route"):
+                self.readiness(text)
 
 
 class NpmCliTests(unittest.TestCase):

@@ -1451,8 +1451,10 @@ successful macOS or Linux run does not establish Windows compatibility.
 
 ## GitHub Actions and PyPI publishing
 
-[Python SDK workflow](../.github/workflows/python-sdk.yml) builds and tests six
-native wheels on pull requests, main-branch pushes, SDK tag pushes, and manual runs. Linux wheels use manylinux 2.28;
+The [Python SDK workflow](../.github/workflows/python-sdk.yml) builds and tests six
+native wheels on pull requests and standalone test-only manual runs. The
+[release coordinator](../.github/workflows/release.yml) also calls its build phase
+for upstream main, CLI/SDK tag pushes, and coordinated manual runs. Linux wheels use manylinux 2.28;
 Windows wheels bundle runtime DLLs using delvewheel and are tested under ordinary
 CPython outside MSYS2. A separate job builds an sdist, installs it with CPython
 3.10, and runs the same tests. Wheel jobs use CPython 3.13. Each wheel job also
@@ -1475,11 +1477,25 @@ Add `--require-hit` for the exact same wheel/engine build on hosts with
 known compatible CPU features
 to assert that no recompilation occurs.
 
-Merging a new SDK version to `main` automatically builds, tests, and publishes
-`kingfisher-secret-scanner`. The CLI release separately publishes `kingfisher-bin`.
-PRs and default manual runs are test-only. Explicit manual publication is opt-in;
-all publication is restricted to `mongodb/kingfisher`, a pinned commit already in
-upstream `main`, and the protected `pypi-sdk` environment.
+Merging a new SDK version to `main` automatically releases `kingfisher-secret-scanner`
+only after the coordinator's normal binary tests/builds, four verified Cargo packages,
+npm tarball tests, all Python wheel/sdist/cache tests, and six CLI wheel builds succeed
+at the same SHA. CLI/Python/npm tag pushes also release pending Python SDK/crate
+versions through that shared gate. CLI `v*` releases additionally publish
+`kingfisher-bin` wheels. PRs and ordinary standalone SDK manual runs are test-only.
+Manual main publication is opt-in through the coordinator; Python SDK publication
+remains restricted to `mongodb/kingfisher`, a pinned commit merged into upstream
+`main`, and the protected `pypi-sdk` environment.
+
+npm still runs its complete tests even unchanged/already published, but **npm uploads
+remain tag-only**: the original top-level `node-sdk.yml` / `npm` publisher requires an
+existing `npm-v<committed SDK version>` tag at the producer's exact SHA. Missing or
+different-SHA tags skip npm on main/CLI/Python triggers without blocking PyPI or crates;
+the npm tag's own coordinator cohort can publish it. CI never creates or moves tags,
+and the existing npmjs trust, `npm-v*`-only environment and reviewer need no changes.
+See the [npm handoff and retry guidance](PUBLISHING.md#npm-publishing-with-github-actions).
+Registry uploads are gated but not transactionally atomic; partial failures must recover
+with the original tested artifacts.
 
 The root `pyproject.toml` uses a dynamic version from
 `crates/kingfisher-python/Cargo.toml`, independently of the CLI version. Prepare a
@@ -1487,9 +1503,10 @@ new stable SDK version when Python runtime code, native bindings, shared Rust
 sources/rules, or SDK build dependencies change, and keep its `Cargo.lock` entry
 in sync. The read-only preflight runs **before** wheel/source jobs:
 
-- A main push with an already published version and unchanged SDK runtime inputs
-  is a no-op before expensive builds. CLI-only, documentation, tests and examples
-  do not by themselves require an SDK version bump.
+- An already published version with unchanged SDK runtime inputs skips publication,
+  but coordinated releases still run its complete build/test matrix to gate the other
+  registries. CLI-only, documentation, tests and examples do not by themselves require
+  an SDK version bump.
 - PR/main runtime changes targeting an existing PyPI version fail with **bump SDK
   version**. The guard compares committed versions and meaningful source/build
   inputs against the push's `before` SHA or PR base SHA; it also rejects a bump to
@@ -1514,7 +1531,7 @@ For an explicit manual publication, first merge the prepared version, confirm
 that `HEAD` is the current upstream `main` commit, and use the exact version/SHA:
 
 ```bash
-gh workflow run python-sdk.yml --ref main \
+gh workflow run release.yml --ref main \
   -f publish=true \
   -f expected_sha="$(git rev-parse HEAD)" \
   -f expected_version=1.6.4
@@ -1527,9 +1544,10 @@ ref, unmerged source, SHA or version fails before native builds. Optional
 `python-v<version>` push tags must match the manifest and point into upstream
 `main` history.
 
-After all six wheels, sdist and cache-portability tests pass, a final read-only
-plan stages only filenames still missing from PyPI; `skip-existing` handles a
-concurrent upload after that plan. If publication partially fails, rerun the
+After all six wheels, sdist and cache-portability tests pass, a read-only plan stages
+only filenames still missing from PyPI. The coordinator waits for that plan and every
+other binary/npm/Cargo build gate before invoking the SDK publish phase; `skip-existing`
+handles a concurrent upload after the plan. If publication partially fails, rerun the
 original failed publish job to reuse its tested artifacts. Do not dispatch a new
 manual publication or rebuild an existing version as recovery; a new publication
 requires a new SDK version.
@@ -1543,8 +1561,10 @@ Maintainer release checklist:
 2. Inspect all six tested wheels and the source artifact in the main-branch run.
    The protected publish job runs only after all tests and release gates succeed.
 3. Configure PyPI Trusted Publishing for owner `mongodb`, repository `kingfisher`,
-   workflow `python-sdk.yml`, and environment `pypi-sdk`. The GitHub environment
-   must allow the `main` branch (and `python-v*` tags if using tag releases).
+   workflow `python-sdk.yml`, and environment `pypi-sdk`. Keep this called-workflow
+   identity: local same-repository/same-ref reusable calls preserve PyPI trust. The
+   GitHub environment must allow `main` and tag patterns `v*`, `python-v*`, and `npm-v*`
+   because all coordinated triggers may publish a pending SDK version.
 
 Publishing uses PyPI Trusted Publishing without a stored API token. A local TestPyPI rehearsal can use
 `uv publish --publish-url https://test.pypi.org/legacy/ dist-python/*` after
@@ -1613,14 +1633,18 @@ uvx twine upload dist-pypi/*
 
 #### GitHub Actions (recommended)
 
-The repository includes a `pypi-wheels` workflow that:
+The [`pypi-wheels` workflow](../.github/workflows/pypi.yml) has separate build and
+publish phases called by the release coordinator:
 
-1. Downloads the release binaries.
-2. Builds platform-tagged wheels.
-3. Publishes them to PyPI using Trusted Publishing (OIDC).
+1. Build six platform-tagged wheels from that same run's exact binary artifacts.
+2. Require the complete shared release gate; CLI-tag runs also wait for successful
+   GitHub release asset publication.
+3. Upload the staged wheels to PyPI using Trusted Publishing (OIDC), without rebuilding.
 
-To use Trusted Publishing, create a PyPI project named `kingfisher-bin` and
-enable GitHub Actions as a trusted publisher for this repository and workflow.
+Ordinary standalone manual runs build/test only. Keep the existing CLI Trusted
+Publisher identity: owner `mongodb`, repository `kingfisher`, workflow `pypi.yml`,
+and **no environment**. The Python SDK's separate `python-sdk.yml` / `pypi-sdk`
+identity also stays unchanged; neither uses a new `release.yml` PyPI connection.
 No API token is required once Trusted Publishing is configured.
 
 If you do not use Trusted Publishing, generate a PyPI API token and provide it

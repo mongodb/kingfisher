@@ -8,6 +8,8 @@ use std::ffi::OsString;
 use std::io::{ErrorKind, Write};
 
 mod release;
+#[cfg(test)]
+mod release_checks;
 use release::Updater;
 use semver::Version;
 use tracing::error;
@@ -68,10 +70,17 @@ fn styled_heading(styles: &Styles, text: &str) -> String {
 
 /// Check GitHub for a newer Kingfisher release and optionally self-update.
 ///
-/// * `base_url` lets tests point at a mock server.
+/// * `base_url` may override the HTTPS API endpoint.
 /// * Self-update is performed only when `global_args.self_update` is set and `--no-update-check`
 ///   was not passed. Download or replacement failures are reported to the user.
 pub fn check_for_update(global_args: &GlobalArgs, base_url: Option<&str>) -> UpdateStatus {
+    check_for_update_with(global_args, || Updater::new(base_url))
+}
+
+fn check_for_update_with(
+    global_args: &GlobalArgs,
+    make_updater: impl FnOnce() -> anyhow::Result<Updater>,
+) -> UpdateStatus {
     let running_version = env!("CARGO_PKG_VERSION").to_string();
 
     if global_args.no_update_check {
@@ -93,7 +102,7 @@ pub fn check_for_update(global_args: &GlobalArgs, base_url: Option<&str>) -> Upd
     let use_color = !global_args.quiet && global_args.use_color(std::io::stderr());
     let styles = Styles::new(use_color);
 
-    let Ok(updater) = Updater::new(base_url) else {
+    let Ok(updater) = make_updater() else {
         let plain = "Failed to configure update checker".to_string();
         let styled_message = styled_heading(&styles, &plain);
         let _ = writeln!(std::io::stderr(), "{}", styled_message);

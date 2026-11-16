@@ -1,7 +1,10 @@
 'use strict';
 // Planning is read-only with respect to registries. Only --publish can upload,
-// and it requires an upstream main push or matching SDK tag on GitHub-hosted OIDC.
+// and it requires a validated release event on GitHub-hosted OIDC. The central
+// coordinator is responsible for source ancestry and the all-builds-ready gate.
 const assert = require('node:assert/strict');
+const childProcess = require('node:child_process');
+const fs = require('node:fs');
 const path = require('node:path');
 const { checkRelease, readManifest } = require('./check-release.cjs');
 const { readArchives, packPackage, integrity, archiveIntegrity, npmCommand, MAX_ARCHIVE_BYTES } = require('./pack-release.cjs');
@@ -124,18 +127,76 @@ async function createPlan(releaseRoot, options = {}) {
   return plan;
 }
 
+function releaseGit(args) {
+  return childProcess.execFileSync('git', args, {
+    cwd: path.resolve(__dirname, '../..'), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+}
+
+function stableCargoVersion(relative, revision) {
+  // Only the package table counts: dependency versions cannot authorize a tag.
+  const manifest = revision ? releaseGit(['show', `${revision}:${relative}`])
+    : fs.readFileSync(path.resolve(__dirname, '../..', relative), 'utf8');
+  const table = /^[ \t]*\[package\][ \t]*(?:#.*)?\r?\n([\s\S]*?)(?=^[ \t]*\[|$(?![\s\S]))/m.exec(manifest)?.[1];
+  const version = table && /^[ \t]*version[ \t]*=[ \t]*(["'])((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))\1[ \t]*(?:#.*)?\r?$/m.exec(table)?.[2];
+  assert.ok(version, `Release source requires a stable package version: ${relative}`);
+  return version;
+}
+
 function checkPublishEnvironment(plan, env = process.env) {
   assert.equal(env.GITHUB_ACTIONS, 'true', 'Publishing requires GitHub Actions');
   assert.equal(env.RUNNER_ENVIRONMENT, 'github-hosted', 'Publishing requires a GitHub-hosted runner');
+  assert.equal(plan.repository, 'mongodb/kingfisher', 'Publishing requires the upstream repository');
   assert.equal(env.GITHUB_REPOSITORY, plan.repository, 'Publishing repository does not match package metadata');
-  assert.equal(env.GITHUB_EVENT_NAME, 'push', 'Publishing requires a push event');
+  const manual = env.GITHUB_EVENT_NAME === 'workflow_dispatch';
+  assert.ok(env.GITHUB_EVENT_NAME === 'push' || manual, 'Publishing requires an authorized release event');
+  let manualCliVersion;
+  if (manual) {
+    assert.equal(env.KINGFISHER_RELEASE_PUBLISH, 'true', 'Manual publication requires explicit authorization');
+    if (env.GITHUB_REF === 'refs/heads/main') {
+      assert.equal(env.KINGFISHER_RELEASE_EXPECTED_SHA?.length, 40,
+        'Manual publication requires a full expected SHA');
+      assert.match(env.KINGFISHER_RELEASE_EXPECTED_SHA, /^[0-9a-f]{40}$/,
+        'Manual publication requires a full expected SHA');
+      assert.notEqual(env.KINGFISHER_RELEASE_EXPECTED_SHA, '0'.repeat(40));
+      assert.equal(env.GITHUB_SHA, env.KINGFISHER_RELEASE_EXPECTED_SHA,
+        'Manual publication must match the pinned expected SHA');
+    } else {
+      const coordinatedNpm = env.KINGFISHER_RELEASE_COHORT === 'true'
+        && env.GITHUB_REF?.startsWith('refs/tags/npm-v');
+      assert.ok(coordinatedNpm || env.GITHUB_REF?.startsWith('refs/tags/v'),
+        'Manual publication requires main, an exact CLI tag, or a verified npm cohort');
+      assert.equal(env.GITHUB_SHA?.length, 40, 'Manual tag publication requires a full source SHA');
+      assert.match(env.GITHUB_SHA, /^[0-9a-f]{40}$/, 'Manual tag publication requires a full source SHA');
+      assert.notEqual(env.GITHUB_SHA, '0'.repeat(40));
+      assert.equal(releaseGit(['rev-parse', 'HEAD']), env.GITHUB_SHA,
+        'Manual tag publication must match the pinned checkout SHA');
+      if (coordinatedNpm) {
+        assert.equal(env.GITHUB_WORKFLOW_REF,
+          `mongodb/kingfisher/.github/workflows/node-sdk.yml@${env.GITHUB_REF}`,
+          'Coordinated npm publication must retain the original trusted workflow');
+        assert.equal(env.GITHUB_SHA, env.KINGFISHER_RELEASE_EXPECTED_SHA,
+          'Coordinated npm publication must match the tested source SHA');
+      } else {
+        manualCliVersion = stableCargoVersion('Cargo.toml', env.GITHUB_SHA);
+      }
+    }
+  }
   if (env.GITHUB_REF === 'refs/heads/main') {
-    assert.equal(env.GITHUB_REF_TYPE, 'branch', 'Automatic publishing requires the main branch');
-    assert.equal(env.GITHUB_REF_NAME, 'main', 'Automatic publishing requires the main branch');
+    assert.equal(env.GITHUB_REF_TYPE, 'branch', 'Publishing requires the main branch');
+    assert.equal(env.GITHUB_REF_NAME, 'main', 'Publishing requires the main branch');
   } else {
-    assert.equal(env.GITHUB_REF_TYPE, 'tag', 'Publishing requires main or an SDK tag');
-    assert.equal(env.GITHUB_REF_NAME, `npm-v${plan.version}`, 'SDK tag must match the staged version');
-    assert.equal(env.GITHUB_REF, `refs/tags/npm-v${plan.version}`, 'Publishing requires the exact SDK tag ref');
+    assert.equal(env.GITHUB_REF_TYPE, 'tag', 'Publishing requires main or a validated release tag');
+    assert.equal(env.GITHUB_REF, `refs/tags/${env.GITHUB_REF_NAME}`, 'Publishing requires an exact release ref');
+    if (env.GITHUB_REF_NAME?.startsWith('npm-v')) {
+      assert.equal(env.GITHUB_REF_NAME, `npm-v${plan.version}`, 'SDK tag must match the staged version');
+    } else if (env.GITHUB_REF_NAME?.startsWith('python-v')) {
+      assert.equal(env.GITHUB_REF_NAME, `python-v${stableCargoVersion('crates/kingfisher-python/Cargo.toml')}`,
+        'Python release tag must match its source manifest');
+    } else {
+      assert.equal(env.GITHUB_REF_NAME, `v${manualCliVersion ?? stableCargoVersion('Cargo.toml')}`,
+        'CLI release tag must match its source manifest');
+    }
   }
   assert.ok(env.ACTIONS_ID_TOKEN_REQUEST_URL && env.ACTIONS_ID_TOKEN_REQUEST_TOKEN,
     'Publishing requires id-token: write for GitHub OIDC');

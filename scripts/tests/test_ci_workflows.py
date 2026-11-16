@@ -78,7 +78,12 @@ class CiWorkflowTests(unittest.TestCase):
         release = job(self.release, "release")
         needs = re.search(r"(?m)^    needs: \[([^\]]+)\]", release)
         self.assertIsNotNone(needs)
-        self.assertIn("tests", {name.strip() for name in needs.group(1).split(",")})
+        self.assertIn("release-ready", {name.strip() for name in needs.group(1).split(",")})
+        gate = job(self.release, "release-ready")
+        gate_needs = re.search(r"(?m)^    needs: \[([^\]]+)\]", gate)
+        self.assertIsNotNone(gate_needs)
+        self.assertIn("tests", {name.strip() for name in gate_needs.group(1).split(",")})
+        self.assertNotRegex(gate, r"(?m)^    if:")
         self.assertNotIn("workflows/wizard.yml", self.release)
 
 

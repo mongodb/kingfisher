@@ -101,18 +101,59 @@ class PublishedSourceTests(unittest.TestCase):
             "payloadType": "application/vnd.in-toto+json",
             "payload": base64.b64encode(json.dumps(statement).encode()).decode()}}}
         with patch.object(preflight, "registry_json", return_value={"attestations": [attestation]}) as fetch, \
-                patch.object(preflight.sdk, "git") as git, \
+                patch.object(preflight.sdk, "git", side_effect=lambda _root, *args:
+                    '[package]\nname = "kingfisher-python"\nversion = "1.5.0"\n'
+                    if args[0] == "show" and "kingfisher-python" in args[1] else
+                    '[package]\nname = "kingfisher-bin"\nversion = "2.14.0"\n') as git, \
                 patch.object(preflight.releases, "npm_version", return_value=manifest_version):
             result = preflight.published_source(ROOT, metadata, VERSION)
             fetch.assert_called_once_with(
                 f"https://registry.npmjs.org/-/npm/v1/attestations/{preflight.PACKAGE}@{VERSION}")
-            git.assert_called_once_with(ROOT, "cat-file", "-e", f"{BASE}^{{commit}}")
+            git.assert_any_call(ROOT, "cat-file", "-e", f"{BASE}^{{commit}}")
             return result
 
     def test_exact_tarball_provenance_records_main_and_tag_release_baselines(self):
         for ref in ("refs/heads/main", f"refs/tags/npm-v{VERSION}"):
             with self.subTest(ref=ref):
                 self.assertEqual(self.source(*self.fixtures(ref)), BASE)
+
+    def test_coordinator_or_sibling_tag_provenance_cannot_change_npm_trust(self):
+        for workflow in ("node-sdk.yml", "release.yml"):
+            for ref in ("refs/heads/main", f"refs/tags/npm-v{VERSION}", "refs/tags/v2.14.0", "refs/tags/python-v1.5.0"):
+                metadata, statement = self.fixtures(ref)
+                statement["predicate"]["buildDefinition"]["externalParameters"]["workflow"]["path"] = f".github/workflows/{workflow}"
+                with self.subTest(workflow=workflow, ref=ref):
+                    if workflow == "node-sdk.yml" and ref in ("refs/heads/main", f"refs/tags/npm-v{VERSION}"):
+                        self.assertEqual(self.source(metadata, statement), BASE)
+                    else:
+                        with self.assertRaisesRegex(ValueError, "trusted workflow"):
+                            self.source(metadata, statement)
+
+    def test_manual_provenance_only_supports_the_original_node_workflow_at_an_npm_tag(self):
+        for workflow, ref, allowed in (("node-sdk.yml", f"refs/tags/npm-v{VERSION}", True),
+                                       ("release.yml", "refs/heads/main", False),
+                                       ("release.yml", "refs/tags/v2.14.0", False),
+                                       ("node-sdk.yml", "refs/heads/main", False),
+                                       ("node-sdk.yml", "refs/tags/v2.14.0", False),
+                                       ("node-sdk.yml", "refs/tags/python-v1.5.0", False),
+                                       ("release.yml", f"refs/tags/npm-v{VERSION}", False)):
+            metadata, statement = self.fixtures(ref)
+            definition = statement["predicate"]["buildDefinition"]
+            definition["externalParameters"]["workflow"]["path"] = f".github/workflows/{workflow}"
+            definition["internalParameters"]["github"]["event_name"] = "workflow_dispatch"
+            with self.subTest(workflow=workflow, ref=ref):
+                if allowed:
+                    self.assertEqual(self.source(metadata, statement), BASE)
+                else:
+                    with self.assertRaisesRegex(ValueError, "trusted workflow"):
+                        self.source(metadata, statement)
+
+    def test_manual_npm_tag_provenance_still_requires_the_committed_sdk_version(self):
+        for ref in ("refs/tags/npm-v9.9.9", f"refs/tags/npm-v{VERSION}-rc.1", f"refs/tags/npm-v{VERSION}+build"):
+            metadata, statement = self.fixtures(ref)
+            statement["predicate"]["buildDefinition"]["internalParameters"]["github"]["event_name"] = "workflow_dispatch"
+            with self.subTest(ref=ref), self.assertRaisesRegex(ValueError, "tag"):
+                self.source(metadata, statement)
 
     def test_different_package_digest_identity_workflow_or_source_is_rejected(self):
         metadata, original = self.fixtures()
@@ -150,13 +191,21 @@ class PublishedSourceTests(unittest.TestCase):
 
 
 class PublicationSourceTests(unittest.TestCase):
-    def source(self, env=None, checkout=HEAD, failure=None):
+    def source(self, env=None, checkout=HEAD, failure=None, event=None, main=HEAD):
         def git(_root, *args):
             if failure and args[0] == failure:
                 raise subprocess.CalledProcessError(1, ["git", *args])
-            return checkout if args == ("rev-parse", "HEAD") else ""
+            if args == ("rev-parse", "HEAD"):
+                return checkout
+            if args == ("rev-parse", "refs/remotes/origin/main"):
+                return main
+            if args[0] == "show":
+                name, version = (("kingfisher-python", "1.5.0") if "kingfisher-python" in args[1]
+                                 else ("kingfisher-bin", "2.14.0"))
+                return f'[package]\nname = "{name}"\nversion = "{version}"\n'
+            return ""
         with patch.object(preflight.sdk, "git", side_effect=git) as git_command:
-            result = preflight.publication_source(ROOT, env or environment(), VERSION)
+            result = preflight.publication_source(ROOT, env or environment(), VERSION, event)
         return result, git_command.call_args_list
 
     def test_upstream_main_and_matching_sdk_tag_are_pinned_and_ancestry_checked(self):
@@ -165,17 +214,61 @@ class PublicationSourceTests(unittest.TestCase):
             self.assertTrue(result)
             self.assertIn((ROOT, "fetch", "--no-tags", "origin", "refs/heads/main:refs/remotes/origin/main"),
                           [call.args for call in calls])
-            self.assertIn((ROOT, "merge-base", "--is-ancestor", HEAD, "refs/remotes/origin/main"),
+            self.assertIn((ROOT, "merge-base", "--is-ancestor", HEAD, HEAD),
                           [call.args for call in calls])
 
     def test_no_other_event_repository_or_ref_can_publish(self):
         for updates in ({"GITHUB_EVENT_NAME": "pull_request"}, {"GITHUB_EVENT_NAME": "workflow_dispatch"},
                         {"GITHUB_REPOSITORY": "fork/kingfisher"}, {"GITHUB_REF": "refs/heads/development"},
-                        {"GITHUB_REF": "refs/heads/feature/main"}, {"GITHUB_REF": "refs/tags/v1.2.3"}):
+                        {"GITHUB_REF": "refs/heads/feature/main"}, {"GITHUB_REF": "refs/tags/release-v1.2.3"}):
             with self.subTest(updates=updates):
                 result, calls = self.source(environment(**updates))
                 self.assertFalse(result)
                 self.assertEqual(calls, [])
+
+    def test_sibling_tags_use_their_own_manifest_versions_and_main_ancestry(self):
+        for tag in ("v2.14.0", "python-v1.5.0"):
+            with self.subTest(tag=tag):
+                result, calls = self.source(environment(GITHUB_REF=f"refs/tags/{tag}"))
+                self.assertTrue(result)
+                self.assertTrue(any(call.args[1] == "show" for call in calls))
+                self.assertTrue(any(call.args[1] == "merge-base" for call in calls))
+        for tag in ("v9.9.9", "python-v9.9.9", "python-v1.5.0+build"):
+            with self.subTest(tag=tag), self.assertRaisesRegex(ValueError, "tag"):
+                self.source(environment(GITHUB_REF=f"refs/tags/{tag}"))
+
+    def test_default_manual_cli_tag_completion_requires_exact_source_and_ancestry(self):
+        env = environment(GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_REF="refs/tags/v2.14.0")
+        result, calls = self.source(env, event={"inputs": {"publish": False}}, main=BASE)
+        self.assertTrue(result)
+        self.assertIn((ROOT, "show", f"{HEAD}:Cargo.toml"), [call.args for call in calls])
+        self.assertIn((ROOT, "merge-base", "--is-ancestor", HEAD, BASE), [call.args for call in calls])
+        for tag in (f"npm-v{VERSION}", "python-v1.5.0"):
+            with self.subTest(tag=tag):
+                result, calls = self.source({**env, "GITHUB_REF": f"refs/tags/{tag}"}, event={"inputs": {}})
+                self.assertFalse(result)
+                self.assertEqual(calls, [])
+        with self.assertRaisesRegex(ValueError, "tag must match"):
+            self.source({**env, "GITHUB_REF": "refs/tags/v9.9.9"}, event={"inputs": {}})
+        with self.assertRaisesRegex(ValueError, "pinned GITHUB_SHA"):
+            self.source({**env, "GITHUB_SHA": BASE}, event={"inputs": {}})
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.source(env, event={"inputs": {}}, failure="merge-base")
+
+    def test_guarded_manual_uses_current_main_and_python_expected_version(self):
+        env = environment(GITHUB_EVENT_NAME="workflow_dispatch")
+        inputs = {"publish": "true", "expected_sha": HEAD, "expected_version": "1.5.0"}
+        self.assertTrue(self.source(env, event={"inputs": inputs})[0])
+        for key, value in (("expected_sha", BASE), ("expected_sha", HEAD[:7]), ("expected_version", VERSION)):
+            with self.subTest(key=key, value=value), self.assertRaisesRegex(ValueError, key):
+                self.source(env, event={"inputs": {**inputs, key: value}})
+        with self.assertRaisesRegex(ValueError, "current upstream main SHA"):
+            self.source(env, event={"inputs": inputs}, main=BASE)
+        with self.assertRaisesRegex(ValueError, "refs/heads/main"):
+            self.source({**env, "GITHUB_REF": f"refs/tags/npm-v{VERSION}"}, event={"inputs": inputs})
+        result, calls = self.source(env, event={"inputs": {**inputs, "crates_only": True}})
+        self.assertFalse(result)
+        self.assertTrue(any(call.args[1] == "fetch" for call in calls))
 
     def test_wrong_tag_checkout_or_unmerged_source_is_rejected(self):
         for updates in ({"GITHUB_SHA": ""}, {"GITHUB_SHA": "a" * 7}, {"GITHUB_SHA": BASE},

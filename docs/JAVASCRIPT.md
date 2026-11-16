@@ -567,10 +567,32 @@ texts fail closed. See the
 
 The [publishing guide](PUBLISHING.md#npm-publishing-with-github-actions) covers
 npm trusted publishing, GitHub environment setup, SDK version updates and
-failed-job recovery. Reviewed `npm-vX.Y.Z` tags build
-all six native artifacts, seal packages once, and verify the exact tarballs in a
-separate six-host/runtime-matrix job. The publisher uses pinned Node **24.22.2**
-and npm **11.21.1** to publish those same bytes through protected GitHub OIDC.
-PRs, branch pushes and ordinary manual checks never publish. The guide is the
-canonical source for account/trust setup, exact tool versions and partial-release
-recovery; no account changes or publication happen merely by building the SDK.
+failed-job recovery. Upstream main and CLI/Python/npm release tags build all six
+native artifacts, seal packages once, and verify the exact tarballs in a separate
+six-host/runtime matrix—even when the npm version is already published or no matching
+npm tag exists. The coordinator also requires every normal binary build, four verified
+Cargo packages, all Python SDK tests and six CLI wheels to pass at the same SHA before
+any registry upload. Uploads are gated, not transactionally atomic across registries.
+
+**npm stays tag-only.** Use `make release npm` from the reviewed current upstream
+`main` checkout to push the annotated `npm-v<committed SDK version>` tag, with separate
+authorization for that external action. A main/CLI/Python producer skips the npm
+handoff when that existing tag is missing or points to another SHA; other registries
+proceed. The npm tag's own coordinator run can publish it. CI never creates or moves tags.
+
+After both central authorization gates pass, the coordinator dispatches the original
+top-level `node-sdk.yml` workflow at that same-SHA npm tag and waits for its exact run
+ID. The child validates the producer run/attempt, gates, active/successful dispatcher,
+exact staging artifact ID/metadata, tag/manifests and fresh upstream ancestry both
+before the `npm` environment and after protected approval. It downloads the exact
+sealed archives cross-run by validated artifact ID—no rebuild or repack—and publishes
+with pinned Node **24.22.2** and npm **11.21.1**.
+
+The original `node-sdk.yml` / `npm` OIDC identity, **`npm-v*`-only** environment and
+reviewer stay unchanged; no existing npmjs account or Trusted Publisher changes are
+needed. PRs, development/fork pushes and ordinary manual SDK runs never publish; only
+the validated internal handoff can. Retry a failed npm child only while its parent
+run and dispatcher remain active/successful. Otherwise rerun the original central
+handoff to dispatch a new child using the same producer artifacts; failed/cancelled/
+timed-out parents reject stale children. See the guide's
+[handoff recovery rules](PUBLISHING.md#npm-handoff-recovery).

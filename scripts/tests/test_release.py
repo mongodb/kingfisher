@@ -157,7 +157,13 @@ class WorkflowReleaseGuardsTests(unittest.TestCase):
 
     def test_tag_workflow_requires_main_ancestry_and_records_build_commit(self):
         workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/release.yml").read_text()
-        preflight = workflow.split("  validate-release:\n", 1)[1].split("  tests:\n", 1)[0]
+        triggers = workflow.split("concurrency:", 1)[0]
+        self.assertIn("branches: [main]", triggers)
+        self.assertIn('tags: ["v*", "python-v*", "npm-v*"]', triggers)
+        preflight = workflow.split("  validate-release:\n", 1)[1].split("  validate-crates-recovery:\n", 1)[0]
+        self.assertIn("python3 scripts/check-release-source.py --github-event", preflight)
+        self.assertIn("cli-release: ${{ steps.version.outputs.cli-release }}", preflight)
+        self.assertEqual(preflight.count("if: steps.version.outputs.cli-release == 'true'"), 2)
         self.assertIn("fetch-depth: 0", preflight)
         self.assertIn('git merge-base --is-ancestor "$GITHUB_SHA" origin/main', preflight)
         self.assertIn("scripts/check-release-target.py", preflight)

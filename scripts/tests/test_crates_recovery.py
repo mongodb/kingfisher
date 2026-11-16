@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -362,54 +363,85 @@ class RecoveryWorkflowTests(unittest.TestCase):
     def setUpClass(cls):
         cls.workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
 
-    def job(self, name, following=None):
-        result = self.workflow.split(f"  {name}:\n", 1)[1]
-        return result.split(f"  {following}:\n", 1)[0] if following else result
+    def job(self, name):
+        match = re.search(rf"(?ms)^  {re.escape(name)}:\n(.*?)(?=^  [\w-]+:\n|\Z)", self.workflow)
+        self.assertIsNotNone(match, f"Missing job {name}")
+        return match.group(1)
 
     def test_normal_tag_guards_remain_default_and_recovery_is_separate(self):
         self.assertIn("type: boolean\n        default: false", self.workflow)
-        normal = self.job("validate-release", "validate-crates-recovery")
-        self.assertIn("if: ${{ !inputs.crates_only }}", normal)
+        normal = self.job("validate-release")
+        # Recovery must pin the current main source too, not skip validation.
+        self.assertNotIn("!inputs.crates_only", normal)
         self.assertIn('git merge-base --is-ancestor "$GITHUB_SHA" origin/main', normal)
-        self.assertIn('os.environ["GITHUB_REF"] != f"refs/tags/{tag}"', normal)
+        self.assertIn("python3 scripts/check-release-source.py --github-event", normal)
+        self.assertEqual(normal.count("if: steps.version.outputs.cli-release == 'true'"), 2)
         self.assertIn("scripts/check-release-target.py", normal)
-        recovery_job = self.job("validate-crates-recovery", "tests")
+        recovery_job = self.job("validate-crates-recovery")
         self.assertIn("github.event_name == 'workflow_dispatch' && inputs.crates_only", recovery_job)
         self.assertIn("ref: ${{ github.sha }}", recovery_job)
         self.assertIn("tag: ${{ steps.recovery.outputs.tag }}", recovery_job)
         self.assertIn("EXPECTED_SHA: ${{ inputs.expected_sha }}", recovery_job)
         self.assertIn("      expected_sha:", self.workflow)
-        self.assertLess(recovery_job.index("scripts/check-crates-recovery.py"),
+        self.assertLess(self.workflow.index("scripts/check-crates-recovery.py"),
                         self.workflow.index("      - name: Test libraries for registry-only recovery"))
         self.assertIn('run: python3 scripts/check-crates-recovery.py --release-run-id "$RELEASE_RUN_ID"', recovery_job)
         self.assertNotIn("${{ inputs.release_run_id }}", recovery_job.split("        run:", 1)[1])
 
-    def test_full_builds_and_release_remain_behind_normal_validation(self):
-        for name, following in (("tests", "linux-x64"), ("linux-x64", "linux-arm64"),
-                                ("linux-arm64", "macos-x64"), ("macos-x64", "macos-arm64"),
-                                ("macos-arm64", "windows"), ("windows", "release")):
+    def test_full_builds_and_release_remain_behind_same_revision_validation(self):
+        for name in ("tests", "linux-x64", "linux-arm64", "macos-x64", "macos-arm64", "windows", "node-sdk", "python-sdk"):
             with self.subTest(job=name):
-                self.assertIn("needs: [validate-release]", self.job(name, following))
-        release_job = self.job("release", "publish-docker")
-        self.assertIn("needs: [validate-release, tests, linux-x64, linux-arm64, windows, macos-x64, macos-arm64]", release_job)
+                body = self.job(name)
+                self.assertIn("needs: [validate-release]", body)
+                self.assertNotIn("!inputs.crates_only", body)
+        for name in ("node-sdk", "python-sdk"):
+            self.assertIn("phase: build", self.job(name))
+        gate = self.job("release-ready")
+        self.assertIn("needs: [validate-release, tests, linux-x64, linux-arm64, windows, macos-x64, macos-arm64, node-sdk, python-sdk, prepare-crates, prepare-pypi]", gate)
+        self.assertNotRegex(gate.split("    steps:", 1)[0], r"(?m)^    if:")
+        release_job = self.job("release")
+        self.assertIn("needs: [validate-release, release-ready]", release_job)
+        self.assertIn("if: needs.validate-release.outputs.cli-release == 'true'", release_job)
         self.assertIn("skipIfReleaseExists: true", release_job)
-        for name, following in (("publish-docker", "publish-pypi"), ("publish-pypi", "publish-crates")):
-            self.assertIn("needs: [release]", self.job(name, following))
+        for name in ("publish-docker", "publish-pypi"):
+            self.assertIn("needs: [release, publish-ready]", self.job(name))
 
     def test_publication_requires_successful_explicit_path_and_keeps_auth_order(self):
+        prepare = self.job("prepare-crates")
+        self.assertIn("needs: [validate-release, validate-crates-recovery]", prepare)
+        self.assertIn("always() && !cancelled() && needs.validate-release.result == 'success'", prepare)
+        self.assertIn("!inputs.crates_only || needs.validate-crates-recovery.result == 'success'", prepare)
+        self.assertNotIn("id-token: write", prepare)
+        self.assertNotIn("environment:", prepare)
+        self.assertIn("if: inputs.crates_only", prepare)
+        self.assertIn("cargo test --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner", prepare)
+        for command in ("cargo run --locked -p kingfisher-rule-bundle -- --check", "cargo package --locked",
+                        'scripts/publish-crates.py --tag "$RELEASE_TAG"'):
+            with self.subTest(command=command):
+                self.assertIn(command, prepare)
+                self.assertLess(self.workflow.index(command), self.workflow.index("  release-ready:\n"))
+        self.assertNotIn("--no-verify", prepare)
+        self.assertNotIn("--allow-dirty", prepare)
+        cohort = self.job("publish-ready")
+        self.assertIn("needs.release-ready.result == 'success'", cohort)
+        self.assertIn("needs.release.result == 'success'", cohort)
+        self.assertIn("needs.release.result == 'skipped'", cohort)
+        self.assertIn("needs.validate-crates-recovery.result == 'success'", cohort)
         publish = self.job("publish-crates")
-        self.assertIn("needs: [release, validate-crates-recovery]", publish)
+        self.assertIn("needs: [validate-release, publish-ready, validate-crates-recovery]", publish)
         self.assertIn("always() && !cancelled() && github.repository == 'mongodb/kingfisher'", publish)
-        self.assertIn("!inputs.crates_only && needs.release.result == 'success'", publish)
+        self.assertIn("needs.publish-ready.result == 'success'", publish)
+        self.assertIn("!inputs.crates_only && needs.validate-release.outputs.publish == 'true'", publish)
         self.assertIn("github.event_name == 'workflow_dispatch' && inputs.crates_only &&", publish)
         self.assertIn("needs.validate-crates-recovery.result == 'success'", publish)
         self.assertIn("environment: crates-io", publish)
-        self.assertIn("group: crates-io-publish\n      cancel-in-progress: false", publish)
-        self.assertIn("needs.release.outputs.tag || needs.validate-crates-recovery.outputs.tag", publish)
-        self.assertIn('if: ${{ !inputs.crates_only }}\n        run: test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$(git rev-parse HEAD)"', publish)
-        self.assertIn("cargo test --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner", publish)
-        for command in ("cargo run --locked -p kingfisher-rule-bundle -- --check", "cargo package --locked",
-                        "scripts/check-crates-recovery.py", 'scripts/publish-crates.py --tag "$RELEASE_TAG"'):
+        self.assertIn("group: crates-io-publish\n      queue: max\n      cancel-in-progress: false", publish)
+        self.assertIn("RELEASE_TAG: ${{ needs.validate-release.outputs.tag }}", publish)
+        self.assertIn('if: needs.validate-release.outputs.cli-release == \'true\'\n        run: test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$(git rev-parse HEAD)"', publish)
+        self.assertIn("name: crates-registry-staging", publish)
+        self.assertNotIn("cargo package", publish)
+        for command in ("scripts/check-release-source.py", "scripts/check-crates-recovery.py",
+                        'scripts/publish-crates.py --tag "$RELEASE_TAG"'):
             with self.subTest(command=command):
                 self.assertLess(publish.index(command), publish.index("Select bootstrap-token"))
         self.assertNotIn("--no-verify", publish)

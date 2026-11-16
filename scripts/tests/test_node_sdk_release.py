@@ -29,22 +29,44 @@ def needed_jobs(body):
 
 
 class NodeSdkReleaseTests(unittest.TestCase):
-    def test_only_upstream_main_or_sdk_tag_pushes_publish_after_preflight(self):
+    def test_only_verified_tag_handoff_preserves_the_original_npm_trusted_workflow(self):
         workflow = (ROOT / ".github/workflows/node-sdk.yml").read_text()
         triggers = workflow.split("permissions:", 1)[0]
+        self.assertIn("workflow_call:\n    inputs:\n      phase:", triggers)
+        self.assertIn("default: build", triggers)
+        self.assertIn("branches: [main, development]", triggers)
         self.assertIn("tags: ['npm-v*']", triggers)
+        dispatch = triggers.split("  workflow_dispatch:", 1)[1]
+        self.assertIn("type: boolean\n        default: false", dispatch)
+        for name in ("release_run_id", "release_run_attempt", "expected_sha", "artifact_id"):
+            self.assertIn(f"      {name}:", dispatch)
         publish = job(workflow, "publish")
         condition = next(line for line in publish.splitlines() if line.strip().startswith("if:"))
-        for guard in ("github.repository == 'mongodb/kingfisher'", "github.event_name == 'push'",
-                      "(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/npm-v'))",
-                      "needs.source.outputs.publish == 'true'"):
+        for guard in ("github.repository == 'mongodb/kingfisher'",
+                      "github.event_name == 'workflow_dispatch'", "inputs.publish", "inputs.release_run_id != ''"):
             self.assertIn(guard, condition)
-        self.assertEqual({"source", "package", "verify"}, needed_jobs(publish))
+        self.assertNotIn("github.event_name == 'push'", condition)
+        self.assertEqual({"cohort"}, needed_jobs(publish))
+        cohort = job(workflow, "cohort")
+        self.assertIn("run: python3 scripts/check-node-sdk-cohort.py", cohort)
+        self.assertIn("actions: read", cohort)
+        coordinator = (ROOT / ".github/workflows/release.yml").read_text()
+        caller = job(coordinator, "publish-node-sdk")
+        self.assertEqual({"publish-ready", "node-sdk"}, needed_jobs(caller))
+        self.assertIn("if: needs.node-sdk.outputs.publish == 'true'", caller)
+        self.assertIn("run: python3 scripts/dispatch-node-sdk.py", caller)
+        self.assertIn("NPM_ARTIFACT_ID: ${{ needs.node-sdk.outputs.artifact_id }}", caller)
+        self.assertIn("actions: write", caller)
+        self.assertNotIn("contents: write", caller)
+        self.assertNotIn("id-token: write", caller)
+        self.assertNotIn("uses: ./.github/workflows/node-sdk.yml", caller)
         self.assertNotIn("always()", condition)
         self.assertIn("ref: ${{ github.sha }}", publish)
-        self.assertIn('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"', publish)
-        self.assertIn("git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main", publish)
-        self.assertIn("git merge-base --is-ancestor HEAD origin/main", publish)
+        self.assertIn("run: python3 scripts/check-node-sdk-cohort.py", publish)
+        self.assertLess(publish.index("scripts/check-node-sdk-cohort.py"), publish.index("actions/download-artifact@"))
+        self.assertIn("KINGFISHER_RELEASE_EXPECTED_SHA: ${{ inputs.expected_sha }}", publish)
+        self.assertIn("KINGFISHER_RELEASE_PUBLISH: ${{ inputs.publish }}", publish)
+        self.assertIn("KINGFISHER_RELEASE_COHORT: 'true'", publish)
         self.assertIn("run: npm run publish:registry", publish)
 
     def test_publisher_downloads_tested_artifacts_and_uses_oidc_only(self):
@@ -55,7 +77,10 @@ class NodeSdkReleaseTests(unittest.TestCase):
         self.assertIn("npm@11.21.1", publish)
         self.assertIn("node-version: '24.22.2'", publish)
         self.assertIn("package-manager-cache: false", publish)
-        self.assertIn("name: node-sdk-registry-staging", publish)
+        self.assertIn("artifact-ids: ${{ needs.cohort.outputs.artifact_id }}", publish)
+        self.assertIn("run-id: ${{ needs.cohort.outputs.run_id }}", publish)
+        self.assertIn("github-token: ${{ github.token }}", publish)
+        self.assertIn("merge-multiple: true", publish)
         self.assertIn("path: javascript/release", publish)
         self.assertNotIn("NPM_TOKEN", publish)
         self.assertNotIn("NODE_AUTH_TOKEN", publish)
@@ -66,7 +91,7 @@ class NodeSdkReleaseTests(unittest.TestCase):
         self.assertIn("group: npm-sdk-publish\n", publish)
         self.assertIn("queue: max", publish)
         self.assertNotIn("group: npm-sdk-publish-${{", publish)
-        for name in ("source", "build", "package", "verify"):
+        for name in ("source", "build", "package", "verify", "cohort"):
             self.assertNotIn("id-token: write", job(workflow, name))
             self.assertNotIn("environment: npm", job(workflow, name))
 
@@ -81,8 +106,11 @@ class NodeSdkReleaseTests(unittest.TestCase):
             self.assertIn(f"{output}: ${{{{ steps.release.outputs.{output} }}}}", source)
         self.assertLess(source.index("check-node-sdk-release.py"), source.index("npm ci"))
         self.assertIn("needs: source", build)
-        self.assertIn("if: needs.source.outputs.build == 'true'", build)
-        self.assertIn("needs: build", package)
+        self.assertIn("if: inputs.phase != 'publish'", source)
+        self.assertIn("if: needs.source.outputs.build == 'true' || inputs.phase == 'build'", build)
+        self.assertEqual({"source", "build"}, needed_jobs(package))
+        self.assertIn("if: needs.source.outputs.publish == 'true'", package)
+        self.assertIn("run: node scripts/publish-packages.cjs --json", package)
         self.assertIn("npm run check:release", package)
         self.assertIn("npm run test:package", package)
         for target in ("x86_64-apple-darwin", "aarch64-apple-darwin",

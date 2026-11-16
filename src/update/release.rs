@@ -41,30 +41,70 @@ pub(super) struct Release {
 pub(super) struct Updater {
     client: Client,
     api_url: reqwest::Url,
+    #[cfg(test)]
+    mock_http_origin: Option<url::Origin>,
 }
 
 impl Updater {
     pub fn new(base_url: Option<&str>) -> Result<Self> {
         let api_url = reqwest::Url::parse(base_url.unwrap_or(API_URL))?;
-        ensure!(matches!(api_url.scheme(), "https" | "http"), "Unsupported update URL");
-        let client = Client::builder()
+        ensure!(api_url.scheme() == "https", "Update URLs must use HTTPS");
+        let client = Self::client_builder().build()?;
+        Ok(Self {
+            client,
+            api_url,
+            #[cfg(test)]
+            mock_http_origin: None,
+        })
+    }
+
+    fn client_builder() -> reqwest::blocking::ClientBuilder {
+        Client::builder()
             .user_agent(concat!("kingfisher/", env!("CARGO_PKG_VERSION")))
+            // Authenticate both the metadata (including its digest) and the archive.
+            // Enforce this in the transport too, including every redirect hop.
+            .https_only(true)
             .connect_timeout(Duration::from_secs(15))
             .timeout(Duration::from_secs(300))
+    }
+
+    #[cfg(test)]
+    pub(super) fn for_mock_server(base_url: &str) -> Result<Self> {
+        let api_url = reqwest::Url::parse(base_url)?;
+        ensure!(
+            api_url.scheme() == "http"
+                && api_url.host().is_some_and(|host| match host {
+                    url::Host::Ipv4(address) => address.is_loopback(),
+                    url::Host::Ipv6(address) => address.is_loopback(),
+                    url::Host::Domain(_) => false,
+                }),
+            "Mock update server must use a loopback IP address"
+        );
+        // This transport is compiled only into unit tests. Never follow a fixture
+        // redirect or allow HTTP requests to any other origin (including ports).
+        let client = Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(5))
             .build()?;
-        Ok(Self { client, api_url })
+        Ok(Self { client, mock_http_origin: Some(api_url.origin()), api_url })
     }
 
     fn request(
         &self,
         mut url: reqwest::Url,
         accept: &'static str,
-    ) -> reqwest::blocking::RequestBuilder {
+    ) -> Result<reqwest::blocking::RequestBuilder> {
+        let secure = url.scheme() == "https";
+        #[cfg(test)]
+        let secure =
+            secure || self.mock_http_origin.as_ref().is_some_and(|origin| url.origin() == *origin);
+        ensure!(secure, "Update URLs must use HTTPS");
         // Public updates are always anonymous, including asset downloads. Ignore
         // environment tokens and URL credentials (reqwest otherwise adds Basic auth).
         let _ = url.set_username("");
         let _ = url.set_password(None);
-        self.client.get(url).header(header::ACCEPT, accept)
+        Ok(self.client.get(url).header(header::ACCEPT, accept))
     }
 
     pub fn get_latest_release(&self) -> Result<Release> {
@@ -73,7 +113,7 @@ impl Updater {
             self.api_url.as_str().trim_end_matches('/')
         ))?;
         let response =
-            self.request(url, "application/vnd.github+json").send()?.error_for_status()?;
+            self.request(url, "application/vnd.github+json")?.send()?.error_for_status()?;
         let mut body = Vec::new();
         copy_limited(response, &mut body, MAX_METADATA_BYTES)?;
         let response: ReleaseResponse = serde_json::from_slice(&body)?;
@@ -95,7 +135,7 @@ impl Updater {
         let directory = tempfile::tempdir()?;
         let mut archive = tempfile::tempfile_in(directory.path())?;
         let response = self
-            .request(reqwest::Url::parse(&asset.url)?, "application/octet-stream")
+            .request(reqwest::Url::parse(&asset.url)?, "application/octet-stream")?
             .send()?
             .error_for_status()?;
         copy_limited(response, &mut archive, MAX_ARCHIVE_BYTES)?;
@@ -372,7 +412,7 @@ mod tests {
             .await;
         let uri = server.uri();
         let requests = tokio::task::spawn_blocking(move || {
-            let updater = Updater::new(Some(&uri)).unwrap();
+            let updater = Updater::for_mock_server(&uri).unwrap();
             let mut release = Release {
                 version: semver::Version::new(99, 0, 0),
                 assets: vec![
@@ -466,23 +506,139 @@ mod tests {
         for token in ["expired-or-enterprise-token", "invalid\r\nheader"] {
             temp_env::with_vars([("GITHUB_TOKEN", Some(token)), ("GH_TOKEN", Some(token))], || {
                 let updater = Updater::new(None).unwrap();
-                for url in [
+                let urls = [
                     "https://api.github.com/repos/mongodb/kingfisher/releases/latest",
-                    "http://api.github.com/binary",
                     "https://api.github.com:8443/binary",
                     "https://example.com/binary",
-                    "https://user:password@api.github.com/binary",
-                ] {
-                    let request = updater
-                        .request(reqwest::Url::parse(url).unwrap(), "application/octet-stream")
-                        .build()
-                        .unwrap();
+                ]
+                .map(|url| reqwest::Url::parse(url).unwrap());
+                // Construct dummy userinfo without a credential-looking URI in source.
+                let mut credentialed_url =
+                    reqwest::Url::parse("https://api.github.com/binary").unwrap();
+                credentialed_url.set_username("user").unwrap();
+                credentialed_url.set_password(Some("password")).unwrap();
+                for url in urls.into_iter().chain([credentialed_url]) {
+                    let request =
+                        updater.request(url, "application/octet-stream").unwrap().build().unwrap();
                     assert!(!request.headers().contains_key(header::AUTHORIZATION));
                     assert!(request.url().username().is_empty());
                     assert!(request.url().password().is_none());
                 }
             });
         }
+    }
+
+    #[test]
+    fn production_updater_rejects_insecure_urls_before_network_access() {
+        for url in ["http://127.0.0.1:1", "ftp://127.0.0.1/archive", "file:///archive"] {
+            assert!(Updater::new(Some(url)).is_err(), "accepted insecure API URL: {url}");
+        }
+        let updater = Updater::new(None).unwrap();
+        let url = reqwest::Url::parse("http://127.0.0.1:1/archive").unwrap();
+        assert!(updater.request(url.clone(), "application/octet-stream").is_err());
+        // The transport independently enforces HTTPS even if a caller skips request().
+        assert!(updater.client.get(url).send().unwrap_err().is_builder());
+    }
+
+    #[test]
+    fn mock_transport_is_confined_to_its_loopback_origin() {
+        assert!(Updater::for_mock_server("https://127.0.0.1:1").is_err());
+        assert!(Updater::for_mock_server("http://192.168.0.1:1").is_err());
+        let updater = Updater::for_mock_server("http://127.0.0.1:1").unwrap();
+        for url in ["http://127.0.0.1:2/archive", "http://[::1]:1/archive"] {
+            assert!(
+                updater
+                    .request(reqwest::Url::parse(url).unwrap(), "application/octet-stream")
+                    .is_err()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn insecure_asset_never_downloads_or_replaces_the_executable() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let uri = server.uri();
+        tokio::task::spawn_blocking(move || {
+            let updater = Updater::new(None).unwrap();
+            let (name, _) = platform_archive(std::env::consts::OS, std::env::consts::ARCH).unwrap();
+            let release = Release {
+                version: semver::Version::new(99, 0, 0),
+                assets: vec![Asset { name: name.to_owned(), url: uri, digest: None }],
+            };
+            let error = updater
+                .install(&release, |_| panic!("insecure archive must never be installed"))
+                .unwrap_err();
+            assert!(error.to_string().contains("Update URLs must use HTTPS"), "{error:#}");
+        })
+        .await
+        .unwrap();
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn https_redirect_cannot_downgrade_to_http() -> Result<()> {
+        use std::sync::Arc;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let insecure_server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&insecure_server)
+            .await;
+        let certificate = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()])?;
+        let trust = reqwest::Certificate::from_der(certificate.cert.der())?;
+        let tls = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()?
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![certificate.cert.der().clone()],
+            rustls::pki_types::PrivatePkcs8KeyDer::from(certificate.signing_key.serialize_der())
+                .into(),
+        )?;
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+        let api_url = format!("https://{}", listener.local_addr()?);
+        let redirect_url = insecure_server.uri();
+        let tls_server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await?;
+            let mut stream = tokio_rustls::TlsAcceptor::from(Arc::new(tls)).accept(socket).await?;
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let count = stream.read(&mut buffer).await?;
+                ensure!(count > 0 && request.len() < 8192, "Incomplete update request");
+                request.extend_from_slice(&buffer[..count]);
+            }
+            let response = format!(
+                "HTTP/1.1 302 Found\r\nLocation: {redirect_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(response.as_bytes()).await?;
+            stream.shutdown().await?;
+            anyhow::Ok(())
+        });
+        tokio::task::spawn_blocking(move || {
+            let mut updater = Updater::new(Some(&api_url)).unwrap();
+            // Keep the production transport policy; trust only the ephemeral test CA.
+            updater.client = Updater::client_builder()
+                .tls_certs_merge([trust])
+                .no_proxy()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap();
+            let error = updater.get_latest_release().err().expect("HTTP downgrade was accepted");
+            assert!(error.downcast_ref::<reqwest::Error>().unwrap().is_redirect(), "{error:#}");
+        })
+        .await?;
+        tokio::time::timeout(Duration::from_secs(10), tls_server).await???;
+        assert!(insecure_server.received_requests().await.unwrap().is_empty());
+        Ok(())
     }
 
     #[test]

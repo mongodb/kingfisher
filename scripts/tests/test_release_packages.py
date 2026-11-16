@@ -54,7 +54,7 @@ class PackageLauncherTests(unittest.TestCase):
                            ("commit.gpgsign", "false"), ("tag.gpgsign", "false"), ("core.autocrlf", "false")):
             self.git("config", key, value)
         self.write_metadata("1.0.3", "1.4.0")
-        for workflow, inputs in (("release.yml", ("crates_only", "release_run_id", "expected_sha")),
+        for workflow, inputs in (("release.yml", ("publish", "expected_version", "crates_only", "release_run_id", "expected_sha")),
                                  ("python-sdk.yml", ("publish", "expected_sha", "expected_version"))):
             text = "name: Release fixture\non:\n  workflow_dispatch:\n    inputs:\n"
             for name in inputs:
@@ -254,7 +254,7 @@ class PackageLauncherTests(unittest.TestCase):
         self.release("kingfisher-secret-scanner")
         self.assertEqual(self.sdk_checks, [[sys.executable, "scripts/check-sdk-release.py", "--require-new",
                                           "--expected-version", "1.5.0"]])
-        self.assertEqual(self.actions, [["gh", "workflow", "run", "python-sdk.yml", "--repo", launcher.REPOSITORY,
+        self.assertEqual(self.actions, [["gh", "workflow", "run", "release.yml", "--repo", launcher.REPOSITORY,
                                         "--ref", "main", "-f", "publish=true", "-f", f"expected_sha={sha}",
                                         "-f", "expected_version=1.5.0"]])
         self.assertEqual(self.git("rev-parse", "v2.14.0^{commit}"), self.base)
@@ -524,11 +524,11 @@ class PackageLauncherTests(unittest.TestCase):
         self.assertEqual(self.actions, [])
 
     def test_inactive_workflow_or_missing_inputs_fail_before_sdk_check(self):
-        self.inactive.add("python-sdk.yml")
+        self.inactive.add("release.yml")
         with self.assertRaisesRegex(ValueError, "must be active"):
             self.release("kingfisher-secret-scanner")
         self.inactive.clear()
-        path = ".github/workflows/python-sdk.yml"
+        path = ".github/workflows/release.yml"
         self.write(path, (self.root / path).read_text(encoding="utf-8").replace("      expected_sha:\n", "      unrelated:\n"))
         self.commit()
         self.push_main()

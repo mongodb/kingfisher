@@ -23,29 +23,44 @@ spec.loader.exec_module(publisher)
 
 
 class PythonSdkReleaseTests(unittest.TestCase):
-    def test_main_pushes_publish_tested_artifacts_only_in_upstream(self):
+    def test_coordinator_publishes_tested_artifacts_only_in_authorized_upstream_phase(self):
         workflow = (ROOT / ".github/workflows/python-sdk.yml").read_text(encoding="utf-8")
         triggers = workflow.split("permissions:", 1)[0]
-        self.assertIn("branches: [main]", triggers)
-        publish = workflow.split("  publish:\n", 1)[1]
+        self.assertIn("workflow_call:", triggers)
+        self.assertIn("default: build", triggers)
+        self.assertNotIn("  push:", triggers)
+        self.assertNotIn("inputs:", triggers.split("  workflow_dispatch:", 1)[1])
+        publish = workflow.split("\n  publish:\n", 1)[1]
         plan = workflow.split("  plan-publish:\n", 1)[1].split("  publish:\n", 1)[0]
         condition = next(line for line in plan.splitlines() if line.strip().startswith("if:"))
-        for guard in ("github.repository == 'mongodb/kingfisher'",
-                      "github.event_name == 'push'", "github.ref == 'refs/heads/main'"):
+        for guard in ("github.repository == 'mongodb/kingfisher'", "needs.preflight.outputs.publish == 'true'"):
             self.assertIn(guard, condition)
         # Accept flow/block lists, quoting, whitespace and any dependency order.
         needs = re.search(r"(?m)^    needs:[ \t]*(\[[^\]]*\]|(?:\n[ \t]{6,}-[^\n]+)+)", plan)
         self.assertIsNotNone(needs)
         dependency_list = re.sub(r"#[^\n]*", "", needs.group(1))
         dependencies = set(re.findall(r"[\w-]+", dependency_list))
-        for required in ("wheels", "source", "cache-portability"):
+        for required in ("preflight", "wheels", "source", "cache-portability"):
             self.assertIn(required, dependencies)
         self.assertIn("name: pypi-sdk", publish)
-        self.assertIn("group: pypi-sdk-publish-${{ github.run_id }}", publish)
+        self.assertIn("group: pypi-sdk-publish\n", publish)
+        self.assertIn("queue: max", publish)
+        self.assertIn("cancel-in-progress: false", publish)
         self.assertIn("skip-existing: true", publish)
         self.assertIn("pattern: python-*", plan)
-        self.assertIn("if: needs.plan-publish.outputs.pending == 'true'", publish)
-        self.assertIn("needs: [plan-publish]", publish)
+        condition = next(line for line in publish.splitlines() if line.strip().startswith("if:"))
+        for guard in ("inputs.phase == 'publish'", "github.repository == 'mongodb/kingfisher'",
+                      "github.event_name == 'push'", "github.event_name == 'workflow_dispatch' && inputs.publish"):
+            self.assertIn(guard, condition)
+        self.assertNotIn("always()", condition)
+        self.assertNotRegex(publish, r"(?m)^    needs:")
+        self.assertIn("python3 scripts/check-release-source.py", publish)
+        self.assertLess(publish.index("check-release-source.py"), publish.index("pypa/gh-action-pypi-publish@"))
+        coordinator = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        caller = coordinator.split("  publish-python-sdk:\n", 1)[1].split("  publish-docker:\n", 1)[0]
+        for guard in ("needs: [publish-ready, python-sdk]", "if: needs.python-sdk.outputs.publish == 'true'",
+                      "uses: ./.github/workflows/python-sdk.yml", "phase: publish", "publish: true"):
+            self.assertIn(guard, caller)
         self.assertIn("name: python-sdk-pending", publish)
         self.assertNotIn("id-token: write", plan)
         self.assertNotIn("environment:", plan)
@@ -54,7 +69,7 @@ class PythonSdkReleaseTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/python-sdk.yml").read_text(encoding="utf-8")
         concurrency = workflow.split("concurrency:\n", 1)[1].split("env:\n", 1)[0]
         self.assertIn(
-            "group: python-sdk-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+            "group: python-sdk-${{ inputs.phase || 'build' }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
             concurrency,
         )
         self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", concurrency)

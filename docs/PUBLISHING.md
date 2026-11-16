@@ -30,8 +30,8 @@ The manifests currently prepare these releases; a Git tag does not override Carg
 The Python SDK (`kingfisher-secret-scanner`) is independently versioned at
 `1.6.4` in `crates/kingfisher-python/Cargo.toml`; Python modules share that version.
 The stable npm SDK uses **1.0.2** in `crates/kingfisher-node/Cargo.toml` and
-`javascript/package.json`, with six same-version native packages. Its `npm-v*`
-release tags do not publish the CLI or Python SDK.
+`javascript/package.json`, with six same-version native packages. Versions remain
+independent, but release triggers share the coordinated build gate below.
 
 The libraries follow semantic versioning and do not inherit the CLI version.
 Core 2.0.0 and scanner 4.0.0 migrate public Git types to `gix` 0.90;
@@ -91,8 +91,38 @@ cargo install --locked kingfisher-bin --version 2.19.0
 This installs the `kingfisher` command. See [library usage](LIBRARY.md#quick-start)
 for registry dependency examples. All four packages require Rust 1.99 or newer.
 The [release workflow](../.github/workflows/release.yml) publishes missing crate versions
-after its cross-platform tests, builds, and GitHub release succeed. It is restricted
-to `mongodb/kingfisher`; forks and the private development mirror do not publish crates.
+only in `mongodb/kingfisher`; forks and the private development mirror do not publish.
+
+## Coordinated release gate
+
+Upstream main pushes and matching CLI/Python/npm version tags run a single cohort at
+one pinned SHA. **Every** normal platform test and binary build, all four extracted
+Cargo package checks and the read-only registry plan, Python SDK wheels/sdist/cache
+tests, npm native builds and sealed-package tests, and six CLI PyPI wheel builds must
+succeed before any registry upload. Already-published unchanged SDKs still run their
+build/test matrices; their uploads are skipped. Failure, cancellation, or a skipped
+required build closes the gate for every publisher. Preparation jobs do not authenticate
+to registries. The reusable-call permission ceilings allow OIDC, but only the actual
+post-gate publisher jobs receive `id-token: write`.
+
+Main and SDK-tag runs publish pending crates and Python SDK versions, not just the
+package named by the tag. **npm remains tag-only:** its handoff requires an existing
+`npm-v<committed SDK version>` tag pointing to the producer's exact SHA. If that tag is
+missing or points elsewhere, main/CLI/Python runs skip npm without blocking other
+registries; the npm tag's own coordinator cohort can publish it. CI never creates or
+moves tags. Only CLI `v*` runs also publish a GitHub release, Docker image and CLI PyPI
+distribution; these wait for the shared gate and successful GitHub asset uploads.
+Manual CLI-tag dispatch retains the same gates. A manual main publication requires
+`publish=true`, a full pinned `expected_sha`, and the Python SDK `expected_version`.
+Ordinary standalone SDK, CLI-wheel and Docker dispatches build/test only; the internal
+Node publish dispatch must validate its authorizing coordinator run and artifacts.
+
+npm and PyPI upload their staged, tested archives without rebuilding them. Cargo
+rechecks the staged archive plan, then `cargo publish --locked` packages and verifies
+the same pinned source in dependency order. Cross-registry uploads are **not atomic**:
+a registry outage or authorization failure after the gate can leave a partial release.
+Retry failed publisher jobs in the original run, following the
+[npm handoff recovery rules](#npm-handoff-recovery) for npm; immutable-version checks remain enabled.
 
 ## Prepare the rule bundle
 
@@ -251,10 +281,11 @@ forcing a new rules release for every CLI release.
 Publishing runs in the `publish-crates` job of
 [`.github/workflows/release.yml`](../.github/workflows/release.yml), in the
 `mongodb/kingfisher` repository, using the `crates-io` GitHub environment.
-It follows version-tag pushes and manual dispatch on a tag. The workflow builds and tests,
-uploads assets to a draft GitHub release, and publishes it before starting downstream
-package publication. See the [maintainer release checklist](../.github/RELEASING.md).
-The release tag must be `v<kingfisher-bin version>` and point to the exact
+It follows main pushes, matching CLI/SDK tag pushes, and guarded manual dispatch,
+always after the complete coordinated gate. CLI-tag runs upload assets to a draft
+GitHub release and publish it before starting downstream package publication.
+See the [maintainer release checklist](../.github/RELEASING.md).
+A CLI release tag must be `v<kingfisher-bin version>` and point to the exact
 commit tested by the parent workflow. A stale tag pointing elsewhere stops publication.
 Concurrent publish jobs are serialized and never canceled halfway through an upload.
 
@@ -320,7 +351,8 @@ Bump the affected crate and its dependent minimum requirements; do not disable t
 publication planner or move the existing public release tag.
 
 When the GitHub release, binaries, Docker image and Python wheels already succeeded,
-a crates-only recovery does not rebuild or replace those artifacts. Merge the version,
+a crates-only recovery keeps those public artifacts unchanged. It reruns the current
+complete binary/SDK/package build gate before uploading only crates. Merge the version,
 lockfile, provenance and documentation corrections into `main`, then dispatch:
 
 ```sh
@@ -349,24 +381,30 @@ crate versions without retagging `v2.15.0` or republishing its assets.
 
 ## npm publishing with GitHub Actions
 
-The npm SDK publishes through [`.github/workflows/node-sdk.yml`](../.github/workflows/node-sdk.yml),
-not the Cargo release workflow. It uses **Trusted Publishing (OIDC)**: GitHub supplies
-a short-lived identity, so no `NPM_TOKEN` or `NODE_AUTH_TOKEN` publishing secret is needed.
-New SDK versions publish automatically after successful **upstream `main` push** CI;
-matching `npm-v<SDK-version>` tag pushes are also supported. PRs, development/fork
-pushes and manual dispatch only test; they never publish. Account ownership, GitHub
-environment protection and npm trust must be configured by an authorized maintainer;
-committing workflow YAML does not configure them.
+The [release coordinator](../.github/workflows/release.yml) reuses the build/test phase
+of [the Node SDK workflow](../.github/workflows/node-sdk.yml), but npm uploads run only
+in the **original top-level `node-sdk.yml`** workflow. After the complete shared gate,
+the coordinator dispatches that workflow at an **existing `npm-v<committed SDK version>`
+tag at the same SHA** and waits for its exact returned run ID. No CI job creates or
+moves tags. Missing/different-SHA npm tags skip the npm handoff on main/CLI/Python
+triggers; other registries proceed, and the npm tag's own coordinator cohort can publish it.
 
-### One-time setup
+**Trusted Publishing (OIDC)** retains the existing `node-sdk.yml` / `npm` identity,
+`npm-v*`-only environment and reviewer. **No existing npmjs account, Trusted Publisher
+connection, or publishing-access changes are needed.** Do not add a `release.yml` npm
+connection or widen `npm` to `main`, `v*`, or `python-v*`. No `NPM_TOKEN` or
+`NODE_AUTH_TOKEN` publishing secret is needed. PRs, development/fork pushes and ordinary
+manual SDK runs only test; only the validated internal coordinator handoff can publish.
+
+### One-time setup (new installations only)
 
 1. Review and merge the SDK and workflow into public **`mongodb/kingfisher` `main`**.
    The npm manifests' `repository.url` must match `https://github.com/mongodb/kingfisher.git`.
 2. In GitHub **Settings → Environments**, create an environment named exactly **`npm`**.
    Add required reviewers (and **Prevent self-review** if required). Under deployment
-   branches/tags, allow both the **branch** `main` and the **tag** pattern `npm-v*`.
-   A tag-only rule blocks automatic main publication; a main-only rule blocks tag
-   releases. Required reviewers still gate publication. Do not add an npm write-token secret.
+   branches/tags, allow the **tag pattern `npm-v*` only**, not `main`, `v*` or `python-v*`.
+   Existing installations keep their current tag-only rule and reviewer unchanged.
+   Do not add an npm write-token secret.
 3. In **Actions → Node SDK → Run workflow**, select `main`. This is a non-publishing
    dry run. Require all six native artifact builds, package staging and the separate
    sealed-tarball verification matrix to pass before configuring npm trust or creating a release tag.
@@ -392,6 +430,11 @@ committing workflow YAML does not configure them.
    successful OIDC publication within **48 hours** of creating each connection.
    If it expires, delete only that expired connection and recreate it.
 
+The npm publisher is a separate top-level run, not a reusable publish call from
+`release.yml`, preserving npm's original OIDC identity. Other registry identities
+also stay unchanged: Python SDK `python-sdk.yml` / `pypi-sdk`, CLI wheels `pypi.yml`
+with **no environment**, and crates `release.yml` / `crates-io`.
+
 Configure trust on **all seven packages**, not only the main SDK:
 
 - `kingfisher-secret-scanner`
@@ -409,37 +452,44 @@ is independent of the GitHub organization name.
 ### Publish and verify
 
 The publication job runs on a **GitHub-hosted runner**, uses Node **24.22.2**
-and npm **11.21.1**, and grants `id-token: write` only to that job. Use those
-exact publisher pins for local publishing setup as well; consumer runtime support
-is separate. Self-hosted publishers are unsupported.
+and npm **11.21.1**, and receives `id-token: write` only in the original Node SDK
+publisher. The parent dispatcher uses `contents: read` / `actions: write`, not npm
+OIDC or tag-write permission. Build runners remain read-only. Use those exact
+publisher pins for local publishing setup as well; consumer runtime support is
+separate. Self-hosted publishers are unsupported.
 
 The prepared SDK version is **1.0.2**. Synchronize the Node crate, all seven npm
 manifests, `Cargo.lock` and `javascript/package-lock.json`, then regenerate rule
 provenance after lockfile changes. Merge the reviewed version bump into upstream
-`main`; **no release tag is required**. A successful main-push pipeline publishes
-that new version after the protected `npm` deployment is approved (if reviewers
-are configured).
+`main`. **An npm release tag is required**; merging alone does not authorize npm
+publication. From a clean, reviewed current upstream `main` checkout, and only
+after separate authorization to create and push the new annotated tag, run:
+
+```sh
+make release npm
+```
+
+The command validates the matching manifests/lockfiles and pushes
+`npm-v<SDK-version>` as before. Its tag-triggered coordinator run tests the full
+same-SHA cohort before dispatching the protected Node publisher. A main/CLI/Python
+producer can hand off only when that exact npm tag already exists at its SHA. Confirm
+`origin` points to `mongodb/kingfisher`, not a private development remote; use
+`RELEASE_REMOTE=upstream` when that is the public remote's name.
 
 Before native builds, a read-only preflight validates committed manifests/locks,
 checks npm, and verifies publication source ancestry against fresh upstream `main`.
 Changed packaged/shared-runtime inputs cannot reuse an already-published SDK
 version: bump the SDK before merging, including for shared engine changes. An
-unchanged version already on npm is a no-op on main/tag pushes, avoiding redundant
-native builds. Unchanged means comparison against the exact source recorded in npm's
-published provenance, not just the previous push, so successful-release reruns are
-no-ops and later unrelated pushes cannot hide unreleased changes. Missing/invalid
-source provenance and registry lookup failures fail closed; prepare a new SDK
-version rather than guessing a baseline. Publication is serialized across versions
-with GitHub's [`queue: max` concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
+unchanged version already on npm skips upload, but its full native and sealed-tarball
+test matrix still gates the other coordinated releases, even without a matching npm
+tag. Unchanged means comparison against the exact source recorded in npm's published
+provenance, not just the previous push, so successful-release reruns skip uploads and
+later unrelated pushes cannot hide unreleased changes. Missing/invalid source
+provenance and registry lookup failures fail closed; prepare a new SDK version rather
+than guessing a baseline. Publication is serialized across versions with GitHub's
+[`queue: max` concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
 (up to 100 pending jobs), preventing `latest` races without replacing an earlier
 pending release.
-
-For an optional tag-triggered release, use a clean, reviewed current upstream `main`
-checkout and, only after separate authorization to create and push a new tag, run:
-
-```sh
-make release npm
-```
 
 Keep existing `npm-v1.0.0` and `npm-v1.0.1` tags unchanged: rerunning an old workflow
 uses its original commit, not updated `main`. Changed release inputs require a new
@@ -449,30 +499,59 @@ The six native build jobs produce platform artifacts; staging then seals seven
 packages. A **separate verification matrix** tests those tarballs on all six hosts
 under Node **22.13.0, 22.23.4, 24.0.0, 24.22.2, 26.0.0 and 26.13.0**. Support is
 limited to majors **22/24/26** (`^22.13.0 || ^24.0.0 || ^26.0.0`), including a
-tested Node 22.13.0 minimum. Wait for all checks before approving the protected
-**`npm`** deployment. `npm run pack:release` creates the tarballs and a SHA-512
-integrity manifest once, before verification. The publisher uploads those exact tested
-`javascript/release/archives/*.tgz` files, native packages first and the main SDK last;
-consumer checks and publication never repack. Only upstream main or matching SDK-tag
-pushes can publish, after **all** builds and package-verification jobs succeed;
-PR/development/fork/manual runs do not. CLI `v*` and Python `python-v*` tags are
-unrelated. Never upload the private development manifests or move an existing public tag.
+tested Node 22.13.0 minimum. `npm run pack:release` creates the tarballs and a SHA-512
+integrity manifest once, before verification.
+
+After **Release build gate** and **Authorize the complete release cohort** succeed,
+the parent uses [`scripts/dispatch-node-sdk.py`](../scripts/dispatch-node-sdk.py)
+to dispatch the original Node SDK workflow at the existing same-SHA npm tag and
+wait for the **exact returned run ID**, not a latest/name-matched run. The internal
+handoff supplies the producer run ID/`run_attempt`, full expected SHA and immutable
+staging artifact ID. Before entering the `npm` environment, and **again after its
+protected approval**, the Node child verifies:
+
+- The producer is the original upstream `release.yml` workflow/repository/run/attempt
+  at this SHA, with successful **Release build gate** and **Authorize the complete
+  release cohort** jobs.
+- The intended npm dispatcher is running or successful and its parent run has not
+  failed, been cancelled, or timed out.
+- The exact staging artifact ID and metadata belong to that producer run/SHA and
+  identify the unexpired `node-sdk-registry-staging` artifact.
+- The original top-level Node workflow runs at `npm-v<committed SDK version>` with
+  matching manifests, the remote tag still points to that same SHA, and the source
+  is an ancestor of freshly fetched upstream `main`.
+
+Only then does it download the sealed archives **cross-run by validated artifact
+ID**. Wait for all checks before approving the protected **`npm`** deployment. The
+publisher uploads the exact tested `javascript/release/archives/*.tgz` files,
+native packages first and the main SDK last; no child rebuild, repack or alternate
+artifact lookup is allowed. Ordinary standalone manual/build runs and
+PR/development/fork runs do not publish. Never upload the private development
+manifests or move an existing public tag.
 
 Verify all seven exact versions, npm provenance, and a fresh consumer installation
-with `npm audit signatures`.
-After OIDC succeeds, set **Settings → Publishing access → Require two-factor
-authentication and disallow tokens** on every package, revoke obsolete automation
-tokens, and reject only the unused dummy bootstrap stages. OIDC remains allowed.
+with `npm audit signatures`. Existing npmjs connections and publishing-access settings
+stay unchanged. Stable releases use `latest`; if any package already has a newer
+`latest`, the release instead uses `backport-<major>.<minor>` without downgrading that
+tag. Prereleases use `next`.
 
-Later versioned main merges publish automatically; optional `npm-v<SDK-version>`
-tags use the same checks and tested-artifact pipeline. Before using `make release npm`,
-confirm a clean, reviewed upstream `main` checkout and that `origin` points to
-`mongodb/kingfisher`, not a private development remote; creating/pushing a tag
-requires separate authorization. Stable releases use `latest`; if any package already
-has a newer `latest`, the release instead uses `backport-<major>.<minor>` without downgrading
-that tag. Prereleases use `next`. For partial failures, rerun only the failed
-publishing job in the original run to reuse the **same tested artifact**, including
-its archive manifest; identical published packages are skipped, conflicting bytes fail.
+### npm handoff recovery
+
+Recover partial uploads with the **same producer artifacts**, including their archive
+manifest; identical published packages are skipped and conflicting bytes fail. A failed
+Node child can be retried only while its authorizing parent run and intended npm
+dispatcher remain active or successful. Failed, cancelled, or timed-out parents reject
+stale children, including children waiting for protected approval.
+
+If that authorization no longer holds, rerun the **original central release run's failed
+npm handoff job**. It may dispatch a new Node child using the same tested producer
+artifacts and current producer-attempt authorization. Gates omitted from a
+[failed-job rerun](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs)
+retain their most recent result: that result must be successful, and the dispatcher must
+be running/successful in the current attempt. A newer failed/skipped/pending gate cannot
+fall back to an older success. Do not assume rerunning an old npm child after its parent
+failed will work. Keep the existing tag/SHA; do not create or
+move a tag, rebuild/repack an existing version, or start an independent manual publish.
 See the [maintainer release procedure](../.github/RELEASING.md) and
 [npm Trusted Publishing guide](https://docs.npmjs.com/trusted-publishers/).
 
@@ -488,12 +567,12 @@ The first command infers all four crates.io versions, checks the complete public
 plan, and discovers the original passing CLI release run for a failed-job retry or
 metadata-only recovery. The second infers the Python SDK version from
 `crates/kingfisher-python/Cargo.toml` and starts its tested publishing workflow.
-The third is an optional alternative to automatic main publication: it infers the
-independent Node SDK version from `javascript/package.json`, validates the matching
-native manifests/lockfiles, and pushes an annotated `npm-v<SDK-version>` tag.
-CI builds/verifies all packages before the protected `npm` deployment approval permits publication. Existing remote npm tags are rejected;
-retry the original run's failed job instead. A failed tag push can reuse an annotated
-local tag at the same commit.
+The third retains the required npm tag flow: it infers the independent Node SDK version
+from `javascript/package.json`, validates the matching native manifests/lockfiles, and
+pushes an annotated `npm-v<SDK-version>` tag. CI builds/verifies the complete cohort
+before the validated Node handoff and protected `npm` deployment permit publication.
+Existing remote npm tags are rejected; follow the [handoff recovery rules](#npm-handoff-recovery)
+instead. A failed tag push can reuse an annotated local tag at the same commit.
 None changes versions or accepts `VERSION`; commit and merge the intended version
 correction first. The full binary-release command remains `make release VERSION=X.Y.Z`.
 Use `RELEASE_REMOTE=upstream` when that named remote points to public `mongodb/kingfisher`.

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Read-only npm SDK release preflight (Python 3.11+; no registry writes).
 
-Only upstream main and matching npm-v* tag pushes can publish. Existing unchanged
-versions skip native builds; PRs and manual/development runs remain test-only.
+The central coordinator authorizes upstream main, manifest-matching release tags,
+guarded manual main publication, and manual CLI-tag completion. Other runs are test-only.
 """
 import argparse
 import base64
@@ -104,13 +104,15 @@ def published_source(root, metadata, version):
     definition = statement["predicate"]["buildDefinition"]
     workflow = definition["externalParameters"]["workflow"]
     ref = workflow["ref"]
+    event_name = definition["internalParameters"]["github"]["event_name"]
     if (workflow["repository"] != f"https://github.com/{UPSTREAM}"
             or workflow["path"] != ".github/workflows/node-sdk.yml"
-            or ref not in {"refs/heads/main", f"refs/tags/npm-v{version}"}
-            or definition["internalParameters"]["github"]["event_name"] != "push"
+            or not (ref == "refs/heads/main" or ref.startswith("refs/tags/npm-v"))
+            or not (event_name == "push" or (event_name == "workflow_dispatch"
+                    and ref.startswith("refs/tags/npm-v")))
             or statement["predicate"]["runDetails"]["builder"]["id"]
             != "https://github.com/actions/runner/github-hosted"):
-        raise ValueError("npm provenance source must be an upstream Node SDK release push")
+        raise ValueError("npm provenance source must retain the upstream Node SDK trusted workflow")
     dependencies = definition["resolvedDependencies"]
     if len(dependencies) != 1 or dependencies[0]["uri"] != f"git+https://github.com/{UPSTREAM}@{ref}":
         raise ValueError("Unexpected npm provenance source dependency")
@@ -118,6 +120,9 @@ def published_source(root, metadata, version):
     if not sdk.SHA.fullmatch(commit) or commit == "0" * 40:
         raise ValueError("Published npm source must name a full Git commit")
     sdk.git(root, "cat-file", "-e", f"{commit}^{{commit}}")
+    if not sdk.release_source.validate_release_ref(
+            root, ref, commit, versions={"npm": version}, git_fn=sdk.git):
+        raise ValueError("Published npm source must use a validated supported release ref")
     if releases.npm_version(root, commit) != version:
         raise ValueError("Published npm source manifests must match the registry version")
     return commit
@@ -196,23 +201,14 @@ def compare_source(root, env, event):
     return runtime_changed(root, base, sdk.git(root, "rev-parse", "HEAD"))
 
 
-def publication_source(root, env, version):
-    ref = env.get("GITHUB_REF", "")
-    if (env.get("GITHUB_REPOSITORY") != UPSTREAM or env.get("GITHUB_EVENT_NAME") != "push"
-            or not (ref == "refs/heads/main" or ref.startswith("refs/tags/npm-v"))):
-        return False
-    head = sdk.git(root, "rev-parse", "HEAD")
-    if not sdk.SHA.fullmatch(env.get("GITHUB_SHA", "")) or head != env["GITHUB_SHA"]:
-        raise ValueError("npm publication checkout must match the pinned GITHUB_SHA")
-    if ref.startswith("refs/tags/npm-v") and ref != f"refs/tags/npm-v{version}":
-        raise ValueError("npm release tag must match the SDK manifest version")
-    sdk.git(root, "fetch", "--no-tags", "origin", "refs/heads/main:refs/remotes/origin/main")
-    sdk.git(root, "merge-base", "--is-ancestor", head, "refs/remotes/origin/main")
-    return True
+def publication_source(root, env, version, event=None):
+    publish, _ = sdk.release_source.publication_source(
+        root, env, event or {}, versions={"npm": version}, git_fn=sdk.git)
+    return publish
 
 
 def workflow_plan(root, env, event, version):
-    publish = publication_source(root, env, version)
+    publish = publication_source(root, env, version, event)
     changed = compare_source(root, env, event)
     metadata = version_metadata(version) if publish or changed else None
     exists = metadata is not None
