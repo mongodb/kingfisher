@@ -1,6 +1,6 @@
 'use strict';
 // Planning is read-only with respect to registries. Only --publish can upload,
-// and it requires a matching GitHub-hosted OIDC SDK tag environment.
+// and it requires an upstream main push or matching SDK tag on GitHub-hosted OIDC.
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { checkRelease, readManifest } = require('./check-release.cjs');
@@ -128,9 +128,15 @@ function checkPublishEnvironment(plan, env = process.env) {
   assert.equal(env.GITHUB_ACTIONS, 'true', 'Publishing requires GitHub Actions');
   assert.equal(env.RUNNER_ENVIRONMENT, 'github-hosted', 'Publishing requires a GitHub-hosted runner');
   assert.equal(env.GITHUB_REPOSITORY, plan.repository, 'Publishing repository does not match package metadata');
-  assert.equal(env.GITHUB_REF_TYPE, 'tag', 'Publishing requires an SDK tag');
-  assert.equal(env.GITHUB_REF_NAME, `npm-v${plan.version}`, 'SDK tag must match the staged version');
-  assert.equal(env.GITHUB_REF, `refs/tags/npm-v${plan.version}`, 'Publishing requires the exact SDK tag ref');
+  assert.equal(env.GITHUB_EVENT_NAME, 'push', 'Publishing requires a push event');
+  if (env.GITHUB_REF === 'refs/heads/main') {
+    assert.equal(env.GITHUB_REF_TYPE, 'branch', 'Automatic publishing requires the main branch');
+    assert.equal(env.GITHUB_REF_NAME, 'main', 'Automatic publishing requires the main branch');
+  } else {
+    assert.equal(env.GITHUB_REF_TYPE, 'tag', 'Publishing requires main or an SDK tag');
+    assert.equal(env.GITHUB_REF_NAME, `npm-v${plan.version}`, 'SDK tag must match the staged version');
+    assert.equal(env.GITHUB_REF, `refs/tags/npm-v${plan.version}`, 'Publishing requires the exact SDK tag ref');
+  }
   assert.ok(env.ACTIONS_ID_TOKEN_REQUEST_URL && env.ACTIONS_ID_TOKEN_REQUEST_TOKEN,
     'Publishing requires id-token: write for GitHub OIDC');
 }

@@ -29,16 +29,21 @@ def needed_jobs(body):
 
 
 class NodeSdkReleaseTests(unittest.TestCase):
-    def test_only_upstream_sdk_tag_pushes_publish(self):
+    def test_only_upstream_main_or_sdk_tag_pushes_publish_after_preflight(self):
         workflow = (ROOT / ".github/workflows/node-sdk.yml").read_text()
         triggers = workflow.split("permissions:", 1)[0]
         self.assertIn("tags: ['npm-v*']", triggers)
         publish = job(workflow, "publish")
         condition = next(line for line in publish.splitlines() if line.strip().startswith("if:"))
         for guard in ("github.repository == 'mongodb/kingfisher'", "github.event_name == 'push'",
-                      "startsWith(github.ref, 'refs/tags/npm-v')"):
+                      "(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/npm-v'))",
+                      "needs.source.outputs.publish == 'true'"):
             self.assertIn(guard, condition)
-        self.assertTrue({"package", "verify"}.issubset(needed_jobs(publish)))
+        self.assertEqual({"source", "package", "verify"}, needed_jobs(publish))
+        self.assertNotIn("always()", condition)
+        self.assertIn("ref: ${{ github.sha }}", publish)
+        self.assertIn('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"', publish)
+        self.assertIn("git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main", publish)
         self.assertIn("git merge-base --is-ancestor HEAD origin/main", publish)
         self.assertIn("run: npm run publish:registry", publish)
 
@@ -56,6 +61,11 @@ class NodeSdkReleaseTests(unittest.TestCase):
         self.assertNotIn("NODE_AUTH_TOKEN", publish)
         self.assertNotIn("npm run build", publish)
         self.assertIn("cancel-in-progress: false", publish)
+        # Serialize tag-affecting publication across versions without evicting
+        # an earlier pending release; per-version groups race to downgrade latest.
+        self.assertIn("group: npm-sdk-publish\n", publish)
+        self.assertIn("queue: max", publish)
+        self.assertNotIn("group: npm-sdk-publish-${{", publish)
         for name in ("source", "build", "package", "verify"):
             self.assertNotIn("id-token: write", job(workflow, name))
             self.assertNotIn("environment: npm", job(workflow, name))
@@ -65,10 +75,13 @@ class NodeSdkReleaseTests(unittest.TestCase):
         source = job(workflow, "source")
         build = job(workflow, "build")
         package = job(workflow, "package")
-        self.assertIn("crates/kingfisher-node/Cargo.toml", source)
-        self.assertIn("npm-v${sdk.version}", source)
-        self.assertIn("git merge-base --is-ancestor HEAD origin/main", source)
+        self.assertIn("python3 scripts/check-node-sdk-release.py --github-event", source)
+        self.assertIn("ref: ${{ github.sha }}", source)
+        for output in ("build", "publish", "version"):
+            self.assertIn(f"{output}: ${{{{ steps.release.outputs.{output} }}}}", source)
+        self.assertLess(source.index("check-node-sdk-release.py"), source.index("npm ci"))
         self.assertIn("needs: source", build)
+        self.assertIn("if: needs.source.outputs.build == 'true'", build)
         self.assertIn("needs: build", package)
         self.assertIn("npm run check:release", package)
         self.assertIn("npm run test:package", package)

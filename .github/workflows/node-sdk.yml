@@ -4,9 +4,9 @@ on:
   push:
     branches: [main, development]
     tags: ['npm-v*']
-    paths: ['javascript/**', 'crates/**', 'Cargo.toml', 'Cargo.lock', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES', 'third-party/kingfisher-vectorscan/**', 'scripts/third-party-notices.cjs', 'scripts/tests/third-party-notices.test.cjs', 'scripts/license-overrides/**', 'Makefile', '.gitattributes', 'docs/JAVASCRIPT.md', 'scripts/tests/test_node_sdk*.py', '.github/actions/setup-node/**', '.github/actions/vectorscan-prebuilt/**', 'scripts/fetch-vectorscan.py', 'scripts/tests/test_fetch_vectorscan.py', '.github/workflows/node-sdk.yml']
+    paths: ['javascript/**', 'crates/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', 'rust-toolchain*', '.npmrc', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES', 'third-party/kingfisher-vectorscan/**', 'scripts/third-party-notices.cjs', 'scripts/tests/third-party-notices.test.cjs', 'scripts/license-overrides/**', 'Makefile', '.gitattributes', 'docs/JAVASCRIPT.md', 'scripts/check-node-sdk-release.py', 'scripts/check-sdk-release.py', 'scripts/release-packages.py', 'scripts/tests/test_node_sdk*.py', '.github/actions/setup-node/**', '.github/actions/vectorscan-prebuilt/**', 'scripts/fetch-vectorscan.py', 'scripts/tests/test_fetch_vectorscan.py', '.github/workflows/node-sdk.yml']
   pull_request:
-    paths: ['javascript/**', 'crates/**', 'Cargo.toml', 'Cargo.lock', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES', 'third-party/kingfisher-vectorscan/**', 'scripts/third-party-notices.cjs', 'scripts/tests/third-party-notices.test.cjs', 'scripts/license-overrides/**', 'Makefile', '.gitattributes', 'docs/JAVASCRIPT.md', 'scripts/tests/test_node_sdk*.py', '.github/actions/setup-node/**', '.github/actions/vectorscan-prebuilt/**', 'scripts/fetch-vectorscan.py', 'scripts/tests/test_fetch_vectorscan.py', '.github/workflows/node-sdk.yml']
+    paths: ['javascript/**', 'crates/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', 'rust-toolchain*', '.npmrc', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES', 'third-party/kingfisher-vectorscan/**', 'scripts/third-party-notices.cjs', 'scripts/tests/third-party-notices.test.cjs', 'scripts/license-overrides/**', 'Makefile', '.gitattributes', 'docs/JAVASCRIPT.md', 'scripts/check-node-sdk-release.py', 'scripts/check-sdk-release.py', 'scripts/release-packages.py', 'scripts/tests/test_node_sdk*.py', '.github/actions/setup-node/**', '.github/actions/vectorscan-prebuilt/**', 'scripts/fetch-vectorscan.py', 'scripts/tests/test_fetch_vectorscan.py', '.github/workflows/node-sdk.yml']
   workflow_dispatch:
 
 permissions:
@@ -20,33 +20,23 @@ jobs:
   source:
     name: Check SDK version and release source
     runs-on: ubuntu-24.04
+    outputs:
+      build: ${{ steps.release.outputs.build }}
+      publish: ${{ steps.release.outputs.publish }}
+      version: ${{ steps.release.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24.22.2'
           package-manager-cache: false
-      - name: Check source manifests before native builds
-        shell: bash
-        run: |
-          node - <<'NODE'
-          const assert = require('node:assert/strict');
-          const fs = require('node:fs');
-          const sdk = require('./javascript/package.json');
-          const rust = fs.readFileSync('crates/kingfisher-node/Cargo.toml', 'utf8');
-          assert.equal(sdk.version, /^version\s*=\s*"([^"]+)"/m.exec(rust)?.[1]);
-          assert.equal(sdk.private, true, 'Development manifests must not be published');
-          if (process.env.GITHUB_REF_TYPE === 'tag') {
-            assert.equal(process.env.GITHUB_REPOSITORY, 'mongodb/kingfisher');
-            assert.equal(process.env.GITHUB_REF_NAME, `npm-v${sdk.version}`);
-          }
-          NODE
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            git merge-base --is-ancestor HEAD origin/main
-          fi
+      - name: Check source manifests and npm before native builds (read-only)
+        id: release
+        run: python3 scripts/check-node-sdk-release.py --github-event
       - name: Check public Node-only TypeScript consumers before native builds
         working-directory: javascript
         run: |
@@ -64,6 +54,7 @@ jobs:
   build:
     name: Native (${{ matrix.target }})
     needs: source
+    if: needs.source.outputs.build == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
@@ -261,19 +252,23 @@ jobs:
 
   publish:
     name: Publish validated npm packages with OIDC
-    if: github.repository == 'mongodb/kingfisher' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/npm-v')
-    needs: [package, verify]
+    if: github.repository == 'mongodb/kingfisher' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/npm-v')) && needs.source.outputs.publish == 'true'
+    needs: [source, package, verify]
     runs-on: ubuntu-24.04
     environment: npm
     permissions:
       contents: read
       id-token: write
     concurrency:
-      group: npm-sdk-publish-${{ github.repository }}
+      # Serialize all versions so a slower old release cannot downgrade latest.
+      # Keep pending releases instead of replacing the previously queued job.
+      group: npm-sdk-publish
+      queue: max
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -289,6 +284,8 @@ jobs:
           path: javascript/release
       - name: Check released manifests and upstream ancestry
         run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
           git merge-base --is-ancestor HEAD origin/main
           node javascript/scripts/check-release.cjs
       - name: Publish exact tested archives, platforms first

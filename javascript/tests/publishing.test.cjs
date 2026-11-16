@@ -25,7 +25,7 @@ function pack(item, directory) {
   return archive;
 }
 function environment(overrides = {}) {
-  return { GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted',
+  return { GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'push', RUNNER_ENVIRONMENT: 'github-hosted',
     GITHUB_REPOSITORY: 'mongodb/kingfisher', GITHUB_REF_TYPE: 'tag',
     GITHUB_REF_NAME: `npm-v${pkg.version}`, GITHUB_REF: `refs/tags/npm-v${pkg.version}`,
     ACTIONS_ID_TOKEN_REQUEST_URL: 'https://example.invalid/oidc',
@@ -145,15 +145,35 @@ test('a changed local archive invalidates a plan before the first upload', async
   } finally { await mock.close(); cleanup(value); }
 });
 
-test('publication requires the exact repository, SDK tag, hosted runner and OIDC permission', () => {
+test('publication requires an upstream main or matching SDK tag push, hosted runner and OIDC', () => {
   const plan = { repository: 'mongodb/kingfisher', version: pkg.version };
-  checkPublishEnvironment(plan, environment());
-  for (const change of [{ GITHUB_ACTIONS: 'false' }, { RUNNER_ENVIRONMENT: 'self-hosted' },
-    { GITHUB_REPOSITORY: 'other/kingfisher' }, { GITHUB_REF_TYPE: 'branch' },
-    { GITHUB_REF_NAME: 'v2.17.0' }, { GITHUB_REF: 'refs/heads/main' },
-    { ACTIONS_ID_TOKEN_REQUEST_TOKEN: '' }]) {
-    assert.throws(() => checkPublishEnvironment(plan, environment(change)));
+  const main = { GITHUB_REF_TYPE: 'branch', GITHUB_REF_NAME: 'main', GITHUB_REF: 'refs/heads/main' };
+  for (const source of [{}, main]) {
+    checkPublishEnvironment(plan, environment(source));
+    for (const change of [{ GITHUB_ACTIONS: 'false' }, { RUNNER_ENVIRONMENT: 'self-hosted' },
+      { GITHUB_REPOSITORY: 'other/kingfisher' }, { GITHUB_EVENT_NAME: 'pull_request' },
+      { GITHUB_EVENT_NAME: 'workflow_dispatch' }, { GITHUB_EVENT_NAME: '' },
+      { GITHUB_REF_TYPE: 'branch', GITHUB_REF_NAME: 'development', GITHUB_REF: 'refs/heads/development' },
+      { GITHUB_REF_NAME: 'v2.17.0' }, { GITHUB_REF: 'refs/heads/feature/main' },
+      { ACTIONS_ID_TOKEN_REQUEST_URL: '' }, { ACTIONS_ID_TOKEN_REQUEST_TOKEN: '' }]) {
+      assert.throws(() => checkPublishEnvironment(plan, environment({ ...source, ...change })));
+    }
   }
+  assert.throws(() => checkPublishEnvironment(plan, environment({ GITHUB_REF_TYPE: 'branch' })));
+  assert.throws(() => checkPublishEnvironment(plan, environment({ ...main, GITHUB_REF_TYPE: 'tag' })));
+});
+
+test('an automatic main publication uploads the tested platform archives before the SDK', async () => {
+  const value = stagedFixture();
+  const mock = await registry();
+  try {
+    const plan = await createPlan(value.release, options(value, mock));
+    const uploads = [];
+    publishPlan(plan, { env: environment({ GITHUB_REF_TYPE: 'branch', GITHUB_REF_NAME: 'main',
+      GITHUB_REF: 'refs/heads/main' }), run: item => uploads.push(item.archive) });
+    assert.deepEqual(uploads, readArchives(value.release).map(item => item.archive));
+    assert.equal(plan.packages.at(-1).name, pkg.name);
+  } finally { await mock.close(); cleanup(value); }
 });
 
 test('a failed publication stops later packages and never ignores upload errors', async () => {

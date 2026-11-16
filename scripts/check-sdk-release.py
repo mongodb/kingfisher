@@ -88,15 +88,15 @@ def committed_toml(root, revision, path):
     return tomllib.loads(git(root, "show", f"{revision}:{path}"))
 
 
-def lock_dependencies(lock):
-    """Ignore CLI-only lock churn by comparing only the SDK dependency closure."""
+def lock_dependencies(lock, package_name="kingfisher-python"):
+    """Ignore CLI-only lock churn by comparing only the selected SDK dependency closure."""
     packages = lock["package"]
     by_name = {}
     for package in packages:
         by_name.setdefault(package["name"], []).append(package)
-    pending = [item for item in packages if item["name"] == "kingfisher-python"]
+    pending = [item for item in packages if item["name"] == package_name]
     if len(pending) != 1:
-        raise ValueError("Cargo.lock must contain exactly one kingfisher-python package")
+        raise ValueError(f"Cargo.lock must contain exactly one {package_name} package")
     selected = {}
     while pending:
         package = pending.pop()

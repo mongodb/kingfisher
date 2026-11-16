@@ -882,23 +882,24 @@ mod tests {
         String::from_utf8(output.stdout).unwrap().trim().to_string()
     }
 
-    // Worktree creation/locking uses the same Git oracle already required by
-    // these audit tests, with the filesystem argument passed without UTF-8 loss.
-    fn git_path_value(root: &Path, before: &[&str], path: &Path, after: &[&str]) {
-        // Worktree creation must not execute inherited post-checkout hooks.
-        let hooks = tempdir().unwrap();
-        let mut hooks_config = std::ffi::OsString::from("core.hooksPath=");
-        hooks_config.push(hooks.path());
-        let output = std::process::Command::new("git")
-            .current_dir(root)
-            .arg("-c")
-            .arg(hooks_config)
-            .args(before)
-            .arg(path)
-            .args(after)
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    // MSYS2 Git writes POSIX absolute paths into worktree links, which native
+    // gix cannot resolve on Windows. Use native fixture creation (without hooks)
+    // while keeping Git as the independent commit-count oracle.
+    fn add_worktree(repo: &gix::Repository, path: &Path, head: gix::ObjectId) {
+        let repo = gix::open_opts(
+            repo.git_dir(),
+            gix::open::Options::isolated()
+                .config_overrides(["user.name=tester", "user.email=tester@example.com"]),
+        )
+        .unwrap();
+        repo.prepare_add_worktree(
+            path,
+            gix::worktree::add::Head::Detached(head),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap()
+        .persist()
+        .unwrap();
     }
 
     fn assert_count_matches_git(root: &Path, branch: Option<&str>, expected: u64) {
@@ -1054,6 +1055,35 @@ mod tests {
     }
 
     #[test]
+    fn linked_worktree_fixture_paths_resolve_with_native_filesystem_apis() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        let repo = gix::init(root).unwrap();
+        let initial = commit(&repo, &[]);
+        fixture::detach_head(&repo, initial).unwrap();
+        let linked = root.join("linked worktree é");
+        add_worktree(&repo, &linked, initial);
+
+        // Check both directions without Git/MSYS2 path translation. A POSIX
+        // /c/... link would resolve against the wrong drive root on Windows.
+        let gitfile = std::fs::read_to_string(linked.join(".git")).unwrap();
+        let private = linked.join(gitfile.trim().strip_prefix("gitdir: ").unwrap());
+        assert!(private.join("HEAD").is_file(), "invalid native gitdir: {gitfile}");
+        let backpointer = std::fs::read_to_string(private.join("gitdir")).unwrap();
+        assert_eq!(
+            private.join(backpointer.trim()).canonicalize().unwrap(),
+            linked.join(".git").canonicalize().unwrap()
+        );
+        let linked_repo = gix::open(&linked).unwrap();
+        assert_eq!(
+            linked_repo.common_dir().canonicalize().unwrap(),
+            repo.common_dir().canonicalize().unwrap()
+        );
+        assert_count_matches_git(root, None, 1);
+        assert_count_matches_git(&linked, None, 1);
+    }
+
+    #[test]
     fn audit_counts_worktree_heads_and_private_refs_from_either_worktree() {
         let temp = tempdir().unwrap();
         let root = temp.path();
@@ -1072,7 +1102,7 @@ mod tests {
         .unwrap();
         fixture::set_head(&repo, "refs/heads/main").unwrap();
         let linked = root.join("linked worktree");
-        git_path_value(root, &["worktree", "add", "-b", "linked"], &linked, &["main"]);
+        add_worktree(&repo, &linked, initial);
         let linked_repo = gix::open(&linked).unwrap();
         fixture::detach_head(&linked_repo, linked_detached).unwrap();
         fixture::reference(
@@ -1111,10 +1141,10 @@ mod tests {
         .unwrap();
         fixture::set_head(&repo, "refs/heads/main").unwrap();
         let linked = root.join("linked worktree");
-        git_path_value(root, &["worktree", "add", "-b", "linked"], &linked, &["main"]);
+        add_worktree(&repo, &linked, initial);
         let linked_repo = gix::open(&linked).unwrap();
         fixture::detach_head(&linked_repo, detached).unwrap();
-        git_path_value(root, &["worktree", "lock", "--reason", "offline worktree"], &linked, &[]);
+        linked_repo.worktree().unwrap().set_lock(Some("offline worktree".into())).unwrap();
         assert_count_matches_git(root, None, 2);
 
         // Close handles before removing the checkout, especially on Windows.

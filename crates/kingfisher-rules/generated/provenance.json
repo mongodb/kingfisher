@@ -21,7 +21,7 @@
   },
   "bundle_format": "gzip / KFRULES v1 / generated YAML",
   "generator_input_sha256": {
-    "Cargo.lock": "771be0d653f623a00f1712ac986339213466487e3fa27eb040f688c507afc1c7",
+    "Cargo.lock": "92cde48a59663a1ca4e11cd34b9ad59f4dd3962f07cc70d30e6eb98770c135ac",
     "Cargo.toml": "0b6aba8aac9c11251443d35df4c338058a3c4b6b6c85b2d5e0dfc6c9f44f3c92",
     "LICENSE": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
     "crates/kingfisher-rules/Cargo.toml": "9bf4c49c1277094b4d3127f63e271aaf4c15955e016e0cc8e86c6d7f32f9e707",

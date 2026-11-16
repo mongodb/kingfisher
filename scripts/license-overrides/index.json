@@ -150,6 +150,20 @@
       ],
       "reason": "Verbatim selected license from the exact cached crate, or its .cargo_vcs_info.json-pinned upstream revision. A complete permitted OR alternative is selected; all required AND components are retained."
     },
+    "dua-core@4.2.0": {
+      "declaredLicense": "MIT",
+      "crateChecksum": "d687862f3206e7c660daeb6ab0200c65e58fccd7e508819e4bd9949304c640a8",
+      "vcsRevision": "2eeb1e88e7fbc2423b1b1d363be926731c94f82e",
+      "licenses": [
+        {
+          "license": "MIT",
+          "file": "license-61a0c6474f57e5e67c4c.txt",
+          "source": "https://raw.githubusercontent.com/Byron/dua-cli/2eeb1e88e7fbc2423b1b1d363be926731c94f82e/LICENSE",
+          "sha256": "61a0c6474f57e5e67c4c1aa5684d1acf5bd775f98ad3f888791117f9cf62b18c"
+        }
+      ],
+      "reason": "The dua-core crate declares MIT but omits its workspace license text. Preserve the verbatim MIT license from the repository revision pinned by its .cargo_vcs_info.json; verify the exact crate archive checksum and revision before reuse."
+    },
     "encoding_rs@0.8.44": {
       "declaredLicense": "(Apache-2.0 OR MIT) AND BSD-3-Clause",
       "crateChecksum": "89253175e704ab869b04f9db224d38630e0211a53841a79181deae0889e169f5",

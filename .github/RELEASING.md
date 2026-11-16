@@ -105,12 +105,16 @@ verbose tool/authentication logs remain private. No release is dispatched after 
   through the protected `pypi-sdk` environment. An existing version fails before those builds;
   missing-artifact staging and `skip-existing` remain final race/retry safeguards, not permission
   to replace an existing release. Ordinary versioned main merges still publish automatically.
-- **npm SDK:** infers the independent version from `javascript/package.json`, checks the
-  matching Node/native manifests and lockfiles, and pushes only an annotated
-  `npm-v<SDK-version>` tag. All six builds and sealed-package verification must pass before
-  approving the protected `npm` deployment. It never runs local `npm publish`. Existing
-  public tags are rejected; recover via the original run's failed publication job, not a new
-  tag. A failed push may reuse a same-commit annotated local tag. To select a public remote
+- **npm SDK:** new versioned upstream `main` merges publish automatically after all six
+  builds and sealed-package verification pass, subject to the protected `npm` deployment.
+  PRs, development/fork pushes and manual runs only test. The source preflight rejects
+  changed packaged/shared-runtime inputs at a published SDK version; unchanged published
+  versions skip release work. The optional `make release npm` command infers the version
+  from `javascript/package.json`, checks matching Node/native manifests and lockfiles, and
+  pushes an annotated `npm-v<SDK-version>` tag. It never runs local `npm publish`. Allow
+  both branch `main` and tag pattern `npm-v*` in the `npm` environment. Existing public
+  tags are rejected; recover via the original run's failed publication job and the same
+  tested tarballs, not a new tag. A failed push may reuse a same-commit annotated local tag. To select a public remote
   named `upstream`, use `make release npm RELEASE_REMOTE=upstream`.
 
 The `crates-io`, `pypi-sdk`, and `npm` environments and registry Trusted Publishers/API-token

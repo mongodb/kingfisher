@@ -59,7 +59,7 @@ test('platform preparation creates six private metadata packages without napi or
     const manifest = JSON.parse(fs.readFileSync(value.manifest(target), 'utf8'));
     const artifact = `${pkg.napi.binaryName}.${target.suffix}.node`;
     assert.equal(manifest.name, `${pkg.name}-${target.suffix}`);
-    assert.equal(manifest.version, '1.0.1');
+    assert.equal(manifest.version, pkg.version);
     assert.equal(manifest.private, true);
     assert.equal(manifest.main, artifact);
     assert.deepEqual(manifest.files, [artifact, 'README.md']);
@@ -93,7 +93,7 @@ test('platform preparation preserves source guard, exact optional dependencies, 
   for (const { file, contents } of originals) assert.deepEqual(fs.readFileSync(file), contents, file);
   const metadata = JSON.parse(root);
   assert.equal(metadata.private, true);
-  assert.equal(metadata.version, '1.0.1');
+  assert.equal(metadata.version, pkg.version);
   assert.equal(Object.keys(metadata.exports).filter(key => key !== './package.json').length, 8);
   assert.equal(Object.keys(metadata.optionalDependencies).length, 6);
 });
