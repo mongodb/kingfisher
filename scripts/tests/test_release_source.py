@@ -141,6 +141,23 @@ class SourceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "expected_sha"):
                 self.plan(env, {"inputs": {"crates_only": value}}, main=HEAD)
 
+    def test_sdk_recovery_pins_main_without_authorizing_ordinary_publishers(self):
+        env = environment(GITHUB_EVENT_NAME="workflow_dispatch")
+        for value in (True, "true"):
+            for publish in (True, "true", False, "false"):
+                with self.subTest(sdk_only=value, publish=publish):
+                    event = manual(sdk_only=value, publish=publish)
+                    plan, calls = self.plan(env, event, main=HEAD)
+                    self.assertFalse(plan["publish"])
+                    self.assertFalse(plan["cli-release"])
+                    self.assertIn(("fetch", "--no-tags", "origin", "refs/heads/main:refs/remotes/origin/main"), calls)
+                    with self.assertRaisesRegex(ValueError, "current upstream main SHA"):
+                        self.plan(env, event)
+                    with self.assertRaisesRegex(ValueError, "expected_sha"):
+                        self.plan(env, {"inputs": {"sdk_only": value}}, main=HEAD)
+        with self.assertRaisesRegex(ValueError, "refs/heads/main"):
+            self.plan({**env, "GITHUB_REF": "refs/tags/v2.14.0"}, manual(sdk_only=True), main=HEAD)
+
     def test_fetch_ancestry_and_invalid_main_fail_closed(self):
         for failure in ("fetch", "merge-base"):
             with self.subTest(failure=failure), self.assertRaises(subprocess.CalledProcessError):

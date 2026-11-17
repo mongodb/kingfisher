@@ -282,10 +282,11 @@ class WorkflowPlanTests(unittest.TestCase):
     def test_early_workflow_dag_guards_both_expensive_jobs_and_manual_publish(self):
         workflow = (ROOT / ".github/workflows/python-sdk.yml").read_text(encoding="utf-8")
         triggers = workflow.split("permissions:", 1)[0]
-        self.assertIn("workflow_call:\n    inputs:\n      phase:", triggers)
-        self.assertIn("default: build", triggers)
+        self.assertIn("workflow_call:\n    inputs:\n      build_all:", triggers)
         self.assertIn("type: boolean\n        default: false", triggers)
-        self.assertIn("expected_sha:", triggers)
+        self.assertNotIn("phase:", triggers)
+        self.assertNotIn("expected_sha:", triggers)
+        self.assertNotRegex(triggers.split("    outputs:", 1)[0], r"(?m)^      publish:")
         dispatch = triggers.split("  workflow_dispatch:", 1)[1]
         self.assertNotIn("inputs:", dispatch)
         self.assertNotIn("expected_version:", triggers)
@@ -294,7 +295,7 @@ class WorkflowPlanTests(unittest.TestCase):
         for guard in ("publish:", "type: boolean\n        default: false", "expected_sha:", "expected_version:"):
             self.assertIn(guard, dispatch)
         precheck = workflow.split("  preflight:\n", 1)[1].split("  wheels:\n", 1)[0]
-        self.assertIn("if: inputs.phase != 'publish'", precheck)
+        self.assertNotRegex(precheck, r"(?m)^    if:")
         self.assertIn("fetch-depth: 0", precheck)
         self.assertIn("ref: ${{ github.sha }}", precheck)
         self.assertIn("python3 scripts/check-sdk-release.py --github-event", precheck)
@@ -303,8 +304,8 @@ class WorkflowPlanTests(unittest.TestCase):
         for job in ("wheels", "source"):
             block = workflow.split(f"  {job}:\n", 1)[1].split("    steps:\n", 1)[0]
             self.assertIn("needs: preflight", block)
-            self.assertIn("if: needs.preflight.outputs.build == 'true' || inputs.phase == 'build'", block)
-        plan = workflow.split("  plan-publish:\n", 1)[1].split("  publish:\n", 1)[0]
+            self.assertIn("if: needs.preflight.outputs.build == 'true' || inputs.build_all", block)
+        plan = workflow.split("  plan-publish:\n", 1)[1]
         self.assertIn("needs.preflight.outputs.publish == 'true'", plan)
         self.assertIn("github.repository == 'mongodb/kingfisher'", plan)
         self.assertNotIn("id-token: write", plan)

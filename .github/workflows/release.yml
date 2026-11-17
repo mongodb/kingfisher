@@ -11,7 +11,7 @@ on:
         type: boolean
         default: false
       expected_version:
-        description: Pinned Python SDK version (required when publish is true)
+        description: Pinned Python SDK version (required when publish is true; original version for SDK recovery)
         type: string
         default: ""
       crates_only:
@@ -19,11 +19,27 @@ on:
         type: boolean
         default: false
       release_run_id:
-        description: Original successful GitHub release run ID (required for crates-only recovery)
+        description: Original producer run ID (required for crates-only or artifact-only SDK recovery)
         type: string
         default: ""
       expected_sha:
-        description: Reviewed full main SHA (required for publication or crates-only recovery)
+        description: Reviewed full current main SHA (required for publication or recovery)
+        type: string
+        default: ""
+      sdk_only:
+        description: Recover only the original tested Python SDK artifact without rebuilding
+        type: boolean
+        default: false
+      release_run_attempt:
+        description: Original producer run attempt (required for artifact-only SDK recovery)
+        type: string
+        default: ""
+      artifact_id:
+        description: Original immutable SDK pending artifact ID (required for artifact-only SDK recovery)
+        type: string
+        default: ""
+      producer_sha:
+        description: Original full producer SHA (required for artifact-only SDK recovery)
         type: string
         default: ""
 
@@ -47,6 +63,7 @@ env:
 jobs:
   validate-release:
     name: Verify release ref and version
+    if: ${{ !inputs.sdk_only }}
     runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.version.outputs.tag }}
@@ -95,6 +112,30 @@ jobs:
           RELEASE_RUN_ID: ${{ inputs.release_run_id }}
           EXPECTED_SHA: ${{ inputs.expected_sha }}
         run: python3 scripts/check-crates-recovery.py --release-run-id "$RELEASE_RUN_ID"
+
+  validate-sdk-recovery:
+    name: Verify artifact-only Python SDK recovery
+    if: github.event_name == 'workflow_dispatch' && inputs.sdk_only
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      run_id: ${{ steps.recovery.outputs.run_id }}
+      artifact_id: ${{ steps.recovery.outputs.artifact_id }}
+      artifact_digest: ${{ steps.recovery.outputs.artifact_digest }}
+      version: ${{ steps.recovery.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require the reviewed recovery source and original tested SDK artifact
+        id: recovery
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/check-python-sdk-recovery.py
 
   # Tests save their own dependency caches, including Linux debug artifacts.
   # Build jobs run in parallel; publishing waits for both tests and builds.
@@ -442,10 +483,9 @@ jobs:
     needs: [validate-release]
     uses: ./.github/workflows/python-sdk.yml
     with:
-      phase: build
+      build_all: true
     permissions:
       contents: read
-      id-token: write
 
   prepare-crates:
     name: Verify all crates and plan registry uploads
@@ -476,12 +516,10 @@ jobs:
       - name: Test libraries for registry-only recovery
         if: inputs.crates_only
         run: cargo test --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner
-      - name: Verify rule bundle and extracted packages before authenticating
-        run: |
-          cargo run --locked -p kingfisher-rule-bundle -- --check
-          cargo package --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner -p kingfisher-bin
-      - name: Plan all crate uploads (read-only)
-        run: python3 scripts/publish-crates.py --tag "$RELEASE_TAG"
+      - name: Verify the prepared rule bundle before packaging
+        run: cargo run --locked -p kingfisher-rule-bundle -- --check
+      - name: Package verified crates and plan all uploads (read-only)
+        run: python3 scripts/publish-crates.py --package --tag "$RELEASE_TAG"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: crates-registry-staging
@@ -493,11 +531,9 @@ jobs:
     uses: ./.github/workflows/pypi.yml
     with:
       tag: ${{ needs.validate-release.outputs.tag }}
-      phase: build
       use_artifacts: true
     permissions:
       contents: read
-      id-token: write
 
   # Skipped optional ancestors propagate through successful always() jobs.
   # Override implicit success() here and downstream, checking every required need.
@@ -664,18 +700,71 @@ jobs:
         run: python3 scripts/dispatch-node-sdk.py
 
   publish-python-sdk:
-    needs: [publish-ready, python-sdk]
+    name: Publish Python SDK to PyPI
+    needs: [publish-ready, python-sdk, validate-sdk-recovery]
     if: >-
-      always() && !cancelled() && needs.publish-ready.result == 'success' &&
-      needs.python-sdk.result == 'success' && needs.python-sdk.outputs.publish == 'true'
-    uses: ./.github/workflows/python-sdk.yml
-    with:
-      phase: publish
-      publish: true
-      expected_sha: ${{ inputs.expected_sha || '' }}
+      always() && !cancelled() && github.repository == 'mongodb/kingfisher' &&
+      ((!inputs.sdk_only && needs.publish-ready.result == 'success' &&
+        needs.python-sdk.result == 'success' && needs.python-sdk.outputs.publish == 'true') ||
+       (github.event_name == 'workflow_dispatch' && inputs.sdk_only &&
+        needs.validate-sdk-recovery.result == 'success'))
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: pypi-sdk-publish
+      queue: max
+      cancel-in-progress: false
+    environment:
+      name: pypi-sdk
+      url: https://pypi.org/p/kingfisher-secret-scanner
     permissions:
       contents: read
+      actions: read
       id-token: write
+    steps:
+      # Recovery always executes the reviewed current workflow, never producer code.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Recheck the pinned release source before authenticating
+        if: ${{ !inputs.sdk_only }}
+        run: python3 scripts/check-release-source.py
+      - name: Download the same-run tested SDK distributions
+        if: ${{ !inputs.sdk_only }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: python-sdk-pending
+          path: dist
+      - name: Recheck SDK recovery after environment approval and before downloading
+        if: inputs.sdk_only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/check-python-sdk-recovery.py
+      - name: Download only the validated original SDK artifact
+        if: inputs.sdk_only
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.validate-sdk-recovery.outputs.run_id }}
+          artifact-ids: ${{ needs.validate-sdk-recovery.outputs.artifact_id }}
+          path: dist
+          digest-mismatch: error
+      - name: Revalidate recovered SDK metadata and contents without installing
+        if: inputs.sdk_only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/check-python-sdk-recovery.py --dist dist
+      - name: Publish the exact tested SDK distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          skip-existing: true
+          attestations: true
+      - name: Verify every recovered SDK registry file matches the tested bytes
+        if: inputs.sdk_only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/check-python-sdk-recovery.py --dist dist --require-published
 
   # ──────────────── Publish Docker image ────────────────
   publish-docker:
@@ -693,18 +782,38 @@ jobs:
 
   # ──────────────── Publish PyPI wheels ────────────────
   publish-pypi:
+    name: Publish CLI wheels to PyPI
     needs: [release, publish-ready]
     if: >-
       always() && !cancelled() && needs.release.result == 'success' &&
       needs.publish-ready.result == 'success'
-    uses: ./.github/workflows/pypi.yml
-    with:
-      tag: ${{ needs.release.outputs.tag }}
-      phase: publish
-      use_artifacts: true
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: cli-pypi-publish
+      queue: max
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Recheck the tested release source
+        run: python3 scripts/check-release-source.py
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cli-pypi-staging
+          path: dist-pypi
+      - name: Publish the exact staged wheels to PyPI (Trusted Publishing)
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          packages-dir: dist-pypi
+          verbose: true
+          skip-existing: true
+          attestations: true
 
   publish-crates:
     name: Publish crates.io packages

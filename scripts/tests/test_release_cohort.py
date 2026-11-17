@@ -188,7 +188,7 @@ def expression_value(expression, context, results, cancelled=False):
 
 
 def job_runs(workflow, name, context, results, cancelled=False):
-    condition = field(workflow.jobs[name], "if") or "true"
+    condition = (field(workflow.jobs[name], "if") or "true").strip().removeprefix("${{").removesuffix("}}").strip()
     # Job success() includes all transitive needs, even a skipped ancestor behind
     # a successful always() job (actions/runner#2205), but not unrelated jobs.
     ancestors = {dependency: results[dependency] for dependency in workflow.ancestors(name)}
@@ -198,8 +198,13 @@ def job_runs(workflow, name, context, results, cancelled=False):
     return expression_value(condition, context, ancestors, cancelled)
 
 
-def workflow_results(workflow, context, cancelled=False):
-    """Activate the coordinator DAG; runnable jobs finish successfully offline."""
+def workflow_results(workflow, context, cancelled=False, conclusions=None):
+    """Activate the DAG; model declared step-check failures without executing code."""
+    conclusions = conclusions or {}
+    if conclusions.keys() - workflow.jobs.keys():
+        raise AssertionError("Unknown job conclusion override")
+    if any(value not in {"success", "failure", "cancelled", "skipped"} for value in conclusions.values()):
+        raise AssertionError("Unsupported job conclusion override")
     results = {}
     while len(results) != len(workflow.jobs):
         ready = [name for name in workflow.jobs if name not in results and workflow.needs[name] <= results.keys()]
@@ -208,7 +213,7 @@ def workflow_results(workflow, context, cancelled=False):
         for name in ready:
             # Reusable build callers reflect their observed successful builds,
             # not a skipped optional publisher inside the called workflow.
-            results[name] = "success" if job_runs(workflow, name, context, results, cancelled) else "skipped"
+            results[name] = conclusions.get(name, "success") if job_runs(workflow, name, context, results, cancelled) else "skipped"
     return results
 
 
@@ -217,22 +222,24 @@ class ReleaseCohortTests(unittest.TestCase):
     def setUpClass(cls):
         cls.release = Workflow.load("release.yml")
 
-    def context(self, cli=False, recovery=False):
+    def context(self, cli=False, recovery=False, sdk_recovery=False):
         return {
             "github.repository": "mongodb/kingfisher",
-            "github.event_name": "workflow_dispatch" if recovery else "push",
+            "github.event_name": "workflow_dispatch" if recovery or sdk_recovery else "push",
             "github.ref": "refs/tags/v2.19.0" if cli else "refs/heads/main",
             "inputs.crates_only": recovery,
-            "inputs.publish": False,
+            "inputs.sdk_only": sdk_recovery,
+            "inputs.publish": sdk_recovery,
             "needs.validate-release.outputs.cli-release": str(cli).lower(),
-            "needs.validate-release.outputs.publish": str(not recovery).lower(),
-            "needs.node-sdk.outputs.publish": str(not recovery).lower(),
-            "needs.python-sdk.outputs.publish": str(not recovery).lower(),
+            "needs.validate-release.outputs.publish": str(not (recovery or sdk_recovery)).lower(),
+            "needs.node-sdk.outputs.publish": str(not (recovery or sdk_recovery)).lower(),
+            "needs.python-sdk.outputs.publish": str(not (recovery or sdk_recovery)).lower(),
         }
 
     def results(self, cli=False, recovery=False):
         results = dict.fromkeys(self.release.jobs, "success")
         results["validate-crates-recovery"] = "success" if recovery else "skipped"
+        results["validate-sdk-recovery"] = "skipped"
         results["release"] = "success" if cli else "skipped"
         return results
 
@@ -298,23 +305,24 @@ class ReleaseCohortTests(unittest.TestCase):
         for name, body in self.release.jobs.items():
             permissions = field(body, "permissions") or ""
             writes_public_state = re.search(r"(?:contents|packages|attestations): write", permissions)
-            publishes_archives = re.search(r"(?:phase: publish|gh release edit|publish-crates\.py[^\n]* --publish)", body)
+            publishes_archives = re.search(r"(?:phase: publish|pypa/gh-action-pypi-publish@|gh release edit|publish-crates\.py[^\n]* --publish)", body)
             if writes_public_state or publishes_archives:
                 self.assertIn(name, PUBLISHERS | {"release"}, name)
-        for filename in ("node-sdk.yml", "python-sdk.yml", "pypi.yml"):
+        node = Workflow.load("node-sdk.yml")
+        for name, body in node.jobs.items():
+            if re.search(r"(?:npm run publish:registry|pypa/gh-action-pypi-publish@)", body):
+                self.assertEqual(name, "publish", "node-sdk.yml")
+        self.assertIn("inputs.release_run_id != ''", field(node.jobs["publish"], "if"))
+        self.assertEqual(node.needs["publish"], {"cohort"})
+        self.assertIn("environment: npm", node.jobs["publish"])
+        for filename in ("python-sdk.yml", "pypi.yml"):
             workflow = Workflow.load(filename)
-            for name, body in workflow.jobs.items():
-                has_publication = re.search(r"(?:npm run publish:registry|pypa/gh-action-pypi-publish@)", body)
-                if has_publication:
-                    self.assertEqual(name, "publish", filename)
-                    if filename == "node-sdk.yml":
-                        self.assertIn("inputs.release_run_id != ''", field(body, "if"))
-                        self.assertEqual(workflow.needs[name], {"cohort"})
-                    else:
-                        self.assertIn("inputs.phase == 'publish'", field(body, "if"))
-        self.assertIn("environment: npm", Workflow.load("node-sdk.yml").jobs["publish"])
-        self.assertIn("name: pypi-sdk", Workflow.load("python-sdk.yml").jobs["publish"])
-        self.assertNotIn("id-token: write", Workflow.load("pypi.yml").jobs["build-wheels"])
+            self.assertNotIn("publish", workflow.jobs, filename)
+            self.assertNotIn("pypa/gh-action-pypi-publish@", workflow.text, filename)
+            self.assertNotIn("id-token: write", workflow.text, filename)
+            self.assertNotIn("environment:", workflow.text, filename)
+        self.assertIn("name: pypi-sdk", field(self.release.jobs["publish-python-sdk"], "environment"))
+        self.assertIsNone(field(self.release.jobs["publish-pypi"], "environment"))
 
     def test_each_failed_cancelled_or_skipped_build_blocks_every_public_sink(self):
         for cli, recovery in ((False, False), (True, False), (False, True)):
@@ -339,8 +347,8 @@ class ReleaseCohortTests(unittest.TestCase):
             context = self.context(cli, recovery)
             for target in targets:
                 for dependency in self.release.needs[target]:
-                    if dependency == "validate-crates-recovery" and not recovery:
-                        continue
+                    if dependency == "validate-sdk-recovery" or (dependency == "validate-crates-recovery" and not recovery):
+                        continue  # Optional recovery branches are tested separately.
                     for status in ("failure", "cancelled", "skipped"):
                         if target == "publish-ready" and dependency == "release" and not cli and status == "skipped":
                             continue  # Only a non-CLI release may intentionally skip this need.
@@ -416,46 +424,42 @@ class ReleaseCohortTests(unittest.TestCase):
         self.assertNotIn("cargo package", body)
         self.assertLess(body.index("scripts/check-crates-recovery.py"), body.index("rust-lang/crates-io-auth-action@"))
 
-    def test_sdk_build_and_publish_are_separate_same_revision_calls(self):
+    def test_sdk_builders_keep_exact_source_and_existing_npm_handoff_identity(self):
         for sdk in ("node-sdk", "python-sdk"):
             with self.subTest(sdk=sdk):
                 workflow = Workflow.load(f"{sdk}.yml")
                 build = self.release.jobs[sdk]
                 publish = self.release.jobs[f"publish-{sdk}"]
                 self.assertEqual(field(build, "uses"), f"./.github/workflows/{sdk}.yml")
-                self.assertIn("phase: build", field(build, "with"))
-                if sdk == "node-sdk":
-                    self.assertIsNone(field(publish, "uses"), "npm must keep its original top-level workflow identity")
-                    self.assertIn("scripts/dispatch-node-sdk.py", publish)
-                    self.assertIn("actions: write", field(publish, "permissions"))
-                    self.assertNotIn("id-token: write", field(publish, "permissions"))
-                    self.assertNotIn("contents: write", field(publish, "permissions"))
-                else:
-                    self.assertEqual(field(publish, "uses"), f"./.github/workflows/{sdk}.yml")
-                    self.assertIn("phase: publish", field(publish, "with"))
-                    self.assertIn("publish: true", field(publish, "with"))
-                    self.assertIn("expected_sha:", field(publish, "with"))
-                    self.assertIn("id-token: write", field(publish, "permissions"))
-                self.assertIn("id-token: write", field(build, "permissions"))
-                # Caller permissions are only a ceiling; build jobs never receive OIDC.
+                self.assertIsNone(field(publish, "uses"), "registry sinks must retain their supported top-level identity")
                 self.assertNotIn("id-token: write", workflow.header)
                 for name, job in workflow.jobs.items():
                     if name != "publish":
                         self.assertNotIn("id-token: write", job, name)
                         self.assertNotIn("environment:", job, name)
-                publisher = workflow.jobs["publish"]
-                self.assertIn("id-token: write", field(publisher, "permissions"))
-                self.assertIn("inputs.publish", field(publisher, "if"))
-                self.assertIn("ref: ${{ github.sha }}", publisher)
                 if sdk == "node-sdk":
+                    self.assertIn("phase: build", field(build, "with"))
+                    # npm keeps its existing trusted publisher and nested permission ceiling.
+                    self.assertIn("id-token: write", field(build, "permissions"))
+                    self.assertIn("scripts/dispatch-node-sdk.py", publish)
+                    self.assertIn("actions: write", field(publish, "permissions"))
+                    self.assertNotIn("id-token: write", field(publish, "permissions"))
+                    self.assertNotIn("contents: write", field(publish, "permissions"))
+                    publisher = workflow.jobs["publish"]
+                    self.assertIn("id-token: write", field(publisher, "permissions"))
+                    self.assertIn("inputs.publish", field(publisher, "if"))
+                    self.assertIn("ref: ${{ github.sha }}", publisher)
                     self.assertEqual(workflow.needs["publish"], {"cohort"})
                     self.assertIn("scripts/check-node-sdk-cohort.py", workflow.jobs["cohort"])
                     self.assertIn("scripts/check-node-sdk-cohort.py", publisher)
                     self.assertIn("inputs.release_run_id != ''", field(publisher, "if"))
                 else:
-                    self.assertFalse(workflow.needs["publish"], "publish must not depend on phase-skipped build jobs")
-                    self.assertIn("inputs.phase == 'publish'", field(publisher, "if"))
-                    self.assertIn("scripts/check-release-source.py", publisher)
+                    self.assertIn("build_all: true", field(build, "with"))
+                    self.assertEqual(permission_levels(build), {"contents": 1})
+                    self.assertNotIn("publish", workflow.jobs)
+                    self.assertIn("id-token: write", field(publish, "permissions"))
+                    self.assertIn("ref: ${{ github.sha }}", publish)
+                    self.assertIn("scripts/check-release-source.py", publish)
         node = Workflow.load("node-sdk.yml")
         python = Workflow.load("python-sdk.yml")
         self.assertEqual(node.needs["verify"], {"package"})
@@ -464,7 +468,14 @@ class ReleaseCohortTests(unittest.TestCase):
         # Registry no-ops may skip publication, never the full coordinator build.
         self.assertIn("inputs.phase == 'build'", field(node.jobs["build"], "if"))
         for name in ("wheels", "source"):
-            self.assertIn("inputs.phase == 'build'", field(python.jobs[name], "if"))
+            condition = field(python.jobs[name], "if")
+            self.assertIn("inputs.build_all", condition)
+            self.assertTrue(expression_value(condition, {
+                "needs.preflight.outputs.build": "false", "inputs.build_all": True,
+            }, {}))
+            self.assertFalse(expression_value(condition, {
+                "needs.preflight.outputs.build": "false", "inputs.build_all": False,
+            }, {}))
 
     def test_reusable_calls_allow_every_nested_job_permission_even_when_skipped(self):
         for name, caller in self.release.jobs.items():
@@ -501,7 +512,8 @@ class ReleaseCohortTests(unittest.TestCase):
                 workflow = Workflow.load(filename)
                 self.assertIn("actions/upload-artifact@", workflow.jobs[producer])
                 self.assertIn(f"name: {artifact}", workflow.jobs[producer])
-                publish = workflow.jobs["publish"]
+                publish = (workflow.jobs["publish"] if filename == "node-sdk.yml" else
+                           self.release.jobs["publish-python-sdk" if filename == "python-sdk.yml" else "publish-pypi"])
                 self.assertIn("actions/download-artifact@", publish)
                 if filename == "node-sdk.yml":
                     self.assertIn("artifact-ids: ${{ needs.cohort.outputs.artifact_id }}", publish)
@@ -510,8 +522,12 @@ class ReleaseCohortTests(unittest.TestCase):
                     self.assertIn("artifact_id:\n        value: ${{ jobs.package.outputs.artifact_id }}", workflow.header)
                     self.assertIn("artifact_id: ${{ steps.staging.outputs.artifact-id }}", workflow.jobs[producer])
                 else:
-                    self.assertIn(f"name: {artifact}", publish)
-                    self.assertNotRegex(publish, r"(?m)^\s+(?:run-id|github-token|repository):")
+                    downloads = list(action_options(publish, "actions/download-artifact"))
+                    same_run = [options for options in downloads if field(options, "name", indent=0) == artifact]
+                    self.assertEqual(len(same_run), 1)
+                    self.assertNotRegex(same_run[0], r"(?m)^\s*(?:run-id|github-token|repository|artifact-ids):")
+                    if filename == "pypi.yml":
+                        self.assertEqual(len(downloads), 1)
                 self.assertIn(f"path: {destination}", publish)
                 self.assertNotRegex(publish, r"(?:npm run (?:build|pack:release|prepare:)|maturin (?:build|sdist)|build-pypi-wheel\.sh|gh release download)")
         node = Workflow.load("node-sdk.yml")
@@ -521,14 +537,144 @@ class ReleaseCohortTests(unittest.TestCase):
         self.assertIn("pattern: python-*", python.jobs["plan-publish"])
         pypi = Workflow.load("pypi.yml")
         self.assertIn("use_artifacts: true", self.release.jobs["prepare-pypi"])
-        self.assertIn("use_artifacts: true", self.release.jobs["publish-pypi"])
+        self.assertEqual(permission_levels(self.release.jobs["prepare-pypi"]), {"contents": 1})
         self.assertTrue({"linux-x64", "linux-arm64", "windows", "macos-x64", "macos-arm64"} <= self.release.needs["prepare-pypi"])
         self.assertIn("actions/download-artifact@", pypi.jobs["build-wheels"])
         self.assertIn("inputs.use_artifacts", pypi.jobs["build-wheels"])
         self.assertIn("name: crates-registry-staging", self.release.jobs["prepare-crates"])
-        self.assertIn("cargo package --locked", self.release.jobs["prepare-crates"])
+        self.assertIn('scripts/publish-crates.py --package --tag "$RELEASE_TAG"',
+                      self.release.jobs["prepare-crates"])
         self.assertNotIn("--no-verify", self.release.jobs["prepare-crates"])
         self.assertNotIn("--publish", self.release.jobs["prepare-crates"])
+
+    def test_direct_pypi_publishers_preserve_identity_attestations_and_package_guards(self):
+        for name, group in (("publish-python-sdk", "pypi-sdk-publish"),
+                            ("publish-pypi", "cli-pypi-publish")):
+            with self.subTest(job=name):
+                body = self.release.jobs[name]
+                self.assertIsNone(field(body, "uses"), "PyPI does not support reusable publishing workflows")
+                self.assertIsNotNone(field(body, "runs-on"))
+                self.assertIn("always() && !cancelled()", field(body, "if"))
+                self.assertEqual(field(body, "concurrency"),
+                                 f"group: {group}\nqueue: max\ncancel-in-progress: false")
+                self.assertEqual(permission_levels(body), {
+                    "contents": 1, "id-token": 2, **({"actions": 1} if name == "publish-python-sdk" else {}),
+                })
+                checkout, = action_options(body, "actions/checkout")
+                self.assertEqual(field(checkout, "ref", indent=0), "${{ github.sha }}")
+                self.assertEqual(field(checkout, "fetch-depth", indent=0), "0")
+                self.assertEqual(field(checkout, "persist-credentials", indent=0), "false")
+                upload, = action_options(body, "pypa/gh-action-pypi-publish")
+                self.assertEqual(field(upload, "attestations", indent=0), "true")
+                self.assertEqual(field(upload, "skip-existing", indent=0), "true")
+                self.assertLess(body.index("scripts/check-release-source.py"),
+                                body.index("pypa/gh-action-pypi-publish@"))
+                for ref in re.findall(r"(?m)^\s+(?:- )?uses: \S+@(\S+)", body):
+                    self.assertRegex(ref, r"^[0-9a-f]{40}$")
+        self.assertIn("name: pypi-sdk", field(self.release.jobs["publish-python-sdk"], "environment"))
+        self.assertIsNone(field(self.release.jobs["publish-pypi"], "environment"),
+                          "The existing CLI publisher has no environment")
+
+    def test_artifact_only_sdk_recovery_has_exact_explicit_pins_and_read_only_validation(self):
+        inputs = dict(re.findall(r"(?m)^      (\w+):\n((?:        [^\n]*\n)+)", self.release.header))
+        self.assertEqual(set(inputs), {"publish", "expected_version", "crates_only", "release_run_id",
+                                       "expected_sha", "sdk_only", "release_run_attempt", "artifact_id", "producer_sha"})
+        self.assertIn("type: boolean\n        default: false", inputs["sdk_only"])
+        for name in ("release_run_attempt", "artifact_id", "producer_sha"):
+            self.assertIn('type: string\n        default: ""', inputs[name])
+        self.assertIn("SDK recovery", inputs["release_run_id"])
+        self.assertEqual(field(self.release.jobs["validate-release"], "if"), "${{ !inputs.sdk_only }}")
+        validate = self.release.jobs["validate-sdk-recovery"]
+        self.assertEqual(field(validate, "name"), "Verify artifact-only Python SDK recovery")
+        self.assertEqual(field(validate, "if"), "github.event_name == 'workflow_dispatch' && inputs.sdk_only")
+        self.assertEqual(permission_levels(validate), {"contents": 1, "actions": 1})
+        self.assertFalse(self.release.needs["validate-sdk-recovery"])
+        checkout, = action_options(validate, "actions/checkout")
+        self.assertEqual(field(checkout, "ref", indent=0), "${{ github.sha }}")
+        self.assertEqual(field(checkout, "fetch-depth", indent=0), "0")
+        self.assertEqual(field(checkout, "persist-credentials", indent=0), "false")
+        for key in ("run_id", "artifact_id", "artifact_digest", "version"):
+            self.assertIn(f"{key}: ${{{{ steps.recovery.outputs.{key} }}}}", field(validate, "outputs"))
+        self.assertIn("id: recovery", validate)
+        self.assertIn("GH_TOKEN: ${{ github.token }}", validate)
+        self.assertIn("run: python3 scripts/check-python-sdk-recovery.py\n", validate)
+        self.assertNotIn("id-token:", validate)
+        self.assertNotIn("environment:", validate)
+
+    def test_artifact_only_sdk_recovery_runs_no_builds_or_other_publishers(self):
+        context = self.context(sdk_recovery=True)
+        results = workflow_results(self.release, context)
+        self.assertEqual({name for name, result in results.items() if result == "success"},
+                         {"validate-sdk-recovery", "publish-python-sdk"})
+        for status in ("failure", "cancelled", "skipped"):
+            results = workflow_results(self.release, context, conclusions={"validate-sdk-recovery": status})
+            for name in BUILD_GATES | PUBLISHERS | {"release", "release-ready", "publish-ready"}:
+                with self.subTest(recovery=status, job=name):
+                    self.assertEqual(results[name], "skipped")
+        # The read-only validator rejects these inputs/events in its step. A failed
+        # validation must never fall through to the normal full-build branch.
+        for override in ({"inputs.publish": False}, {"inputs.crates_only": True},
+                         {"github.repository": "fork/kingfisher"}, {"github.ref": "refs/heads/development"}):
+            invalid = {**context, **override}
+            results = workflow_results(self.release, invalid, conclusions={"validate-sdk-recovery": "failure"})
+            for name in BUILD_GATES | PUBLISHERS | {"release", "release-ready", "publish-ready"}:
+                with self.subTest(override=override, job=name):
+                    self.assertEqual(results[name], "skipped")
+        for override in ({"github.repository": "fork/kingfisher"}, {"github.event_name": "push"}):
+            invalid = {**context, **override}
+            self.assertFalse(job_runs(self.release, "publish-python-sdk", invalid,
+                                      dict.fromkeys(self.release.jobs, "success")))
+        results = workflow_results(self.release, context, cancelled=True)
+        self.assertTrue(all(result == "skipped" for result in results.values()))
+
+    def test_sdk_recovery_optional_skip_never_suppresses_normal_sdk_publication(self):
+        for cli in (False, True):
+            context = self.context(cli=cli)
+            results = workflow_results(self.release, context)
+            self.assertEqual(results["validate-sdk-recovery"], "skipped")
+            self.assertEqual(results["validate-crates-recovery"], "skipped")
+            self.assertEqual(results["publish-python-sdk"], "success")
+            for need in ("publish-ready", "python-sdk"):
+                for status in ("failure", "cancelled", "skipped"):
+                    with self.subTest(cli=cli, need=need, status=status):
+                        failed = {**results, need: status}
+                        self.assertFalse(job_runs(self.release, "publish-python-sdk", context, failed))
+            context["needs.python-sdk.outputs.publish"] = "false"
+            self.assertFalse(job_runs(self.release, "publish-python-sdk", context, results))
+            self.assertFalse(job_runs(self.release, "publish-python-sdk", self.context(cli=cli), results, cancelled=True))
+
+    def test_sdk_recovery_rechecks_after_approval_downloads_pinned_artifact_and_never_executes_it(self):
+        publish = self.release.jobs["publish-python-sdk"]
+        self.assertEqual(self.release.needs["publish-python-sdk"], {"publish-ready", "python-sdk", "validate-sdk-recovery"})
+        steps = re.split(r"(?m)^      - ", publish)[1:]
+        checks = [step for step in steps if "run: python3 scripts/check-python-sdk-recovery.py" in step]
+        self.assertEqual(len(checks), 3)
+        for step in checks:
+            self.assertEqual(field(step, "if", indent=8), "inputs.sdk_only")
+            self.assertIn("GH_TOKEN: ${{ github.token }}", field(step, "env", indent=8))
+        downloads = [step for step in steps if "uses: actions/download-artifact@" in step]
+        self.assertEqual(len(downloads), 2)
+        same_run, recovery = downloads
+        self.assertEqual(field(same_run, "if", indent=8), "${{ !inputs.sdk_only }}")
+        self.assertIn("name: python-sdk-pending", same_run)
+        self.assertEqual(field(recovery, "if", indent=8), "inputs.sdk_only")
+        options = field(recovery, "with", indent=8)
+        self.assertEqual(field(options, "run-id", indent=0), "${{ needs.validate-sdk-recovery.outputs.run_id }}")
+        self.assertEqual(field(options, "artifact-ids", indent=0), "${{ needs.validate-sdk-recovery.outputs.artifact_id }}")
+        self.assertEqual(field(options, "github-token", indent=0), "${{ github.token }}")
+        self.assertEqual(field(options, "path", indent=0), "dist")
+        self.assertEqual(field(options, "digest-mismatch", indent=0), "error")
+        self.assertIsNone(field(options, "name", indent=0))
+        self.assertIsNone(field(options, "pattern", indent=0))
+        self.assertNotIn("--dist", checks[0])
+        self.assertIn("--dist dist", checks[1])
+        self.assertLess(steps.index(checks[0]), steps.index(recovery))
+        self.assertLess(steps.index(recovery), steps.index(checks[1]))
+        self.assertLess(publish.index(checks[1]), publish.index("pypa/gh-action-pypi-publish@"))
+        self.assertNotIn("--require-published", checks[1])
+        self.assertIn("run: python3 scripts/check-python-sdk-recovery.py --dist dist --require-published", checks[2])
+        self.assertGreater(publish.index(checks[2]), publish.index("pypa/gh-action-pypi-publish@"))
+        self.assertNotRegex(publish, r"(?:pip install|uv (?:pip|run)|maturin|cargo |python[0-9]* -m|build-pypi-wheel|producer_sha)")
 
     def test_cli_wheel_download_patterns_match_actual_binary_artifact_names(self):
         binaries = ("linux-x64", "linux-arm64", "macos-x64", "macos-arm64", "windows")
@@ -571,7 +717,14 @@ class ReleaseCohortTests(unittest.TestCase):
                 workflow = Workflow.load(filename)
                 triggers = workflow.header.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
                 call = field(triggers, "workflow_call", indent=2)
-                self.assertRegex(call, r"(?s)phase:.*?default: build")
+                if filename in ("node-sdk.yml", "release-docker.yml"):
+                    self.assertRegex(call, r"(?s)phase:.*?default: build")
+                else:
+                    self.assertNotIn("phase:", call or "")
+                    self.assertNotRegex((call or "").split("outputs:", 1)[0], r"(?m)^publish:")
+                    self.assertNotIn("expected_sha:", call or "")
+                    self.assertNotIn("pypa/gh-action-pypi-publish@", workflow.text)
+                    self.assertNotIn("id-token: write", workflow.text)
                 dispatch = field(triggers, "workflow_dispatch", indent=2)
                 self.assertNotIn("phase:", dispatch or "")
                 if filename == "node-sdk.yml":
@@ -594,7 +747,7 @@ class ReleaseCohortTests(unittest.TestCase):
                         }
                         prerequisites = {name: "success" for name in workflow.needs["publish"]}
                         self.assertFalse(job_runs(workflow, "publish", context, prerequisites), event)
-                else:
+                elif filename == "release-docker.yml":
                     docker = workflow.jobs["build-and-push"]
                     # The standalone Docker route may still build, but its push
                     # and credentials must be restricted to the coordinator phase.
@@ -660,6 +813,16 @@ class ReleaseReaderTests(unittest.TestCase):
             self.assertTrue(job_runs(workflow, "bypass", {}, results))
         self.assertFalse(job_runs(workflow, "explicit", {}, {"a": "success"}, cancelled=True))
         self.assertTrue(job_runs(workflow, "explicit", {}, {"a": "success", "unrelated": "skipped"}))
+
+    def test_wrapped_job_conditions_preserve_implicit_and_explicit_status_semantics(self):
+        workflow = Workflow("name: fixture\njobs:\n  a:\n    runs-on: x\n  implicit:\n    needs: a\n    if: ${{ !inputs.disabled }}\n  guarded:\n    needs: a\n    if: ${{ always() && !cancelled() }}\n")
+        context = {"inputs.disabled": False}
+        for status in ("failure", "cancelled", "skipped"):
+            self.assertFalse(job_runs(workflow, "implicit", context, {"a": status}))
+            self.assertTrue(job_runs(workflow, "guarded", context, {"a": status}))
+        self.assertTrue(job_runs(workflow, "implicit", context, {"a": "success"}))
+        self.assertFalse(job_runs(workflow, "implicit", {"inputs.disabled": True}, {"a": "success"}))
+        self.assertFalse(job_runs(workflow, "guarded", context, {"a": "success"}, cancelled=True))
 
     def test_skipped_ancestor_survives_guarded_success_at_every_generation(self):
         workflow = Workflow("""name: fixture

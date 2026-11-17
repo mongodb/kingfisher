@@ -4,11 +4,13 @@ import io
 import json
 import shlex
 from pathlib import Path
+import subprocess
+import sys
 import tarfile
 import tempfile
 import tomllib
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 import urllib.error
 
 spec = importlib.util.spec_from_file_location("publish_crates", Path(__file__).parents[1] / "publish-crates.py")
@@ -43,17 +45,174 @@ class PublishTests(unittest.TestCase):
                 self.assertIn(f"/{name}", includes)
                 self.assertNotIn(name, includes)
 
-    def test_release_preflight_packages_only_registry_release_crates(self):
+    def test_release_preflight_uses_registry_aware_read_only_packaging(self):
         workflow = (publisher.ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
-        commands = [shlex.split(line.strip()) for line in workflow.splitlines()
-                    if line.strip().startswith("cargo package ")]
-        self.assertEqual(len(commands), 1)
-        command = commands[0]
-        selected = [command[index + 1] for index, arg in enumerate(command) if arg == "-p"]
-        self.assertEqual(tuple(selected), publisher.PACKAGES)
-        self.assertIn("--locked", command)
-        self.assertNotIn("--no-verify", command)
-        self.assertNotIn("--workspace", command)
+        lines = [line.strip().removeprefix("run: ") for line in workflow.splitlines()]
+        commands = [shlex.split(line) for line in lines
+                    if line.startswith("python3 scripts/publish-crates.py ")]
+        packaging = [command for command in commands if "--package" in command]
+        self.assertEqual(len(packaging), 1)
+        self.assertIn("--tag", packaging[0])
+        self.assertNotIn("--publish", packaging[0])
+        self.assertFalse(any(line.startswith("cargo package ") for line in lines))
+
+    def package_metadata(self):
+        return {"packages": [{"name": name, "version": "1.0.0", "publish": ["crates-io"]}
+                             for name in publisher.PACKAGES] +
+                            [{"name": "kingfisher-python", "version": "9.0.0", "publish": []}],
+                "target_directory": str(publisher.ROOT / "target")}
+
+    def assert_package_groups(self, existing, groups):
+        metadata = self.package_metadata()
+        queries = []
+
+        def status(name, version):
+            self.assertEqual(version, "1.0.0")
+            queries.append(name)
+            return {"checksum": "a" * 64} if name in existing else None
+
+        def verify_queries(command, **kwargs):
+            self.assertEqual(tuple(queries), publisher.PACKAGES)
+
+        run = Mock(side_effect=verify_queries)
+        with patch.object(publisher, "published_version", side_effect=status):
+            publisher.package_crates(metadata, run=run)
+        expected = []
+        for group in groups:
+            command = ["cargo", "package", "--locked"]
+            for name in group:
+                command.extend(["-p", name])
+            expected.append(call(command, cwd=publisher.ROOT, check=True))
+        # Exact argv also forbids --no-verify, --allow-dirty, --workspace, publishing,
+        # authentication commands, and accidentally selecting the private SDK crate.
+        self.assertEqual(run.call_args_list, expected)
+
+    def test_packages_all_new_versions_in_one_dependency_ordered_batch(self):
+        self.assert_package_groups(set(), [publisher.PACKAGES])
+
+    def test_packages_all_published_versions_separately(self):
+        self.assert_package_groups(set(publisher.PACKAGES), [(name,) for name in publisher.PACKAGES])
+
+    def test_packages_mixed_versions_without_shadowing_published_libraries(self):
+        core, rules, scanner, binary = publisher.PACKAGES
+        self.assert_package_groups({core, rules}, [(core,), (rules,), (scanner, binary)])
+
+    def test_packages_a_single_pending_binary_without_an_overlay_of_published_libraries(self):
+        self.assert_package_groups(set(publisher.PACKAGES[:-1]), [(name,) for name in publisher.PACKAGES])
+
+    def test_validates_all_publish_configurations_before_queries_or_packaging(self):
+        for invalid in (None, [], ["another-registry"], ["crates-io", "another-registry"]):
+            metadata = self.package_metadata()
+            metadata["packages"][3]["publish"] = invalid
+            run = Mock()
+            with self.subTest(publish=invalid), patch.object(publisher, "published_version") as query:
+                with self.assertRaisesRegex(ValueError, "must be configured for crates-io"):
+                    publisher.package_crates(metadata, run=run)
+                query.assert_not_called()
+                run.assert_not_called()
+
+    def test_missing_release_member_stops_before_queries_or_packaging(self):
+        metadata = self.package_metadata()
+        metadata["packages"].pop(3)
+        run = Mock()
+        with patch.object(publisher, "published_version") as query:
+            with self.assertRaisesRegex(ValueError, "Missing release package"):
+                publisher.package_crates(metadata, run=run)
+            query.assert_not_called()
+            run.assert_not_called()
+
+    def test_registry_failure_or_malformed_response_stops_before_any_packaging(self):
+        def info(name):
+            return {"crate": name, "num": "1.0.0", "yanked": False, "checksum": "a" * 64}
+
+        def body(value):
+            return json.dumps({"version": value}).encode()
+
+        binary = info(publisher.PACKAGES[-1])
+        invalid = [b"not JSON", b"[]", b"{}", body(None), body([]),
+                   body({**binary, "crate": "another-crate"}), body({**binary, "num": "2.0.0"}),
+                   body({**binary, "yanked": True}), body({**binary, "yanked": "false"}),
+                   body({key: value for key, value in binary.items() if key != "yanked"}),
+                   body({key: value for key, value in binary.items() if key != "checksum"}),
+                   body({**binary, "checksum": "invalid"}), body({**binary, "checksum": "g" * 64}),
+                   body({**binary, "checksum": 123}),
+                   urllib.error.HTTPError("https://crates.io", 403, "forbidden", {}, None),
+                   urllib.error.URLError("registry unavailable"), TimeoutError("registry timed out")]
+        for bad in invalid:
+            responses = [body(info(name)) for name in publisher.PACKAGES[:-1]] + [bad]
+            run = Mock()
+            with self.subTest(response=bad), patch.object(publisher, "fetch", side_effect=responses) as fetch:
+                with self.assertRaises((ValueError, urllib.error.URLError, TimeoutError)):
+                    publisher.package_crates(self.package_metadata(), run=run)
+                self.assertEqual(fetch.call_count, 4)
+                run.assert_not_called()
+
+    def test_cargo_package_failure_propagates_and_stops_later_groups(self):
+        error = subprocess.CalledProcessError(101, ["cargo", "package", "--locked"])
+        run = Mock(side_effect=error)
+        with patch.object(publisher, "published_version", return_value={"checksum": "a" * 64}):
+            with self.assertRaises(subprocess.CalledProcessError) as failure:
+                publisher.package_crates(self.package_metadata(), run=run)
+        self.assertIs(failure.exception, error)
+        self.assertEqual(run.call_count, 1)
+
+    def test_package_flag_stages_then_plans_without_token_or_upload(self):
+        metadata = self.package_metadata()
+        plan = [{"name": name, "version": "1.0.0", "publish": True} for name in publisher.PACKAGES]
+        events = []
+        with patch.object(sys, "argv", ["publish-crates.py", "--package", "--tag", "v1.0.0"]), \
+             patch.dict(publisher.os.environ, {}, clear=True), \
+             patch.object(publisher.subprocess, "check_output", return_value=json.dumps(metadata).encode()), \
+             patch.object(publisher, "package_crates", side_effect=lambda data: events.append("package")) as package, \
+             patch.object(publisher, "make_plan", side_effect=lambda *args: events.append("plan") or plan) as make_plan, \
+             patch.object(publisher, "publish_plan") as publish, patch("sys.stdout", new_callable=io.StringIO):
+            self.assertEqual(publisher.main(), 0)
+            package.assert_called_once_with(metadata)
+            make_plan.assert_called_once_with(metadata, Path(metadata["target_directory"]) / "package")
+            publish.assert_not_called()
+        self.assertEqual(events, ["package", "plan"])
+
+    def test_default_planning_and_publish_do_not_repackage(self):
+        metadata = self.package_metadata()
+        plan = [{"name": "kingfisher-bin", "version": "1.0.0", "publish": True}]
+        for args in ([], ["--publish"]):
+            with self.subTest(args=args), patch.object(sys, "argv", ["publish-crates.py", *args]), \
+                 patch.dict(publisher.os.environ, {"CARGO_REGISTRY_TOKEN": "test-token"}, clear=True), \
+                 patch.object(publisher.subprocess, "check_output", return_value=json.dumps(metadata).encode()), \
+                 patch.object(publisher, "package_crates") as package, \
+                 patch.object(publisher, "make_plan", return_value=plan), \
+                 patch.object(publisher, "publish_plan") as publish, patch("sys.stdout", new_callable=io.StringIO):
+                self.assertEqual(publisher.main(), 0)
+                package.assert_not_called()
+                if args:
+                    publish.assert_called_once_with(plan)
+                else:
+                    publish.assert_not_called()
+
+    def test_package_and_publish_flags_are_mutually_exclusive(self):
+        with patch.object(sys, "argv", ["publish-crates.py", "--package", "--publish"]), \
+             patch.object(publisher.subprocess, "check_output") as metadata, \
+             patch.object(publisher, "package_crates") as package, \
+             patch.object(publisher, "publish_plan") as publish, patch("sys.stderr", new_callable=io.StringIO):
+            with self.assertRaises(SystemExit) as failure:
+                publisher.main()
+            self.assertEqual(failure.exception.code, 2)
+            metadata.assert_not_called()
+            package.assert_not_called()
+            publish.assert_not_called()
+
+    def test_package_mode_keeps_strict_plan_failure_before_any_upload(self):
+        metadata = self.package_metadata()
+        with patch.object(sys, "argv", ["publish-crates.py", "--package"]), \
+             patch.dict(publisher.os.environ, {}, clear=True), \
+             patch.object(publisher.subprocess, "check_output", return_value=json.dumps(metadata).encode()), \
+             patch.object(publisher, "package_crates") as package, \
+             patch.object(publisher, "make_plan", side_effect=ValueError("Cargo.lock changed")), \
+             patch.object(publisher, "publish_plan") as publish:
+            with self.assertRaisesRegex(ValueError, "Cargo.lock changed"):
+                publisher.main()
+            package.assert_called_once_with(metadata)
+            publish.assert_not_called()
 
     def test_fetch_retries_transient_errors(self):
         errors = [urllib.error.HTTPError("https://crates.io", code, "retry", {}, None)
@@ -112,6 +271,16 @@ class PublishTests(unittest.TestCase):
         before = publisher.archive_contents(crate("kingfisher-bin"), "kingfisher-bin", "1.0.0")
         after = publisher.archive_contents(crate("kingfisher-bin", **{"Cargo.lock": b"new"}), "kingfisher-bin", "1.0.0")
         self.assertNotEqual(before, after)
+
+    def test_cli_dependency_checksum_drift_still_requires_version_bump(self):
+        lock = b'[[package]]\nname = "kingfisher-core"\nchecksum = "registry-checksum"\n'
+        remote = crate("kingfisher-bin", **{"Cargo.lock": lock})
+        local = crate("kingfisher-bin", **{
+            "Cargo.lock": lock.replace(b"registry-checksum", b"rebuilt-archive-checksum")})
+        with patch.object(publisher, "fetch", return_value=remote):
+            with self.assertRaisesRegex(ValueError, r"Cargo\.lock.*Bump its version"):
+                publisher.verify_existing(local, "kingfisher-bin", "1.0.0",
+                                          {"checksum": hashlib.sha256(remote).hexdigest()})
 
     def test_changed_source_requires_version_bump(self):
         remote = crate()
