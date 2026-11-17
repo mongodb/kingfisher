@@ -3,18 +3,10 @@ name: Python SDK
 on:
   workflow_call:
     inputs:
-      phase:
-        description: Build/test, or publish the same run's already tested distributions
-        type: string
-        default: build
-      publish:
-        description: Authorized by the coordinator only after its shared build gate
+      build_all:
+        description: Build and test the full release cohort even when the SDK version already exists
         type: boolean
         default: false
-      expected_sha:
-        description: Pinned main SHA for guarded manual publication
-        type: string
-        default: ''
     outputs:
       publish:
         value: ${{ jobs.plan-publish.outputs.pending }}
@@ -30,7 +22,7 @@ permissions:
 concurrency:
   # Only PR checks supersede earlier runs. Every release keeps its own slot,
   # including pending runs: GitHub concurrency is not a FIFO release queue.
-  group: python-sdk-${{ inputs.phase || 'build' }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  group: python-sdk-build-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -46,7 +38,6 @@ env:
 jobs:
   preflight:
     name: Read-only SDK release preflight
-    if: inputs.phase != 'publish'
     runs-on: ubuntu-latest
     outputs:
       build: ${{ steps.check.outputs.build }}
@@ -64,10 +55,42 @@ jobs:
         id: check
         run: python3 scripts/check-sdk-release.py --github-event
 
+  release-guards:
+    name: Release guard tests (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            arch: x64
+          - os: windows-11-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.13'
+          architecture: ${{ matrix.arch }}
+      - name: Test release planning and recovery without builds or registry writes
+        run: >-
+          python -X utf8 -m unittest -v
+          scripts.tests.test_crates_recovery
+          scripts.tests.test_publish_crates
+          scripts.tests.test_python_sdk_recovery
+          scripts.tests.test_python_sdk_release
+          scripts.tests.test_release_cohort
+          scripts.tests.test_release_source
+          scripts.tests.test_sdk_preflight
+
   wheels:
     name: Wheel (${{ matrix.target }})
     needs: preflight
-    if: needs.preflight.outputs.build == 'true' || inputs.phase == 'build'
+    if: needs.preflight.outputs.build == 'true' || inputs.build_all
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -303,7 +326,7 @@ jobs:
 
   source:
     needs: preflight
-    if: needs.preflight.outputs.build == 'true' || inputs.phase == 'build'
+    if: needs.preflight.outputs.build == 'true' || inputs.build_all
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -339,7 +362,7 @@ jobs:
 
   plan-publish:
     if: needs.preflight.outputs.publish == 'true' && github.repository == 'mongodb/kingfisher'
-    needs: [preflight, wheels, source, cache-portability]
+    needs: [preflight, release-guards, wheels, source, cache-portability]
     runs-on: ubuntu-latest
     outputs:
       pending: ${{ steps.plan.outputs.pending }}
@@ -364,33 +387,3 @@ jobs:
           name: python-sdk-pending
           path: pending-sdk/*
           if-no-files-found: error
-
-  publish:
-    # This phase is called only after release.yml's cross-package build barrier.
-    if: inputs.phase == 'publish' && github.repository == 'mongodb/kingfisher' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish))
-    runs-on: ubuntu-latest
-    concurrency:
-      group: pypi-sdk-publish
-      queue: max
-      cancel-in-progress: false
-    environment:
-      name: pypi-sdk
-      url: https://pypi.org/p/kingfisher-secret-scanner
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-      - name: Recheck the pinned release source before authenticating
-        run: python3 scripts/check-release-source.py
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          name: python-sdk-pending
-          path: dist
-      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086
-        with:
-          # Handle a concurrent run publishing this version after the read-only plan.
-          skip-existing: true

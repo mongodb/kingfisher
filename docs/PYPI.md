@@ -1454,7 +1454,12 @@ successful macOS or Linux run does not establish Windows compatibility.
 The [Python SDK workflow](../.github/workflows/python-sdk.yml) builds and tests six
 native wheels on pull requests and standalone test-only manual runs. The
 [release coordinator](../.github/workflows/release.yml) also calls its build phase
-for upstream main, CLI/SDK tag pushes, and coordinated manual runs. Linux wheels use manylinux 2.28;
+for upstream main, CLI/SDK tag pushes, and coordinated manual runs. Reusable SDK
+and CLI-wheel workflows are build-only and have no OIDC permission. Both PyPI
+uploads run as ordinary jobs directly in `release.yml`, with explicit
+`attestations: true`; PyPI's `id-token: write` permission is confined to those
+post-gate upload jobs.
+Linux wheels use manylinux 2.28;
 Windows wheels bundle runtime DLLs using delvewheel and are tested under ordinary
 CPython outside MSYS2. A separate job builds an sdist, installs it with CPython
 3.10, and runs the same tests. Wheel jobs use CPython 3.13. Each wheel job also
@@ -1512,9 +1517,11 @@ in sync. The read-only preflight runs **before** wheel/source jobs:
   inputs against the push's `before` SHA or PR base SHA; it also rejects a bump to
   another already published version. PRs with a new version or only non-runtime
   changes still run the full test matrix.
-- An explicit manual publication always fails if its version exists, even if that
+- An ordinary explicit manual publication fails if its version exists, even if that
   release has no files or only yanked files. Only HTTP 404 means unused; network,
-  authorization and server errors fail closed after bounded retries.
+  authorization and server errors fail closed after bounded retries. Partial-upload
+  recovery instead uses the original verified artifacts through the separate
+  [artifact-only SDK recovery mode](#artifact-only-sdk-recovery).
 
 For a read-only local/orchestrator check (Python 3.11+), run:
 
@@ -1531,7 +1538,7 @@ For an explicit manual publication, first merge the prepared version, confirm
 that `HEAD` is the current upstream `main` commit, and use the exact version/SHA:
 
 ```bash
-gh workflow run release.yml --ref main \
+gh workflow run release.yml --repo mongodb/kingfisher --ref main \
   -f publish=true \
   -f expected_sha="$(git rev-parse HEAD)" \
   -f expected_version=1.6.4
@@ -1546,11 +1553,12 @@ ref, unmerged source, SHA or version fails before native builds. Optional
 
 After all six wheels, sdist and cache-portability tests pass, a read-only plan stages
 only filenames still missing from PyPI. The coordinator waits for that plan and every
-other binary/npm/Cargo build gate before invoking the SDK publish phase; `skip-existing`
-handles a concurrent upload after the plan. If publication partially fails, rerun the
-original failed publish job to reuse its tested artifacts. Do not dispatch a new
-manual publication or rebuild an existing version as recovery; a new publication
-requires a new SDK version.
+other binary/npm/Cargo build gate before its direct SDK upload job; `skip-existing`
+handles a concurrent upload after the plan. For a transient upload failure in a run
+whose publishing workflow is already correct, retry the original failed upload job
+with its tested artifacts. A later workflow fix cannot repair an old run's snapshot;
+use [artifact-only SDK recovery](#artifact-only-sdk-recovery) when eligible. Never
+rebuild or replace artifacts under a partially published version.
 
 Maintainer release checklist:
 
@@ -1560,18 +1568,139 @@ Maintainer release checklist:
    checks/commands never bump, commit or merge versions for you.
 2. Inspect all six tested wheels and the source artifact in the main-branch run.
    The protected publish job runs only after all tests and release gates succeed.
-3. Configure PyPI Trusted Publishing for owner `mongodb`, repository `kingfisher`,
-   workflow `python-sdk.yml`, and environment `pypi-sdk`. Keep this called-workflow
-   identity: local same-repository/same-ref reusable calls preserve PyPI trust. The
-   GitHub environment must allow `main` and tag patterns `v*`, `python-v*`, and `npm-v*`
-   because all coordinated triggers may publish a pending SDK version.
+3. Have an authorized PyPI project owner add the matching publisher records below
+   before approving publication. The existing protected `pypi-sdk` environment allows
+   `main` and tag patterns `v*`, `python-v*`, and `npm-v*` for coordinated releases;
+   keep its approved policies and reviewers unchanged.
 
-Publishing uses PyPI Trusted Publishing without a stored API token. A local TestPyPI rehearsal can use
+### Configure PyPI Trusted Publishers
+
+PyPI [does not support reusable workflows as Trusted Publishers](https://docs.pypi.org/trusted-publishers/troubleshooting/#reusable-workflows-on-github).
+A same-repository/same-ref call does not make the called-workflow identity compatible
+with the caller's attestation identity. Both upload jobs therefore live directly in
+`release.yml`, not in reusable `python-sdk.yml` or `pypi.yml` publish phases.
+
+An authorized project owner must manually **add** these GitHub Trusted Publisher
+records in each PyPI project's publishing settings:
+
+| PyPI project | Repository owner | Repository | Workflow filename | Environment |
+| --- | --- | --- | --- | --- |
+| `kingfisher-secret-scanner` (SDK) | `mongodb` | `kingfisher` | `release.yml` | `pypi-sdk` |
+| `kingfisher-bin` (CLI) | `mongodb` | `kingfisher` | `release.yml` | **None — leave empty** |
+
+Use the filename only, not `.github/workflows/release.yml`. The CLI project name is
+`kingfisher-bin`, as declared in [its package metadata](https://github.com/mongodb/kingfisher/blob/main/pypi/pyproject.toml);
+it is not `kingfisher` or the SDK project. Preserve the CLI job's existing absence
+of a GitHub environment. Do not widen any GitHub environment policy for this change.
+
+Keep the old SDK `python-sdk.yml` / `pypi-sdk` and CLI `pypi.yml` / no-environment
+records until the new flow is verified; deleting them afterward is optional cleanup.
+Committing or merging YAML does **not** change PyPI account configuration, and a
+read-only check does not prove that a live publication will succeed. Publishing uses
+Trusted Publishing without a stored API token, and both direct jobs explicitly keep
+attestations enabled.
+
+A local TestPyPI rehearsal can use
 `uv publish --publish-url https://test.pypi.org/legacy/ dist-python/*` after
 configuring credentials outside the repository. Linux/Windows public artifacts
 should come from the repaired CI builds, not an arbitrary local platform tag.
-
 Packaging follows the [Maturin mixed-project layout](https://www.maturin.rs/project_layout.html).
+
+### Artifact-only SDK recovery
+
+Use this manual, opt-in mode only to publish retained, already tested SDK artifacts
+from a verified original coordinator run. It runs in the **same `release.yml`** and
+uses the same direct SDK publisher, protected `pypi-sdk` environment, attestation
+setting and publication concurrency lock. It performs no Rust, wheel or binary
+builds and no crates, npm, CLI PyPI, Docker or GitHub-release publication. It verifies
+the original complete cohort rather than replacing its evidence with new builds.
+
+For example, [run 43954600383](https://github.com/mongodb/kingfisher/actions/runs/43954600383)
+at producer SHA `84b8733639e20ff0469186f73a011d1f84f7196f` passed the coordinated
+gates, all six SDK wheels, sdist and cache-portability tests; crates published.
+Its first SDK upload was rejected with HTTP 400 because the OIDC publisher identity
+was `python-sdk.yml` while the attestation certificate's Build Config URI identified
+`release.yml`. The old CLI uploader explicitly used `attestations: false`; this
+SDK-specific HTTP 400 is not evidence that the CLI had the same failure.
+Changing PyPI settings alone cannot fix the old SDK run, and rerunning it still
+executes its broken workflow snapshot, not the reviewed code now on `main`.
+
+**Plan the main-run concurrency:** merging the repair still triggers the ordinary
+full-cohort automatic `main` run. SDK-only dispatch shares its concurrency slot and
+waits behind it. For original-artifact recovery, stop **only that new automatic main
+run before it builds/publishes**, then dispatch `sdk_only`. Never cancel/rerun the
+pinned original failed producer or let a new ordinary build publish different bytes
+under the same SDK version first. Do not disable Actions, change account/branch
+policies or weaken gates; only recovery itself is build-free.
+
+After the repaired workflow and validator are merged and the matching SDK PyPI
+publisher has been added, use a **clean checkout of current, reviewed upstream
+`main`**. Independently verify the original run attempt and exact retained
+`python-sdk-pending` artifact ID; do not guess them. The dispatch inputs distinguish
+these two source identities:
+
+| Input | Meaning |
+| --- | --- |
+| `release_run_id` | Exact original producer run, not a newer build |
+| `release_run_attempt` | Verified original producer attempt |
+| `artifact_id` | Immutable ID of that producer's `python-sdk-pending` artifact |
+| `producer_sha` | Original source SHA that built and tested those distributions |
+| `expected_sha` | **Current reviewed main/recovery-workflow SHA**, pinned independently of `producer_sha` |
+| `expected_version` | Original SDK version to recover, such as `1.6.4` |
+| `sdk_only=true`, `publish=true` | Explicit artifact-only publication authorization; `sdk_only` defaults to `false` |
+
+The two SHA pins identify separate roles, not a requirement that their values differ.
+They differ for this CI-fix recovery; they may match when current `main` is unchanged.
+
+Read-only inspection of that producer identified **attempt `1`**, pending artifact
+**`14273355973`**, size **110898976 bytes**, digest
+`sha256:1752a6dea7eb8900c03e42ac2246c6917f93b674f12e744dfeb9ad4feca735e2`,
+and expiry **2027-02-14 20:54:34 UTC**. Recheck that evidence immediately before
+recovery; these recorded values do not extend retention or authorize a dispatch.
+
+```bash
+gh workflow run release.yml --repo mongodb/kingfisher --ref main \
+  -f publish=true -f sdk_only=true \
+  -f release_run_id=43954600383 \
+  -f release_run_attempt=1 \
+  -f artifact_id=14273355973 \
+  -f producer_sha=84b8733639e20ff0469186f73a011d1f84f7196f \
+  -f expected_sha="$(git rev-parse HEAD)" \
+  -f expected_version=1.6.4
+```
+
+Leave `crates_only` false. A read-only validator requires:
+
+- The upstream producer workflow/ref/SHA/attempt and successful latest-effective
+  complete-cohort gates, SDK builds/tests and publication plan. A newer failure,
+  skip or pending result cannot fall back to an older success.
+- The exact immutable pending artifact, whose API metadata proves its upstream
+  repository/run/SHA, digest, unexpired retention and creation within the selected
+  successful SDK plan job; the downloaded contents must be the exact distributions.
+- The producer as an ancestor of current reviewed `main`, with the same SDK manifest
+  version. Permitted drift is limited to the three publication workflows
+  (`release.yml`, `python-sdk.yml`, `pypi.yml`), the maintainer release runbook,
+  recovery validator, [release-source authorization guard](https://github.com/mongodb/kingfisher/blob/main/scripts/check-release-source.py),
+  [crate publication/staging helper](https://github.com/mongodb/kingfisher/blob/main/scripts/publish-crates.py),
+  allowlisted CI test scripts, and Markdown documentation/generated docs.
+  Runtime, SDK, manifest, lockfile, rules and other build inputs cannot change.
+
+Do not broaden the source policy to slip unrelated changes into recovery, and do not
+check out the old producer under the new workflow's publishing identity. These checks
+run again **after protected environment approval**, before authentication/upload;
+inspect their evidence before approving `pypi-sdk`. After upload, recovery verifies
+**every staged filename and exact SHA-256 against PyPI**, with bounded read-only
+visibility retries, so `skip-existing` cannot hide a concurrent different-byte upload.
+
+The artifact must still be retained and unexpired; missing, expired, changed or
+mismatched evidence fails closed. Do not substitute another run, rebuild, repackage
+or replace distributions. A CI-only correction does not itself require an SDK
+version bump when no files were ever published. For a partial upload, recover only
+with the exact original tested artifacts; published immutable filenames and bytes
+must remain unchanged. SDK/runtime changes instead need a normal new-version
+release with the full build/test cohort. Finally, verify the exact PyPI version,
+file hashes and attestations and test a fresh consumer installation; neither the
+workflow change nor these instructions claim that publication has been tested live.
 
 ## Existing CLI wheel distribution
 
@@ -1633,18 +1762,19 @@ uvx twine upload dist-pypi/*
 
 #### GitHub Actions (recommended)
 
-The [`pypi-wheels` workflow](../.github/workflows/pypi.yml) has separate build and
-publish phases called by the release coordinator:
+The [`pypi-wheels` workflow](../.github/workflows/pypi.yml) is build-only:
 
-1. Build six platform-tagged wheels from that same run's exact binary artifacts.
-2. Require the complete shared release gate; CLI-tag runs also wait for successful
-   GitHub release asset publication.
-3. Upload the staged wheels to PyPI using Trusted Publishing (OIDC), without rebuilding.
+1. It builds six platform-tagged wheels from that same run's exact binary artifacts.
+2. The coordinator requires the complete shared release gate; CLI-tag runs also wait
+   for successful GitHub release asset publication.
+3. An ordinary top-level job in `release.yml` uploads the staged wheels using Trusted
+   Publishing (OIDC), without rebuilding, with explicit `attestations: true`.
 
-Ordinary standalone manual runs build/test only. Keep the existing CLI Trusted
-Publisher identity: owner `mongodb`, repository `kingfisher`, workflow `pypi.yml`,
-and **no environment**. The Python SDK's separate `python-sdk.yml` / `pypi-sdk`
-identity also stays unchanged; neither uses a new `release.yml` PyPI connection.
+Ordinary standalone manual runs build/test only and receive no OIDC permission.
+An authorized owner must add the `kingfisher-bin` PyPI Trusted Publisher for owner
+`mongodb`, repository `kingfisher`, workflow `release.yml`, and **no environment**.
+This is distinct from the SDK's `release.yml` / `pypi-sdk` record. Keep legacy
+records until the new flow is verified; see [publisher setup](#configure-pypi-trusted-publishers).
 No API token is required once Trusted Publishing is configured.
 
 If you do not use Trusted Publishing, generate a PyPI API token and provide it

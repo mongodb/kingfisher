@@ -7,10 +7,6 @@ on:
         description: "Release tag to package (e.g., v1.2.3)"
         required: true
         type: string
-      phase:
-        description: Build, or publish the already built wheels after the shared gate
-        type: string
-        default: build
       use_artifacts:
         description: Package this run's tested binaries instead of a public release
         type: boolean
@@ -27,7 +23,6 @@ permissions: {}
 jobs:
   build-wheels:
     name: Build PyPI wheels
-    if: inputs.phase != 'publish'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -201,33 +196,3 @@ jobs:
           name: cli-pypi-staging
           path: dist-pypi/*.whl
           if-no-files-found: error
-
-  publish:
-    # Standalone manual calls prepare wheels; only the coordinator supplies this phase.
-    if: inputs.phase == 'publish' && github.repository == 'mongodb/kingfisher' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    concurrency:
-      group: cli-pypi-publish
-      queue: max
-      cancel-in-progress: false
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-      - name: Recheck the tested release source
-        run: python3 scripts/check-release-source.py
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          name: cli-pypi-staging
-          path: dist-pypi
-      - name: Publish the exact staged wheels to PyPI (Trusted Publishing)
-        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
-        with:
-          packages-dir: dist-pypi
-          verbose: true
-          skip-existing: true
-          attestations: false

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Plan or publish the four crates, in dependency order. Planning is read-only.
+"""Plan or publish the four crates, in dependency order. Registry planning is read-only.
 
-Requires Python 3.11+, Cargo, and archives produced by `cargo package` for the four
-packages in PACKAGES. Never logs or stores registry credentials.
+Requires Python 3.11+ and Cargo. Use --package to build fresh, verified archives
+before planning, without registry uploads. Otherwise, archives must already exist
+for the four packages in PACKAGES. Never logs or stores registry credentials.
 """
 import argparse
 import hashlib
@@ -47,12 +48,46 @@ def published_version(name, version):
     body = fetch(f"{API}/{name}/{version}", missing_ok=True)
     if body is None:
         return None
-    info = json.loads(body)["version"]
-    if info["num"] != version or info["crate"] != name:
+    response = json.loads(body)
+    info = response.get("version") if isinstance(response, dict) else None
+    if (not isinstance(info, dict) or info.get("num") != version or info.get("crate") != name
+            or not isinstance(info.get("yanked"), bool)):
         raise ValueError(f"Unexpected registry response for {name} {version}")
     if info["yanked"]:
         raise ValueError(f"{name} {version} is yanked; choose a new version")
+    checksum = info.get("checksum")
+    if (not isinstance(checksum, str) or len(checksum) != 64
+            or any(character not in "0123456789abcdef" for character in checksum)):
+        raise ValueError(f"Unexpected registry checksum for {name} {version}")
     return info
+
+
+def package_crates(metadata, run=subprocess.run):
+    """Verify fresh archives without shadowing already-published dependencies."""
+    packages = {package["name"]: package for package in metadata["packages"]}
+    for name in PACKAGES:
+        if name not in packages:
+            raise ValueError(f"Missing release package in Cargo metadata: {name}")
+        if packages[name]["publish"] != ["crates-io"]:
+            raise ValueError(f"{name} must be configured for crates-io publishing")
+
+    # Resolve every registry status before any packaging. Only HTTP 404 is missing;
+    # unavailable, malformed or yanked registry entries must stop preparation.
+    published = {name: published_version(name, packages[name]["version"]) for name in PACKAGES}
+    groups = [(name,) for name in PACKAGES if published[name] is not None]
+    pending = tuple(name for name in PACKAGES if published[name] is None)
+    if pending:
+        groups.append(pending)
+    for group in groups:
+        # Multi-package Cargo packaging creates an overlay registry of the selected
+        # archives. Rebuilt published libraries can differ in VCS/lock bookkeeping,
+        # which would replace real registry checksums in the binary's Cargo.lock.
+        # Select only unpublished members together; existing members resolve their
+        # dependencies from the real registry. Keep --locked and build verification.
+        command = ["cargo", "package", "--locked"]
+        for name in group:
+            command.extend(["-p", name])
+        run(command, cwd=ROOT, check=True)
 
 
 def archive_contents(data, name, version):
@@ -173,7 +208,10 @@ def publish_plan(plan, run=subprocess.run, wait=wait_for_index):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--publish", action="store_true", help="upload missing versions")
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--publish", action="store_true", help="upload missing versions")
+    action.add_argument("--package", action="store_true",
+                        help="build fresh, verified archives and plan without uploading")
     parser.add_argument("--tag", help="require the CLI version to match this release tag")
     args = parser.parse_args()
     metadata = json.loads(subprocess.check_output(
@@ -182,6 +220,8 @@ def main():
     if args.tag and args.tag != f"v{cli['version']}":
         parser.error(f"release tag {args.tag!r} does not match kingfisher-bin {cli['version']}")
     package_dir = Path(metadata["target_directory"]) / "package"
+    if args.package:
+        package_crates(metadata)
     plan = make_plan(metadata, package_dir)
     for item in plan:
         action = "publish" if item["publish"] else "skip (identical version already published)"

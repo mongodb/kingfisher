@@ -89,9 +89,10 @@ def publication_source(root, env, event, *, versions=None, git_fn=None):
     inputs = event.get("inputs") or {}
     if not isinstance(inputs, dict):
         raise ValueError("Release event inputs must be an object")
-    # Recovery still pins current upstream main, but has a separate stricter
-    # metadata gate and must never authorize sibling SDK publication.
-    recovery = event_name == "workflow_dispatch" and enabled(inputs.get("crates_only"))
+    # Each recovery mode pins current main, has its own stricter validator, and
+    # must never authorize ordinary/sibling publication through this helper.
+    recovery = event_name == "workflow_dispatch" and any(
+        enabled(inputs.get(mode)) for mode in ("crates_only", "sdk_only"))
     manual = event_name == "workflow_dispatch" and enabled(inputs.get("publish"))
     automatic = event_name == "push" and supported_ref(ref) and not enabled(inputs.get("crates_only"))
     # Preserve the established CLI-tag retry/completion entry point. Unlike a

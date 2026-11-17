@@ -10,12 +10,19 @@ The [coordinator](workflows/release.yml) runs on upstream `main` pushes, `v*`,
 `python-v*`, and `npm-v*` tag pushes, and manual dispatch. Tags must match the corresponding
 committed manifest and identify a commit merged into upstream `main`.
 
-Every release first passes one **Release build gate** for the same pinned SHA: all normal
+Every normal release first passes one **Release build gate** for the same pinned SHA: all normal
 cross-platform tests and binary builds, four verified Cargo packages and their read-only
 registry plan, all Python SDK wheel/sdist/cache-portability tests, all npm native builds and
 sealed-tarball tests, and six CLI PyPI wheels built from this run's binary artifacts. Failure,
 cancellation, or a skipped required build prevents **every** registry publisher from starting.
 SDKs are tested even when their unchanged version is already published.
+[Artifact-only SDK recovery](#artifact-only-sdk-recovery) verifies an original complete
+passing cohort and retained artifacts instead of rebuilding it.
+
+Both PyPI upload jobs run directly in `release.yml`, with explicit `attestations: true`.
+Reusable `python-sdk.yml` and `pypi.yml` are build-only and have no OIDC permission.
+Normal source checks, cohort gates, artifact handoff and publication locks remain in
+place, as does the SDK's protected `pypi-sdk` environment.
 
 A `v<CLI-version>` tag also creates/updates a draft GitHub release, uploads and attests all
 assets, and publishes the release only after uploads succeed. Its downstream registry jobs
@@ -146,8 +153,22 @@ verbose tool/authentication logs remain private. No release is dispatched after 
   public remote named `upstream`, use `make release npm RELEASE_REMOTE=upstream`.
 
 The `crates-io`, `pypi-sdk`, and `npm` environments and registry Trusted Publishers/API-token
-permissions must already be configured. Read-only local checks cannot prove external registry
-authorization or prevent a later outage/race; the protected publish jobs remain authoritative.
+permissions must already be configured. For direct PyPI publishing, an authorized PyPI
+project owner must manually **add**, not assume YAML has configured, these records:
+
+| PyPI project | GitHub owner / repository | Workflow filename | Environment |
+| --- | --- | --- | --- |
+| `kingfisher-secret-scanner` | `mongodb` / `kingfisher` | `release.yml` | `pypi-sdk` |
+| `kingfisher-bin` | `mongodb` / `kingfisher` | `release.yml` | **None — leave empty** |
+
+Keep old `python-sdk.yml` / `pypi-sdk` and `pypi.yml` / no-environment PyPI records
+until the new flow is verified; cleanup afterward is optional. Keep the approved SDK
+`main`, `v*`, `python-v*`, `npm-v*` environment policies/reviewers unchanged, and do
+not add an environment to the CLI uploader. PyPI
+[does not support reusable workflows as Trusted Publishers](https://docs.pypi.org/trusted-publishers/troubleshooting/#reusable-workflows-on-github),
+even for same-repository/same-ref calls. Read-only local checks cannot prove external
+registry authorization or a successful live upload, or prevent a later outage/race;
+the publish jobs remain authoritative.
 See the [crate publishing guide](../docs/PUBLISHING.md),
 [Python SDK publishing guide](../docs/PYPI.md), and
 [npm publishing guide](../docs/PUBLISHING.md#npm-publishing-with-github-actions).
@@ -173,7 +194,9 @@ package names intentionally remain `kingfisher-bin`. See the
 [Linux package installation guidance](../docs/INSTALLATION.md#linux-packages-rpm-and-deb).
 
 If a job fails, inspect its logs and rerun the failed jobs from the original Actions run where
-appropriate. Keep the original tag and commit. A code fix needs a new release version.
+appropriate. Keep the original tag and commit. Runtime changes need a new release version;
+a CI-only SDK publishing fix may use [artifact-only recovery](#artifact-only-sdk-recovery)
+without rebuilding the original tested distributions.
 An upload failure leaves a draft that the next attempt can update. Published releases are
 skipped by the upload step so reruns do not replace their assets; rerun failed downstream
 jobs to recover package publication, following the npm handoff rules below. To restart an
@@ -187,6 +210,58 @@ Main dispatch without `publish=true` is build/test-only. Guarded main publicatio
 pending crates/Python SDKs, plus npm only when its existing tag matches the same SHA, not
 CLI assets. A free-form tag input or checking out a tag inside a main run does not provide
 the CLI tag-based signing identity consumers verify.
+
+### Complete the prepared releases without version bumps
+
+For CLI **2.19.1**, Python SDK **1.6.4** and npm SDK **1.0.2**, incident checks found
+crates.io already published, including `kingfisher-bin 2.19.1`, but no `v2.19.1`,
+`npm-v1.0.2` or `python-v1.6.4` tags and no GitHub CLI `2.19.1` release. SDK PyPI
+`1.6.4`, CLI PyPI `2.19.1` and all seven unscoped npm `1.0.2` versions were also
+absent at that check. A main run is **not** a CLI release; its successful npm handoff
+can be a no-op without the npm tag. Recheck current registry/release/tag state before
+proceeding; these observations are not a guarantee that versions remain unpublished.
+
+1. **Before merging**, have an authorized owner add both matching
+   [PyPI publisher records](../docs/PYPI.md#configure-pypi-trusted-publishers).
+   Keep legacy records, approved environments, reviewers and gates unchanged.
+2. Merge the reviewed CI-only repair **without changing versions**. Let the ordinary
+   automatic main cohort finish: publish pending SDK `1.6.4`, verify unchanged
+   already-published crates are skipped, and require both release gates to pass.
+   Record this reviewed current-main SHA as **R**.
+
+   If retaining the exact original SDK artifacts is preferred, use
+   [artifact-only SDK recovery](#artifact-only-sdk-recovery) **instead of** the normal
+   main SDK upload: stop only the **new** automatic main run before builds/publication,
+   complete SDK recovery before normal publishing, then rerun **only that cancelled
+   new main run** for a fresh green cohort at R. Never cancel/rerun the original
+   pinned failed producer.
+3. From a clean checkout whose `HEAD` and current upstream `main` still equal R,
+   confirm the CLI tag is still absent and use the normal helper with the public
+   repository remote:
+
+   ```bash
+   make release VERSION=2.19.1
+   ```
+
+   **Wait for the entire CLI cohort to finish**, including public GitHub assets and
+   CLI PyPI `kingfisher-bin 2.19.1`. Its npm handoff is expected to be a no-op because
+   the npm tag is still absent. Do not create the npm tag concurrently.
+4. Only after that completion, recheck that the same clean checkout and current
+   upstream `main` still equal R and that `npm-v1.0.2` remains absent, then run:
+
+   ```bash
+   make release npm
+   ```
+
+   This infers `1.0.2` and creates its npm tag at R. Wait for that tag's **own full
+   cohort** and protected npm publication to finish; do not race independently rebuilt
+   npm archives between cohorts.
+
+These CLI/npm tag releases retain normal full builds/tests: **no bump does not mean
+zero rebuilds**. Both tags must resolve to the same R; no `python-v1.6.4` tag is needed.
+Do not run `make release crates` or `gh release create`, manually publish a GitHub
+release, or change already-published bytes. If main advances or a proposed tag appears, stop and
+re-evaluate; never move a tag.
 
 ### npm handoff recovery
 
@@ -208,6 +283,86 @@ not rerun retain their most recent successful result; newer failed/skipped/pendi
 cannot fall back to an older success, and the dispatcher must belong to the current attempt.
 Do not create/move tags, dispatch an independent manual publish, or rebuild an existing version.
 See the [npm recovery details](../docs/PUBLISHING.md#npm-handoff-recovery).
+
+### Artifact-only SDK recovery
+
+Use this opt-in path for a failed SDK upload whose original distributions and
+complete passing cohort can still be verified. It is integrated into the **same
+`release.yml`** to keep the direct PyPI publisher identity, protected `pypi-sdk`
+environment, explicit attestations and SDK publication lock. It runs no Rust, wheel
+or binary builds and publishes no crates, npm, CLI wheels, Docker images or GitHub
+assets; original cohort evidence is verified, not replaced.
+
+[Run 43954600383](https://github.com/mongodb/kingfisher/actions/runs/43954600383)
+built SDK `1.6.4` at `84b8733639e20ff0469186f73a011d1f84f7196f`. Its coordinated
+gates, six SDK wheels, sdist and portability tests passed and crates published.
+The first SDK upload then failed HTTP 400: OIDC identified `python-sdk.yml`, but
+the attestation certificate's Build Config URI identified `release.yml`. The old
+CLI uploader used `attestations: false` and did not have this specific SDK failure.
+PyPI configuration alone cannot repair that failed run. Never rerun its broken
+workflow snapshot expecting it to execute a later workflow fix.
+
+1. Merge and review the direct publisher/recovery code on upstream `main`. Have an
+   authorized project owner add the matching SDK PyPI publisher above; keep old
+   records and approved GitHub environment policies unchanged. Merging still starts
+   ordinary automatic full-cohort CI on `main`; SDK-only dispatch shares main-run
+   concurrency and waits behind it. For original-artifact recovery, stop **only that
+   new automatic main run before it builds/publishes**, then dispatch `sdk_only`.
+   Never cancel/rerun the pinned original failed producer or let a new ordinary
+   build publish different bytes under the same SDK version first. Do not disable
+   Actions, change account/branch policies or weaken gates; only recovery itself is
+   build-free.
+2. From a **clean checkout of current reviewed upstream `main`**, inspect the exact
+   original producer run and verify its attempt and retained `python-sdk-pending`
+   artifact ID. Do not infer them from a latest-run or artifact-name search.
+3. Pin the original run with `release_run_id`, `release_run_attempt`, `artifact_id`,
+   `producer_sha` and `expected_version`. Separately pin the **current recovery
+   workflow SHA** with `expected_sha`. Both explicit pins are required; they differ
+   for this CI fix but may match when current `main` is unchanged.
+4. Dispatch with both `sdk_only=true` and `publish=true` (`sdk_only` defaults to
+   `false`); leave `crates_only` false. Read-only inspection identified producer
+   attempt **`1`**, pending artifact **`14273355973`**, size **110898976 bytes**,
+   digest `sha256:1752a6dea7eb8900c03e42ac2246c6917f93b674f12e744dfeb9ad4feca735e2`,
+   expiring **2027-02-14 20:54:34 UTC**. Recheck those pins before using this example:
+
+   ```bash
+   gh workflow run release.yml --repo mongodb/kingfisher --ref main \
+     -f publish=true -f sdk_only=true \
+     -f release_run_id=43954600383 \
+     -f release_run_attempt=1 \
+     -f artifact_id=14273355973 \
+     -f producer_sha=84b8733639e20ff0469186f73a011d1f84f7196f \
+     -f expected_sha="$(git rev-parse HEAD)" \
+     -f expected_version=1.6.4
+   ```
+
+5. Review the read-only validator's evidence before approving `pypi-sdk`. It checks
+   the upstream producer workflow/ref/SHA/attempt, successful latest-effective
+   complete-cohort gates and SDK builds/tests/publication plan, immutable artifact
+   ID/digest/retention/expiry, and exact distributions. Newer failed/skipped/pending
+   prerequisite results cannot fall back to an older success. Artifact API metadata
+   must prove the upstream repository/run/SHA and creation within the selected
+   successful SDK plan job.
+6. Confirm the producer is an ancestor of current reviewed `main` with an unchanged
+   SDK manifest version. Source drift permits only the three publication workflows,
+   this runbook, the recovery validator,
+   [release-source authorization guard](../scripts/check-release-source.py), allowlisted
+   CI test scripts, and Markdown docs/generated docs. Runtime, SDK, manifest, lockfile, rules and other build inputs
+   are forbidden. Do not slip unrelated changes into recovery, expand the policy, or
+   check out the old producer under the new workflow identity. Validation runs again
+   **after protected approval**, before authentication and upload.
+7. Require recovery's post-upload check of **every staged filename and exact SHA-256
+   against PyPI**, with bounded read-only visibility retries; `skip-existing` cannot
+   hide a concurrent different-byte upload. Verify the version/attestations and perform
+   a fresh consumer installation. Merged workflow code and passing read-only checks
+   are not evidence of a successful live publication or changed PyPI configuration.
+
+Missing, expired or mismatched evidence fails closed. Recovery requires the retained
+original artifact; never substitute a different run, rebuild or repackage it. No SDK
+version bump is required solely for CI changes if no files were ever published.
+Partial uploads must recover the exact original tested artifacts, never replace
+immutable published bytes. SDK/runtime changes need a normal new-version release.
+See the [SDK recovery details](../docs/PYPI.md#artifact-only-sdk-recovery).
 
 ### Registry-only metadata recovery
 

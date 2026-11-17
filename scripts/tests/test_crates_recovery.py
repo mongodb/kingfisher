@@ -394,8 +394,9 @@ class RecoveryWorkflowTests(unittest.TestCase):
                 body = self.job(name)
                 self.assertIn("needs: [validate-release]", body)
                 self.assertNotIn("!inputs.crates_only", body)
-        for name in ("node-sdk", "python-sdk"):
-            self.assertIn("phase: build", self.job(name))
+        self.assertIn("phase: build", self.job("node-sdk"))
+        self.assertIn("build_all: true", self.job("python-sdk"))
+        self.assertNotIn("id-token: write", self.job("python-sdk"))
         gate = self.job("release-ready")
         self.assertIn("needs: [validate-release, tests, linux-x64, linux-arm64, windows, macos-x64, macos-arm64, node-sdk, python-sdk, prepare-crates, prepare-pypi]", gate)
         gate_condition = gate.split("    runs-on:", 1)[0]
@@ -424,8 +425,8 @@ class RecoveryWorkflowTests(unittest.TestCase):
         self.assertNotIn("environment:", prepare)
         self.assertIn("if: inputs.crates_only", prepare)
         self.assertIn("cargo test --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner", prepare)
-        for command in ("cargo run --locked -p kingfisher-rule-bundle -- --check", "cargo package --locked",
-                        'scripts/publish-crates.py --tag "$RELEASE_TAG"'):
+        for command in ("cargo run --locked -p kingfisher-rule-bundle -- --check",
+                        'scripts/publish-crates.py --package --tag "$RELEASE_TAG"'):
             with self.subTest(command=command):
                 self.assertIn(command, prepare)
                 self.assertLess(self.workflow.index(command), self.workflow.index("  release-ready:\n"))

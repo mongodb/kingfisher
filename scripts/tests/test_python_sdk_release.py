@@ -23,15 +23,21 @@ spec.loader.exec_module(publisher)
 
 
 class PythonSdkReleaseTests(unittest.TestCase):
-    def test_coordinator_publishes_tested_artifacts_only_in_authorized_upstream_phase(self):
+    def test_coordinator_directly_publishes_tested_sdk_artifacts_from_build_only_workflow(self):
         workflow = (ROOT / ".github/workflows/python-sdk.yml").read_text(encoding="utf-8")
         triggers = workflow.split("permissions:", 1)[0]
         self.assertIn("workflow_call:", triggers)
-        self.assertIn("default: build", triggers)
+        self.assertIn("build_all:", triggers)
+        self.assertNotIn("phase:", triggers)
+        self.assertNotIn("expected_sha:", triggers)
+        self.assertNotRegex(triggers.split("    outputs:", 1)[0], r"(?m)^      publish:")
         self.assertNotIn("  push:", triggers)
         self.assertNotIn("inputs:", triggers.split("  workflow_dispatch:", 1)[1])
-        publish = workflow.split("\n  publish:\n", 1)[1]
-        plan = workflow.split("  plan-publish:\n", 1)[1].split("  publish:\n", 1)[0]
+        self.assertNotIn("\n  publish:\n", workflow)
+        self.assertNotIn("pypa/gh-action-pypi-publish@", workflow)
+        self.assertNotIn("id-token: write", workflow)
+        self.assertNotIn("environment:", workflow)
+        plan = workflow.split("  plan-publish:\n", 1)[1]
         condition = next(line for line in plan.splitlines() if line.strip().startswith("if:"))
         for guard in ("github.repository == 'mongodb/kingfisher'", "needs.preflight.outputs.publish == 'true'"):
             self.assertIn(guard, condition)
@@ -40,41 +46,54 @@ class PythonSdkReleaseTests(unittest.TestCase):
         self.assertIsNotNone(needs)
         dependency_list = re.sub(r"#[^\n]*", "", needs.group(1))
         dependencies = set(re.findall(r"[\w-]+", dependency_list))
-        for required in ("preflight", "wheels", "source", "cache-portability"):
+        for required in ("preflight", "release-guards", "wheels", "source", "cache-portability"):
             self.assertIn(required, dependencies)
-        self.assertIn("name: pypi-sdk", publish)
-        self.assertIn("group: pypi-sdk-publish\n", publish)
-        self.assertIn("queue: max", publish)
-        self.assertIn("cancel-in-progress: false", publish)
-        self.assertIn("skip-existing: true", publish)
         self.assertIn("pattern: python-*", plan)
-        condition = next(line for line in publish.splitlines() if line.strip().startswith("if:"))
-        for guard in ("inputs.phase == 'publish'", "github.repository == 'mongodb/kingfisher'",
-                      "github.event_name == 'push'", "github.event_name == 'workflow_dispatch' && inputs.publish"):
-            self.assertIn(guard, condition)
-        self.assertNotIn("always()", condition)
-        self.assertNotRegex(publish, r"(?m)^    needs:")
+        self.assertIn("name: python-sdk-pending", plan)
+        coordinator = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        publish = coordinator.split("  publish-python-sdk:\n", 1)[1].split("  publish-docker:\n", 1)[0]
+        for guard in ("needs: [publish-ready, python-sdk, validate-sdk-recovery]", "always() && !cancelled()",
+                      "!inputs.sdk_only && needs.publish-ready.result == 'success'",
+                      "needs.python-sdk.result == 'success'", "needs.python-sdk.outputs.publish == 'true'",
+                      "github.repository == 'mongodb/kingfisher'", "runs-on: ubuntu-24.04",
+                      "id-token: write", "name: pypi-sdk", "group: pypi-sdk-publish\n",
+                      "queue: max", "cancel-in-progress: false", "skip-existing: true", "attestations: true"):
+            self.assertIn(guard, publish)
+        self.assertNotIn("uses: ./.github/workflows/", publish)
         self.assertIn("python3 scripts/check-release-source.py", publish)
         self.assertLess(publish.index("check-release-source.py"), publish.index("pypa/gh-action-pypi-publish@"))
-        coordinator = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
-        caller = coordinator.split("  publish-python-sdk:\n", 1)[1].split("  publish-docker:\n", 1)[0]
-        for guard in ("needs: [publish-ready, python-sdk]", "always() && !cancelled()",
-                      "needs.publish-ready.result == 'success'", "needs.python-sdk.result == 'success'",
-                      "needs.python-sdk.outputs.publish == 'true'",
-                      "uses: ./.github/workflows/python-sdk.yml", "phase: publish", "publish: true"):
-            self.assertIn(guard, caller)
         self.assertIn("name: python-sdk-pending", publish)
-        self.assertNotIn("id-token: write", plan)
-        self.assertNotIn("environment:", plan)
+        self.assertIn("ref: ${{ github.sha }}", publish)
 
     def test_release_builds_do_not_replace_other_pending_releases(self):
         workflow = (ROOT / ".github/workflows/python-sdk.yml").read_text(encoding="utf-8")
         concurrency = workflow.split("concurrency:\n", 1)[1].split("env:\n", 1)[0]
         self.assertIn(
-            "group: python-sdk-${{ inputs.phase || 'build' }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+            "group: python-sdk-build-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
             concurrency,
         )
         self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", concurrency)
+
+    def test_release_guards_run_on_both_windows_architectures_without_builds(self):
+        workflow = (ROOT / ".github/workflows/python-sdk.yml").read_text(encoding="utf-8")
+        self.assertIn("  pull_request:", workflow.split("permissions:", 1)[0])
+        guards = workflow.split("  release-guards:\n", 1)[1].split("  wheels:\n", 1)[0]
+        for required in ("runs-on: ${{ matrix.os }}", "timeout-minutes: 10", "fail-fast: false",
+                         "ref: ${{ github.sha }}", "persist-credentials: false",
+                         "os: windows-latest\n            arch: x64",
+                         "os: windows-11-arm\n            arch: arm64",
+                         "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                         "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+                         "python-version: '3.13'", "architecture: ${{ matrix.arch }}",
+                         "python -X utf8 -m unittest -v"):
+            self.assertIn(required, guards)
+        for module in ("test_crates_recovery", "test_publish_crates", "test_python_sdk_recovery",
+                       "test_python_sdk_release", "test_release_cohort", "test_release_source",
+                       "test_sdk_preflight"):
+            self.assertIn("scripts.tests." + module, guards)
+        for forbidden in ("cargo ", "maturin", "id-token: write", "environment:",
+                          "pypa/gh-action-pypi-publish@"):
+            self.assertNotIn(forbidden, guards)
 
     def test_plan_includes_only_missing_artifacts(self):
         names = ["kingfisher_secret_scanner-1.3.0-cp310-abi3-win_amd64.whl",

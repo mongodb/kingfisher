@@ -1,4 +1,4 @@
-# Publishing Cargo and npm packages
+# Publishing Cargo, PyPI and npm packages
 
 [← Back to README](../README.md)
 
@@ -102,8 +102,10 @@ tests, npm native builds and sealed-package tests, and six CLI PyPI wheel builds
 succeed before any registry upload. Already-published unchanged SDKs still run their
 build/test matrices; their uploads are skipped. Failure, cancellation, or a skipped
 required build closes the gate for every publisher. Preparation jobs do not authenticate
-to registries. The reusable-call permission ceilings allow OIDC, but only the actual
-post-gate publisher jobs receive `id-token: write`.
+to registries. Reusable Python SDK and CLI-wheel workflows are build-only with no
+OIDC permission; their actual post-gate PyPI upload jobs run directly in `release.yml`
+and explicitly enable attestations. PyPI's `id-token: write` permission is confined
+to those direct upload jobs.
 
 Main and SDK-tag runs publish pending crates and Python SDK versions, not just the
 package named by the tag. **npm remains tag-only:** its handoff requires an existing
@@ -121,8 +123,14 @@ npm and PyPI upload their staged, tested archives without rebuilding them. Cargo
 rechecks the staged archive plan, then `cargo publish --locked` packages and verifies
 the same pinned source in dependency order. Cross-registry uploads are **not atomic**:
 a registry outage or authorization failure after the gate can leave a partial release.
-Retry failed publisher jobs in the original run, following the
-[npm handoff recovery rules](#npm-handoff-recovery) for npm; immutable-version checks remain enabled.
+Retry transient publisher failures with the original tested artifacts, following the
+[npm handoff recovery rules](#npm-handoff-recovery) or
+[artifact-only SDK recovery rules](PYPI.md#artifact-only-sdk-recovery) as applicable.
+A later workflow fix does not update an old run's snapshot. Immutable-version checks
+remain enabled. When crates are already published but the CLI/npm release tags are
+still absent, follow the [prepared-release, no-version-bump sequence](../.github/RELEASING.md#complete-the-prepared-releases-without-version-bumps):
+finish the normal CLI cohort first, then the npm cohort at the same reviewed main SHA,
+not crates-only recovery.
 
 ## Prepare the rule bundle
 
@@ -186,15 +194,22 @@ This attests to the release artifact and workflow, not upstream authorship.
 
 Update package versions and internal dependency version requirements together. The `path`
 fields support workspace development; published manifests use the version requirements.
-Cargo can package the selected workspace members together before they exist in the registry:
+From a clean checkout of the selected commit, build verified archives and inspect the
+read-only registry plan:
 
 ```sh
-cargo package --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner -p kingfisher-bin
+python3 scripts/publish-crates.py --package
 cargo test --locked -p kingfisher-bin --test smoke_check_rules
 make check-notices
 ```
 
-Use `--allow-dirty` only for local pre-commit verification. Inspect the `.crate` archives in
+The helper runs `cargo package --locked` with verification enabled: published members
+are packaged individually against real registry dependencies; unpublished members are
+packaged together. A batch containing already-published members would substitute fresh
+archive checksums into the CLI lockfile, even when only Git bookkeeping changed.
+The strict published CLI lockfile comparison remains enabled.
+
+Use `--allow-dirty` only for direct Cargo pre-commit checks, never in CI. Inspect the `.crate` archives in
 `target/package/`, especially the rules bundle, provenance, licenses, and viewer assets.
 The root package's explicit file list avoids shipping fixtures and generated documentation.
 `cargo package` verifies extracted packages; a `--no-verify` run alone is insufficient.
@@ -379,6 +394,69 @@ The original failed run uses its original commit and remains historical; rerunni
 cannot pick up a later metadata correction. The new recovery run publishes the missing
 crate versions without retagging `v2.15.0` or republishing its assets.
 
+## PyPI publishing and artifact-only SDK recovery
+
+Both PyPI publishers are ordinary upload jobs directly in the
+[release coordinator](../.github/workflows/release.yml), with explicit
+`attestations: true`. Reusable `python-sdk.yml` and `pypi.yml` workflows only
+build/test/prepare artifacts and receive no OIDC permission. Normal publication
+retains the complete cohort gate, pinned source checks, tested artifact handoff,
+publication concurrency, and the SDK's protected `pypi-sdk` environment.
+PyPI [does not support reusable workflows as Trusted Publishers](https://docs.pypi.org/trusted-publishers/troubleshooting/#reusable-workflows-on-github);
+same-repository/same-ref calls do not remove that limitation.
+
+An authorized PyPI project owner must **add** matching GitHub Trusted Publishers:
+
+| PyPI project | Owner / repository | Workflow filename | Environment |
+| --- | --- | --- | --- |
+| `kingfisher-secret-scanner` | `mongodb` / `kingfisher` | `release.yml` | `pypi-sdk` |
+| `kingfisher-bin` | `mongodb` / `kingfisher` | `release.yml` | **None — leave empty** |
+
+Keep the old `python-sdk.yml` / `pypi-sdk` and `pypi.yml` / no-environment records
+until the new flow is verified; later removal is optional. Keep existing GitHub
+environment rules/reviewers unchanged. YAML changes cannot configure PyPI accounts,
+and read-only validation cannot prove successful live publication. See the
+[complete PyPI setup](PYPI.md#configure-pypi-trusted-publishers).
+
+When an old SDK upload failed because its reusable-workflow OIDC identity differed
+from its attestation identity, neither PyPI-only configuration changes nor rerunning
+that old workflow snapshot repairs it. After the fix is merged and matching trust is
+added, `release.yml` offers manually opted-in `sdk_only=true` recovery with
+`publish=true`. It verifies the original complete passing cohort and SDK
+wheel/sdist/portability tests and plan, then publishes only the retained original
+SDK artifact. Recovery itself does not rebuild Rust, wheels or binaries or publish
+other packages; merging the repair still triggers ordinary automatic full-cohort CI
+on `main`. SDK-only dispatch shares main-run concurrency and waits behind that run.
+For original-artifact recovery, stop **only the new automatic main run before it
+builds/publishes**, then dispatch `sdk_only`. Never cancel/rerun the pinned original
+failed producer or let a new ordinary build publish different bytes under the same
+SDK version first. Do not disable Actions, change account/branch policies or weaken
+gates.
+
+The operator pins **both** the original producer (`release_run_id`, verified
+`release_run_attempt`, immutable pending `artifact_id`, `producer_sha` and original
+`expected_version`) **and** the current reviewed recovery workflow (`expected_sha`
+on clean current upstream `main`). Both explicit pins are required: their roles
+are distinct, but their values may match when current `main` is unchanged.
+The producer must be an ancestor of current reviewed `main` with the same SDK
+manifest version. Allowed drift is limited to the three publication workflows,
+maintainer release runbook, recovery validator,
+[release-source authorization guard](../scripts/check-release-source.py),
+[crate publication/staging helper](../scripts/publish-crates.py), allowlisted CI test
+scripts and Markdown docs/generated docs; SDK/runtime/manifests/locks/rules/other build inputs
+cannot change. The validator requires latest-effective successful gates/tests/plan
+(no older success behind a newer failure), artifact API proof of the upstream
+repository/run/SHA and creation within the selected successful SDK plan job, digest,
+retention/expiry and exact distributions. It rechecks after protected approval and
+does not check out the producer under the new workflow identity. After upload, every
+staged filename and exact SHA-256 must match PyPI, with bounded read-only visibility
+retries; `skip-existing` cannot conceal a concurrent different-byte upload. Missing or
+expired artifacts fail closed; never substitute a new build under an immutable
+version. No SDK bump is needed solely for CI-only changes if no files were published;
+a partial upload must recover the exact original artifacts. Follow the
+[artifact-only SDK recovery procedure and pinned dispatch example](PYPI.md#artifact-only-sdk-recovery),
+not a new ordinary full-build publication.
+
 ## npm publishing with GitHub Actions
 
 The [release coordinator](../.github/workflows/release.yml) reuses the build/test phase
@@ -431,9 +509,10 @@ manual SDK runs only test; only the validated internal coordinator handoff can p
    If it expires, delete only that expired connection and recreate it.
 
 The npm publisher is a separate top-level run, not a reusable publish call from
-`release.yml`, preserving npm's original OIDC identity. Other registry identities
-also stay unchanged: Python SDK `python-sdk.yml` / `pypi-sdk`, CLI wheels `pypi.yml`
-with **no environment**, and crates `release.yml` / `crates-io`.
+`release.yml`, preserving npm's original OIDC identity. PyPI uploads instead run
+directly in `release.yml`: SDK with `pypi-sdk`, CLI wheels with **no environment**.
+Their [new PyPI publisher records](#pypi-publishing-and-artifact-only-sdk-recovery)
+must be added manually. Crates retain `release.yml` / `crates-io`.
 
 Configure trust on **all seven packages**, not only the main SDK:
 
@@ -590,18 +669,19 @@ them. See the [terminal release runbook](../.github/RELEASING.md#independent-pac
 
 ## Local verification and manual publishing
 
-Python 3.11+ is required for the publishing helper. To inspect the release plan without
-publishing, first create fresh archives:
+Python 3.11+ is required for the publishing helper. From a clean checkout containing
+only tracked inputs, build fresh verified archives and inspect the plan without publishing:
 
 ```sh
-cargo package --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner -p kingfisher-bin
-python3 scripts/publish-crates.py --tag v2.19.1
+python3 scripts/publish-crates.py --package --tag v2.19.1
 python3 -m unittest discover -s scripts/tests -v
 ```
 
-Use `--allow-dirty` on the packaging command only for local pre-commit verification;
-the CI publishing job requires a clean checkout. The planner reads the archives in
-Cargo's configured target directory; always rebuild them after source changes.
+`--package` cannot be combined with `--publish`; it preserves Cargo verification and
+strict immutable-package checks. Ignored files covered by Cargo's explicit include
+globs can contaminate packages even when Git reports a clean checkout; use a fresh
+checkout, not existing local caches. Without `--package`, the planner reads existing
+archives in Cargo's configured target directory; rebuild them after source changes.
 
 An authorized publisher can use the same script with `--publish` and a securely supplied
 `CARGO_REGISTRY_TOKEN`, or run the four `cargo publish -p <package>` commands manually
