@@ -464,7 +464,8 @@ class ReleaseCohortTests(unittest.TestCase):
         python = Workflow.load("python-sdk.yml")
         self.assertEqual(node.needs["verify"], {"package"})
         self.assertTrue({"source", "build", "package"} <= node.ancestors("verify"))
-        self.assertTrue({"preflight", "wheels", "source", "cache-portability"} <= python.ancestors("plan-publish"))
+        self.assertTrue({"preflight", "release-guards", "wheels", "source", "cache-portability"}
+                        <= python.ancestors("plan-publish"))
         # Registry no-ops may skip publication, never the full coordinator build.
         self.assertIn("inputs.phase == 'build'", field(node.jobs["build"], "if"))
         for name in ("wheels", "source"):

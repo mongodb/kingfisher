@@ -46,7 +46,7 @@ class PythonSdkReleaseTests(unittest.TestCase):
         self.assertIsNotNone(needs)
         dependency_list = re.sub(r"#[^\n]*", "", needs.group(1))
         dependencies = set(re.findall(r"[\w-]+", dependency_list))
-        for required in ("preflight", "wheels", "source", "cache-portability"):
+        for required in ("preflight", "release-guards", "wheels", "source", "cache-portability"):
             self.assertIn(required, dependencies)
         self.assertIn("pattern: python-*", plan)
         self.assertIn("name: python-sdk-pending", plan)
@@ -73,6 +73,27 @@ class PythonSdkReleaseTests(unittest.TestCase):
             concurrency,
         )
         self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", concurrency)
+
+    def test_release_guards_run_on_both_windows_architectures_without_builds(self):
+        workflow = (ROOT / ".github/workflows/python-sdk.yml").read_text(encoding="utf-8")
+        self.assertIn("  pull_request:", workflow.split("permissions:", 1)[0])
+        guards = workflow.split("  release-guards:\n", 1)[1].split("  wheels:\n", 1)[0]
+        for required in ("runs-on: ${{ matrix.os }}", "timeout-minutes: 10", "fail-fast: false",
+                         "ref: ${{ github.sha }}", "persist-credentials: false",
+                         "os: windows-latest\n            arch: x64",
+                         "os: windows-11-arm\n            arch: arm64",
+                         "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                         "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+                         "python-version: '3.13'", "architecture: ${{ matrix.arch }}",
+                         "python -X utf8 -m unittest -v"):
+            self.assertIn(required, guards)
+        for module in ("test_crates_recovery", "test_publish_crates", "test_python_sdk_recovery",
+                       "test_python_sdk_release", "test_release_cohort", "test_release_source",
+                       "test_sdk_preflight"):
+            self.assertIn("scripts.tests." + module, guards)
+        for forbidden in ("cargo ", "maturin", "id-token: write", "environment:",
+                          "pypa/gh-action-pypi-publish@"):
+            self.assertNotIn(forbidden, guards)
 
     def test_plan_includes_only_missing_artifacts(self):
         names = ["kingfisher_secret_scanner-1.3.0-cp310-abi3-win_amd64.whl",

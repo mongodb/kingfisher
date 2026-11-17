@@ -55,6 +55,38 @@ jobs:
         id: check
         run: python3 scripts/check-sdk-release.py --github-event
 
+  release-guards:
+    name: Release guard tests (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            arch: x64
+          - os: windows-11-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.13'
+          architecture: ${{ matrix.arch }}
+      - name: Test release planning and recovery without builds or registry writes
+        run: >-
+          python -X utf8 -m unittest -v
+          scripts.tests.test_crates_recovery
+          scripts.tests.test_publish_crates
+          scripts.tests.test_python_sdk_recovery
+          scripts.tests.test_python_sdk_release
+          scripts.tests.test_release_cohort
+          scripts.tests.test_release_source
+          scripts.tests.test_sdk_preflight
+
   wheels:
     name: Wheel (${{ matrix.target }})
     needs: preflight
@@ -330,7 +362,7 @@ jobs:
 
   plan-publish:
     if: needs.preflight.outputs.publish == 'true' && github.repository == 'mongodb/kingfisher'
-    needs: [preflight, wheels, source, cache-portability]
+    needs: [preflight, release-guards, wheels, source, cache-portability]
     runs-on: ubuntu-latest
     outputs:
       pending: ${{ steps.plan.outputs.pending }}

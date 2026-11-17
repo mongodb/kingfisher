@@ -294,7 +294,7 @@ class WorkflowPlanTests(unittest.TestCase):
         dispatch = coordinator.split("  workflow_dispatch:\n", 1)[1].split("concurrency:", 1)[0]
         for guard in ("publish:", "type: boolean\n        default: false", "expected_sha:", "expected_version:"):
             self.assertIn(guard, dispatch)
-        precheck = workflow.split("  preflight:\n", 1)[1].split("  wheels:\n", 1)[0]
+        precheck = workflow.split("  preflight:\n", 1)[1].split("  release-guards:\n", 1)[0]
         self.assertNotRegex(precheck, r"(?m)^    if:")
         self.assertIn("fetch-depth: 0", precheck)
         self.assertIn("ref: ${{ github.sha }}", precheck)
@@ -310,7 +310,7 @@ class WorkflowPlanTests(unittest.TestCase):
         self.assertIn("github.repository == 'mongodb/kingfisher'", plan)
         self.assertNotIn("id-token: write", plan)
         self.assertNotIn("environment:", plan)
-        self.assertIn("needs: [preflight, wheels, source, cache-portability]", plan)
+        self.assertIn("needs: [preflight, release-guards, wheels, source, cache-portability]", plan)
         self.assertIn("scripts/plan-python-sdk-publish.py", plan)
 
 
