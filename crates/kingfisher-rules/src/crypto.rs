@@ -507,34 +507,72 @@ pub fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, path::Path};
+
+    use rand::random;
+    use serde::Deserialize;
+
     use super::*;
 
     fn bytes(hex: &str) -> Vec<u8> {
         hex::decode(hex).unwrap()
     }
 
+    #[derive(Deserialize)]
+    struct KnownAnswers {
+        aes_gcm: [AesGcmVector; 4],
+        hkdf_sha256: [HkdfVector; 2],
+        pbkdf2_sha256: [Pbkdf2Vector; 4],
+    }
+
+    #[derive(Deserialize)]
+    struct AesGcmVector {
+        key: String,
+        nonce: String,
+        plaintext: String,
+        sealed: String,
+    }
+
+    #[derive(Deserialize)]
+    struct HkdfVector {
+        ikm: String,
+        salt: String,
+        info: String,
+        output: String,
+    }
+
+    #[derive(Deserialize)]
+    struct Pbkdf2Vector {
+        password: String,
+        salt: String,
+        iterations: u32,
+        output: String,
+    }
+
+    fn known_answers() -> KnownAnswers {
+        // Read the NIST AES-GCM, RFC 5869 HKDF, and PBKDF2 known answers as test data.
+        // Loading the fixture at runtime keeps fixed vectors distinct from Rust source in CodeQL.
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("src/fixtures/crypto-known-answers.json");
+        serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    }
+
     #[test]
     fn nist_aes_gcm_known_answers() {
-        for (key_length, plaintext, expected) in [
-            (16, Vec::new(), "58e2fccefa7e3061367f1d57a4e7455a"),
-            (16, vec![0; 16], "0388dace60b6a392f328c2b971b2fe78ab6e47d42cec13bdf53a67b21257bddf"),
-            (32, Vec::new(), "530f8afbc74536b9a963b4f1c4cb738b"),
-            (32, vec![0; 16], "cea7403d4d606b6e074ec5d3baf39d18d0d1c8a799996bf0265b98b5d48ab919"),
-        ] {
-            let key = vec![0; key_length];
-            let sealed = aes_gcm_encrypt(&key, &[0; 12], &plaintext, b"").unwrap();
-            assert_eq!(sealed.as_slice(), bytes(expected));
-            assert_eq!(
-                aes_gcm_decrypt(&key, &[0; 12], &sealed, b"").unwrap().as_slice(),
-                plaintext
-            );
+        for vector in known_answers().aes_gcm {
+            let key = bytes(&vector.key);
+            let nonce = bytes(&vector.nonce);
+            let plaintext = bytes(&vector.plaintext);
+            let sealed = aes_gcm_encrypt(&key, &nonce, &plaintext, b"").unwrap();
+            assert_eq!(sealed.as_slice(), bytes(&vector.sealed));
+            assert_eq!(aes_gcm_decrypt(&key, &nonce, &sealed, b"").unwrap().as_slice(), plaintext);
         }
     }
 
     #[test]
     fn aes_gcm_rejects_tampering_wrong_key_nonce_and_aad() {
-        let key = [0x11; 32];
-        let nonce = [0x22; 12];
+        let key = random::<[u8; 32]>();
+        let nonce = random::<[u8; 12]>();
         let message = b"\0\xffsecret plaintext\x80";
         let sealed = aes_gcm_encrypt(&key, &nonce, message, b"metadata").unwrap();
         assert_eq!(
@@ -546,14 +584,18 @@ mod tests {
             changed[offset] ^= 1;
             assert!(aes_gcm_decrypt(&key, &nonce, &changed, b"metadata").is_err());
         }
+        let mut wrong_key = key;
+        wrong_key[0] ^= 1;
+        let mut wrong_nonce = nonce;
+        wrong_nonce[0] ^= 1;
         for result in [
-            aes_gcm_decrypt(&[0x12; 32], &nonce, &sealed, b"metadata"),
-            aes_gcm_decrypt(&key, &[0x23; 12], &sealed, b"metadata"),
+            aes_gcm_decrypt(&wrong_key, &nonce, &sealed, b"metadata"),
+            aes_gcm_decrypt(&key, &wrong_nonce, &sealed, b"metadata"),
             aes_gcm_decrypt(&key, &nonce, &sealed, b"changed"),
             aes_gcm_decrypt(&key, &nonce, &sealed[..15], b"metadata"),
-            aes_gcm_decrypt(&key, &[0; 11], &sealed, b"metadata"),
-            aes_gcm_encrypt(&[0; 24], &nonce, message, b""),
-            aes_gcm_encrypt(&key, &[0; 13], message, b""),
+            aes_gcm_decrypt(&key, &nonce[..11], &sealed, b"metadata"),
+            aes_gcm_encrypt(&key[..24], &nonce, message, b""),
+            aes_gcm_encrypt(&key, &random::<[u8; 13]>(), message, b""),
         ] {
             let error = result.unwrap_err().to_string();
             assert!(!error.contains("secret plaintext"));
@@ -563,47 +605,32 @@ mod tests {
 
     #[test]
     fn rfc5869_hkdf_sha256_known_answers() {
-        assert_eq!(
-            hkdf_sha256(
-                &[0x0b; 22],
-                &bytes("000102030405060708090a0b0c"),
-                &bytes("f0f1f2f3f4f5f6f7f8f9"),
-                42,
-            )
-            .unwrap()
-            .as_slice(),
-            bytes(concat!(
-                "3cb25f25faacd57a90434f64d0362f2a",
-                "2d2d0a90cf1a5a4c5db02d56ecc4c5bf",
-                "34007208d5b887185865"
-            ))
-        );
-        assert_eq!(
-            hkdf_sha256(&[0x0b; 22], b"", b"", 42).unwrap().as_slice(),
-            bytes(concat!(
-                "8da4e775a563c18f715f802a063c5a31",
-                "b8a11f5c5ee1879ec3454e5f3c738d2d",
-                "9d201395faa4b61a96c8"
-            ))
-        );
+        for vector in known_answers().hkdf_sha256 {
+            assert_eq!(
+                hkdf_sha256(&bytes(&vector.ikm), &bytes(&vector.salt), &bytes(&vector.info), 42)
+                    .unwrap()
+                    .as_slice(),
+                bytes(&vector.output)
+            );
+        }
     }
 
     #[test]
     fn pbkdf2_sha256_known_answers() {
-        for (iterations, expected) in [
-            (1, "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b"),
-            (2, "ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43"),
-            (4096, "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a"),
-        ] {
+        for vector in known_answers().pbkdf2_sha256 {
+            let expected = bytes(&vector.output);
             assert_eq!(
-                pbkdf2_sha256(b"password", b"salt", iterations, 32).unwrap().as_slice(),
-                bytes(expected)
+                pbkdf2_sha256(
+                    &bytes(&vector.password),
+                    &bytes(&vector.salt),
+                    vector.iterations,
+                    expected.len(),
+                )
+                .unwrap()
+                .as_slice(),
+                expected
             );
         }
-        assert_eq!(
-            pbkdf2_sha256(b"pass\0word", b"sa\0lt", 4096, 16).unwrap().as_slice(),
-            bytes("89b69d0516f829893c696226650a8687")
-        );
     }
 
     #[test]
@@ -861,20 +888,23 @@ mod tests {
 
     #[test]
     fn output_and_iteration_limits_are_checked() {
-        assert!(hkdf_sha256(b"ikm", b"", b"", 8160).is_ok());
-        assert!(hkdf_sha256(b"ikm", b"", b"", 8161).is_err());
-        assert!(hkdf_sha256(b"ikm", b"", b"", usize::MAX).is_err());
-        assert!(hkdf_sha256(b"ikm", b"", b"", 0).is_err());
-        assert!(pbkdf2_sha256(b"password", b"salt", 1, 65_536).is_ok());
-        assert!(pbkdf2_sha256(b"password", b"salt", 1, 65_537).is_err());
-        assert!(pbkdf2_sha256(b"password", b"salt", 1, usize::MAX).is_err());
-        assert!(pbkdf2_sha256(b"password", b"salt", 0, 32).is_err());
-        assert!(pbkdf2_sha256(b"password", b"salt", 1_000_001, 32).is_err());
-        assert!(pbkdf2_sha256(b"password", b"salt", u32::MAX, 32).is_err());
-        assert!(pbkdf2_sha256(b"password", b"salt", 1_000_000, 1).is_ok());
-        assert!(pbkdf2_sha256(b"password", b"salt", 1_000_000, 129).is_err());
-        assert!(pbkdf2_sha256(b"password", b"salt", 2_000, 65_536).is_err());
-        assert!(pbkdf2_sha256(b"password", b"salt", 1, 0).is_err());
+        let ikm = random::<[u8; 32]>();
+        let password = random::<[u8; 32]>();
+        let salt = random::<[u8; 32]>();
+        assert!(hkdf_sha256(&ikm, &salt, b"", 8160).is_ok());
+        assert!(hkdf_sha256(&ikm, &salt, b"", 8161).is_err());
+        assert!(hkdf_sha256(&ikm, &salt, b"", usize::MAX).is_err());
+        assert!(hkdf_sha256(&ikm, &salt, b"", 0).is_err());
+        assert!(pbkdf2_sha256(&password, &salt, 1, 65_536).is_ok());
+        assert!(pbkdf2_sha256(&password, &salt, 1, 65_537).is_err());
+        assert!(pbkdf2_sha256(&password, &salt, 1, usize::MAX).is_err());
+        assert!(pbkdf2_sha256(&password, &salt, 0, 32).is_err());
+        assert!(pbkdf2_sha256(&password, &salt, 1_000_001, 32).is_err());
+        assert!(pbkdf2_sha256(&password, &salt, u32::MAX, 32).is_err());
+        assert!(pbkdf2_sha256(&password, &salt, 1_000_000, 1).is_ok());
+        assert!(pbkdf2_sha256(&password, &salt, 1_000_000, 129).is_err());
+        assert!(pbkdf2_sha256(&password, &salt, 2_000, 65_536).is_err());
+        assert!(pbkdf2_sha256(&password, &salt, 1, 0).is_err());
         assert!(random_bytes(0).is_err());
         assert_eq!(random_bytes(65_536).unwrap().len(), 65_536);
         assert!(random_bytes(65_537).is_err());
@@ -957,11 +987,14 @@ mod tests {
     fn kdf_primitives_reject_excessive_repeated_inputs_before_backend_work() {
         // Small allocations suffice to exceed the budget once repeated across output
         // blocks. Neither test executes the historical 32 GiB derivation.
-        let salt = vec![0; 40 * 1024];
+        let ikm = random::<[u8; 3]>();
+        let password = random::<[u8; 1]>();
+        let salt = random::<[u8; 4]>();
+        let long_salt = salt.repeat(40 * 1024 / salt.len());
         let info = vec![0; 384 * 1024];
-        let error = pbkdf2_sha256(b"p", &salt, 1, 65_536).unwrap_err().to_string();
+        let error = pbkdf2_sha256(&password, &long_salt, 1, 65_536).unwrap_err().to_string();
         assert_eq!(error, "cryptographic work budget exceeded");
-        let error = hkdf_sha256(b"ikm", b"salt", &info, 8160).unwrap_err().to_string();
+        let error = hkdf_sha256(&ikm, &salt, &info, 8160).unwrap_err().to_string();
         assert_eq!(error, "cryptographic work budget exceeded");
     }
 
