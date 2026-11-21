@@ -1,13 +1,16 @@
+use std::time::Duration;
+
 use anyhow::{Context, Result, anyhow};
-use reqwest::{Client, header};
+use chrono::{DateTime, SecondsFormat, Utc};
+use reqwest::{Client, Url, header};
 use serde::Deserialize;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::{cli::commands::access_map::AccessMapArgs, validation::GLOBAL_USER_AGENT};
 
 use super::{
-    AccessMapResult, AccessSummary, AccessTokenDetails, PermissionSummary, ResourceExposure,
-    RoleBinding, Severity, build_recommendations,
+    AccessMapResult, AccessSummary, AccessTokenDetails, PermissionSummary, ProviderMetadata,
+    ResourceExposure, RoleBinding, Severity, build_recommendations,
 };
 
 const IBM_IAM_API: &str = "https://iam.cloud.ibm.com";
@@ -31,8 +34,16 @@ struct IbmApiKeyDetails {
     description: Option<String>,
     #[serde(default)]
     created_at: Option<String>,
-    #[serde(default)]
-    modified_at: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct IbmApiKeyActivityDetails {
+    activity: Option<IbmApiKeyActivity>,
+}
+
+#[derive(Deserialize)]
+struct IbmApiKeyActivity {
+    last_authn: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -83,10 +94,27 @@ pub async fn map_access(args: &AccessMapArgs) -> Result<AccessMapResult> {
 pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     let client = Client::builder()
         .user_agent(GLOBAL_USER_AGENT.as_str())
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(20))
         .build()
         .context("Failed to build IBM Cloud HTTP client")?;
+    let iam_api = Url::parse(IBM_IAM_API).expect("valid IBM IAM URL");
+    let resource_api = Url::parse(IBM_RESOURCE_API).expect("valid IBM Resource Controller URL");
+    map_access_with_client(&client, &iam_api, &resource_api, token).await
+}
 
-    let api_key_details = fetch_api_key_details(&client, token).await?;
+async fn map_access_with_client(
+    client: &Client,
+    iam_api: &Url,
+    resource_api: &Url,
+    token: &str,
+) -> Result<AccessMapResult> {
+    let iam_token = exchange_token(client, iam_api, token).await?;
+    let access_token = iam_token
+        .access_token
+        .as_deref()
+        .context("IBM Cloud access-map: IAM token exchange did not return an access token")?;
+    let api_key_details = fetch_api_key_details(client, iam_api, token, access_token).await?;
 
     let key_name = api_key_details.name.clone().unwrap_or_else(|| "ibm_cloud_apikey".to_string());
 
@@ -104,34 +132,32 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     let mut resources = Vec::new();
     let mut permissions = PermissionSummary::default();
     let mut roles = Vec::new();
-    let mut detected_scopes: Vec<String> = Vec::new();
+    let detected_scopes: Vec<_> = iam_token
+        .scope
+        .as_deref()
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect();
 
-    // Exchange API key for IAM token
-    let iam_token = exchange_token(&client, token).await;
-
-    let resource_instances = match &iam_token {
-        Ok(token_resp) => {
-            if let Some(ref access_token) = token_resp.access_token {
-                if let Some(ref scope) = token_resp.scope {
-                    for s in scope.split_whitespace() {
-                        detected_scopes.push(s.to_string());
-                    }
-                }
-                fetch_resource_instances(&client, access_token).await.unwrap_or_else(|err| {
-                    warn!("IBM Cloud access-map: resource enumeration failed: {err}");
-                    Vec::new()
-                })
-            } else {
-                warn!("IBM Cloud access-map: token exchange returned no access_token");
-                Vec::new()
-            }
+    let last_used_at = match api_key_details.id.as_deref().filter(|id| !id.is_empty()) {
+        Some(id) => {
+            fetch_api_key_last_used(client, iam_api, id, access_token).await.unwrap_or_else(|err| {
+                debug!("IBM Cloud access-map: API key activity unavailable: {err}");
+                None
+            })
         }
-        Err(err) => {
-            warn!("IBM Cloud access-map: token exchange failed: {err}");
-            risk_notes.push("IAM token exchange failed; resource enumeration skipped".into());
-            Vec::new()
-        }
+        None => None,
     };
+    let provider_metadata = last_used_at.as_ref().map(|_| ProviderMetadata {
+        credential_last_used_source: Some("IBM IAM API key activity".into()),
+        ..ProviderMetadata::default()
+    });
+    let resource_instances =
+        fetch_resource_instances(client, resource_api, access_token).await.unwrap_or_else(|err| {
+            warn!("IBM Cloud access-map: resource enumeration failed: {err}");
+            Vec::new()
+        });
 
     // Add IAM-level role
     roles.push(RoleBinding {
@@ -223,22 +249,30 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
             url: None,
             token_type: Some("apikey".into()),
             created_at: api_key_details.created_at,
-            last_used_at: api_key_details.modified_at,
+            last_used_at,
             expires_at: None,
             user_id: api_key_details.id,
             scopes: detected_scopes,
         }),
-        provider_metadata: None,
+        provider_metadata,
         fingerprint: None,
     })
 }
 
-async fn fetch_api_key_details(client: &Client, api_key: &str) -> Result<IbmApiKeyDetails> {
+async fn fetch_api_key_details(
+    client: &Client,
+    iam_api: &Url,
+    api_key: &str,
+    iam_token: &str,
+) -> Result<IbmApiKeyDetails> {
+    let mut api_key = header::HeaderValue::from_str(api_key)
+        .context("IBM Cloud access-map: invalid API key header")?;
+    api_key.set_sensitive(true);
     let resp = client
-        .post(format!("{IBM_IAM_API}/v1/apikeys/details"))
+        .get(iam_api.join("/v1/apikeys/details")?)
+        .bearer_auth(iam_token)
         .header("IAM-Apikey", api_key)
         .header(header::ACCEPT, "application/json")
-        .header(header::CONTENT_LENGTH, "0")
         .send()
         .await
         .context("IBM Cloud access-map: failed to fetch API key details")?;
@@ -253,12 +287,53 @@ async fn fetch_api_key_details(client: &Client, api_key: &str) -> Result<IbmApiK
     resp.json().await.context("IBM Cloud access-map: invalid API key details JSON")
 }
 
-async fn exchange_token(client: &Client, api_key: &str) -> Result<IbmTokenResponse> {
-    let resp = client
-        .post(format!("{IBM_IAM_API}/identity/token"))
+// The by-value endpoint resolves the key ID. Only the by-ID endpoint accepts include_activity.
+// https://cloud.ibm.com/docs/apis/iam-identity-token-api
+async fn fetch_api_key_last_used(
+    client: &Client,
+    iam_api: &Url,
+    api_key_id: &str,
+    iam_token: &str,
+) -> Result<Option<String>> {
+    let mut url = iam_api.join("/v1/apikeys/")?;
+    url.path_segments_mut()
+        .map_err(|()| anyhow!("IBM Cloud access-map: invalid IAM base URL"))?
+        .pop_if_empty()
+        .push(api_key_id);
+    let response = client
+        .get(url)
+        .query(&[("include_activity", "true")])
+        .bearer_auth(iam_token)
         .header(header::ACCEPT, "application/json")
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(format!("grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey={api_key}"))
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .context("IBM Cloud access-map: failed to fetch API key activity")?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(anyhow!(
+            "IBM Cloud access-map: API key activity lookup failed with HTTP {status}"
+        ));
+    }
+    let details = response
+        .json::<IbmApiKeyActivityDetails>()
+        .await
+        .context("IBM Cloud access-map: invalid API key activity JSON")?;
+
+    Ok(details.activity.and_then(|activity| activity.last_authn).and_then(|timestamp| {
+        DateTime::parse_from_rfc3339(&timestamp)
+            .or_else(|_| DateTime::parse_from_str(&timestamp, "%Y-%m-%dT%H:%M:%S%.f%z"))
+            .or_else(|_| DateTime::parse_from_str(&timestamp, "%Y-%m-%dT%H:%M%z"))
+            .ok()
+            .map(|date| date.with_timezone(&Utc).to_rfc3339_opts(SecondsFormat::AutoSi, true))
+    }))
+}
+
+async fn exchange_token(client: &Client, iam_api: &Url, api_key: &str) -> Result<IbmTokenResponse> {
+    let resp = client
+        .post(iam_api.join("/identity/token")?)
+        .header(header::ACCEPT, "application/json")
+        .form(&[("grant_type", "urn:ibm:params:oauth:grant-type:apikey"), ("apikey", api_key)])
         .send()
         .await
         .context("IBM Cloud access-map: failed to exchange token")?;
@@ -275,11 +350,12 @@ async fn exchange_token(client: &Client, api_key: &str) -> Result<IbmTokenRespon
 
 async fn fetch_resource_instances(
     client: &Client,
+    resource_api: &Url,
     iam_token: &str,
 ) -> Result<Vec<IbmResourceInstance>> {
     let resp = client
-        .get(format!("{IBM_RESOURCE_API}/v2/resource_instances"))
-        .header(header::AUTHORIZATION, format!("Bearer {iam_token}"))
+        .get(resource_api.join("/v2/resource_instances")?)
+        .bearer_auth(iam_token)
         .header(header::ACCEPT, "application/json")
         .send()
         .await
@@ -331,5 +407,84 @@ fn severity_to_str(severity: Severity) -> &'static str {
         Severity::Medium => "medium",
         Severity::High => "high",
         Severity::Critical => "critical",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{header, method, path, query_param},
+    };
+
+    use super::*;
+
+    #[tokio::test]
+    async fn reports_only_authentication_activity_for_the_resolved_key() {
+        for (activity_response, expected) in [
+            (
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "activity": { "last_authn": "2025-10-06T17:58+0000", "authn_count": 12 }
+                })),
+                Some("2025-10-06T17:58:00Z"),
+            ),
+            (ResponseTemplate::new(200).set_body_json(json!({ "activity": null })), None),
+            (ResponseTemplate::new(403), None),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/identity/token"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "access_token": "test-iam-token",
+                    "scope": "openid"
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v1/apikeys/details"))
+                .and(header("authorization", "Bearer test-iam-token"))
+                .and(header("iam-apikey", "test-api-key"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "id": "test-key-id",
+                    "iam_id": "test-principal-id",
+                    "modified_at": "2025-10-02T11:00:00Z"
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v1/apikeys/test-key-id"))
+                .and(query_param("include_activity", "true"))
+                .and(header("authorization", "Bearer test-iam-token"))
+                .respond_with(activity_response)
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v2/resource_instances"))
+                .and(header("authorization", "Bearer test-iam-token"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "resources": [{"name": "test-resource"}]
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            let url = Url::parse(&server.uri()).unwrap();
+            let result =
+                map_access_with_client(&Client::new(), &url, &url, "test-api-key").await.unwrap();
+            assert_eq!(result.identity.id, "test-principal-id");
+            assert_eq!(result.resources[1].name, "test-resource (global)");
+            assert_eq!(result.token_details.unwrap().last_used_at.as_deref(), expected);
+            assert_eq!(
+                result.provider_metadata.and_then(|metadata| metadata.credential_last_used_source),
+                expected.map(|_| "IBM IAM API key activity".to_owned())
+            );
+            let requests = server.received_requests().await.unwrap();
+            assert!(requests.iter().all(|request| request.url.path() == "/v1/apikeys/details"
+                || !request.headers.contains_key("iam-apikey")));
+        }
     }
 }

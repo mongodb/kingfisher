@@ -821,6 +821,13 @@ Use a separate process when a hard wall-clock execution limit is required.
 
 ## Validate explicitly
 
+Custom Liquid/Betterleaks rules can use the shared [cryptographic authentication helpers](RULES.md#cryptographic-authentication)
+(ECDH/ECDSA, AES-GCM, HKDF/PBKDF2 and Ed25519), without a separate Python crypto
+API. Load the [complete scaffold](../crates/kingfisher-scanner/examples/rules/cryptographic-auth.yml)
+through `Rules`, retain its invisible client-ID finding, and use `Validator`
+explicitly. Its `.invalid` endpoint and public test keys are teaching fixtures,
+not a live provider; review and adapt the protocol before enabling requests.
+
 Custom YAML HTTP rules also support [OAuth2 authentication](RULES.md#oauth2-authentication-for-http-verification-services)
 for a configured verification service. Load the rule through `Rules`, set its
 credential environment variables, and reuse a `Validator` to share token refresh

@@ -39,7 +39,15 @@ impl CommandLineArgs {
     /// supplied this flag" from "clap filled in a default" — required for
     /// project-config precedence (`CLI > env > config > built-in default`).
     pub fn parse_args_with_matches() -> (Self, ArgMatches) {
-        let matches = CommandLineArgs::command().get_matches();
+        Self::parse_args_from_with_matches(std::env::args_os())
+    }
+
+    /// Parse supplied arguments with the same normalization as the command line.
+    #[doc(hidden)]
+    pub fn parse_args_from_with_matches(
+        argv: impl IntoIterator<Item = std::ffi::OsString>,
+    ) -> (Self, ArgMatches) {
+        let matches = CommandLineArgs::command().get_matches_from(argv);
         let mut args = CommandLineArgs::from_arg_matches(&matches)
             .expect("clap-derive guarantees a successful round-trip");
 
@@ -186,13 +194,21 @@ pub struct GlobalArgs {
     #[arg(global = true, long, value_enum, default_value = "strict")]
     pub tls_mode: TlsMode,
 
-    /// Allow validation requests to internal/private IP addresses.
+    /// Allow all validators to use internal/private IP addresses.
     ///
     /// By default, Kingfisher blocks HTTP requests to loopback, private,
     /// and link-local addresses during credential validation to prevent SSRF.
-    /// Use this flag when scanning infrastructure that uses internal endpoints.
+    /// Use --enable-rule-internal-ips or --enable-internal-ips-for for rule-level grants.
     #[arg(global = true, long = "allow-internal-ips", default_value_t = false)]
     pub allow_internal_ips: bool,
+
+    /// Allow internal IPs for custom YAML rules with `allow_internal_ips: true`.
+    #[arg(global = true, long)]
+    pub enable_rule_internal_ips: bool,
+
+    /// Allow internal IPs for validators whose full rule ID matches GLOB. Repeatable.
+    #[arg(global = true, long, value_name = "GLOB")]
+    pub enable_internal_ips_for: Vec<String>,
 
     /// Enable configured fallback environments; revoke validates first and acts only on the verified environment.
     /// Primary only by default; scan/validate never revoke automatically, and revocation never fails over mutations.
@@ -250,6 +266,8 @@ impl Default for GlobalArgs {
             quiet: false,
             tls_mode: TlsMode::Strict,
             allow_internal_ips: false,
+            enable_rule_internal_ips: false,
+            enable_internal_ips_for: Vec::new(),
             http_fallbacks: false,
             ignore_certs: false,
             self_update: false,

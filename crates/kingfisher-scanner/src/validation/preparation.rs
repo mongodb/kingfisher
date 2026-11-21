@@ -5,7 +5,10 @@ use kingfisher_rules::{HttpRequest, MultipartConfig, ResponseExtractor, Revocati
 use liquid::{Object, model::Value};
 use serde::Serialize;
 
-use super::{http_validation::with_request_template_globals, template_vars::extract_template_vars};
+use super::{
+    http_validation::with_request_template_globals,
+    template_vars::{extract_template_vars, required_template_vars},
+};
 
 /// One actionable input issue. Contains names and categories, never input values,
 /// rendered URLs, template source, or provider/parser error text.
@@ -39,13 +42,28 @@ fn template(
         diagnostics.push(CredentialInputDiagnostic::new(stage, "invalid_configuration", None));
         return;
     };
+    let missing = |text: &str| -> Vec<String> {
+        extract_template_vars(text)
+            .into_iter()
+            .filter(|name| !globals.contains_key(name.as_str()))
+            .collect()
+    };
+    // Never repeat crypto execution (including randomness) during offline preparation.
+    // Only provable external requirements are authoritative here; the legacy lexical
+    // extractor does not understand local bindings, optional branches, or object paths.
+    if kingfisher_rules::liquid_filters::template_uses_crypto_filters(text) {
+        diagnostics.extend(
+            required_template_vars(text)
+                .into_iter()
+                .filter(|name| !globals.contains_key(name.as_str()))
+                .map(|name| CredentialInputDiagnostic::new(stage, "missing_variable", Some(name))),
+        );
+        return;
+    }
     if parsed.render(globals).is_ok() {
         return;
     }
-    let missing: Vec<_> = extract_template_vars(text)
-        .into_iter()
-        .filter(|name| !globals.contains_key(name.as_str()))
-        .collect();
+    let missing = missing(text);
     if missing.is_empty() {
         diagnostics.push(CredentialInputDiagnostic::new(stage, "invalid_configuration", None));
     } else {
@@ -291,4 +309,176 @@ pub(crate) fn revocation_with_endpoint(
 
 fn has_value(values: &BTreeMap<String, String>, names: &[&str]) -> bool {
     names.iter().any(|name| values.get(*name).is_some_and(|value| !value.is_empty()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crypto_templates_are_checked_lexically_not_rendered() {
+        let parser =
+            kingfisher_rules::register_liquid_filters(liquid::ParserBuilder::with_stdlib())
+                .build()
+                .unwrap();
+        let globals = liquid::object!({"TOKEN": "secret"});
+        // Out-of-range PBKDF2 would fail a speculative render; preparation must not run it.
+        let source = "{{ TOKEN | b64enc | pbkdf2_sha256: '', 1000001, 32 }}";
+        let mut diagnostics = Vec::new();
+        template(&parser, source, &globals, "validation", &mut diagnostics);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+        let source = "{{ MISSING | ecdsa_sign: TOKEN, 'P-256' }}";
+        template(&parser, source, &globals, "validation", &mut diagnostics);
+        assert_eq!(
+            diagnostics,
+            [CredentialInputDiagnostic::new(
+                "validation",
+                "missing_variable",
+                Some("MISSING".into())
+            )]
+        );
+    }
+
+    #[test]
+    fn crypto_preparation_accepts_locals_and_optional_control_flow_without_rendering() {
+        let parser =
+            kingfisher_rules::register_liquid_filters(liquid::ParserBuilder::with_stdlib())
+                .build()
+                .unwrap();
+        let globals = liquid::object!({"TOKEN": "not-base64"});
+        let source = "{%- assign derived = TOKEN | pbkdf2_sha256: '', 1000001, 32 -%}\n\
+             {%- capture proof -%}{{ derived }}{%- endcapture -%}\n\
+             {% if false %}{{ UNREACHABLE | sha512 }}{% endif %}\n\
+             {% for item in OPTIONAL_ITEMS %}{{ item | sha512 }}{% endfor %}\n\
+             {{ proof }}";
+        let mut diagnostics = Vec::new();
+        template(&parser, source, &globals, "validation", &mut diagnostics);
+        // Invalid Base64 and out-of-range PBKDF2 would fail any speculative render.
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn crypto_preparation_checks_exact_global_roots_and_simple_filter_arguments() {
+        let parser =
+            kingfisher_rules::register_liquid_filters(liquid::ParserBuilder::with_stdlib())
+                .build()
+                .unwrap();
+        let globals = liquid::object!({
+            "TOKEN": "not-base64", "account": {"id": "tenant"}, "lowercase": "present"
+        });
+        let mut diagnostics = Vec::new();
+        for source in [
+            "{{ account.id | sha512 }}{{ lowercase | sha512 }}",
+            "{{ OPTIONAL | default: TOKEN | sha512 }}",
+            r"{{ TOKEN | append: '\' | append: '| ecdsa_sign: MISSING }}' | sha512 }}",
+            r#"{{ TOKEN | append: "\" | append: "| ecdsa_sign: MISSING }}" | sha512 }}"#,
+        ] {
+            template(&parser, source, &globals, "validation", &mut diagnostics);
+        }
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+        template(
+            &parser,
+            "{{ TOKEN | ecdsa_sign: SIGNING_KEY, 'P-256' }}{{ MISSING_ACCOUNT.id | sha512 }}\
+             {{ TOKEN | hmac_sha512: HMAC_KEY }}",
+            &globals,
+            "validation",
+            &mut diagnostics,
+        );
+        assert_eq!(
+            diagnostics,
+            ["HMAC_KEY", "MISSING_ACCOUNT", "SIGNING_KEY"].map(|name| {
+                CredentialInputDiagnostic::new("validation", "missing_variable", Some(name.into()))
+            })
+        );
+    }
+
+    #[test]
+    fn packaged_crypto_scaffold_prepares_without_executing_crypto() {
+        let parser =
+            kingfisher_rules::register_liquid_filters(liquid::ParserBuilder::with_stdlib())
+                .build()
+                .unwrap();
+        let source = include_str!("../../examples/rules/cryptographic-auth.yml");
+        let rules = kingfisher_rules::Rules::from_paths_and_contents(
+            [(std::path::Path::new("cryptographic-auth.yml"), source.as_bytes())],
+            kingfisher_rules::Confidence::Low,
+        )
+        .unwrap();
+        let rule = rules.rules.get("custom.crypto-demo.liquid-p256").unwrap();
+        // Deliberately invalid signing material makes rendering inappropriate here.
+        let values = BTreeMap::from([
+            ("TOKEN".into(), "not-base64".into()),
+            ("CLIENT_ID".into(), "tenant-fixture".into()),
+        ]);
+        let mut diagnostics = Vec::new();
+        rule_validation(&parser, rule, false, &values, &mut diagnostics);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn crypto_revocation_preparation_only_uses_earlier_extractor_values() {
+        let parser =
+            kingfisher_rules::register_liquid_filters(liquid::ParserBuilder::with_stdlib())
+                .build()
+                .unwrap();
+        let values = BTreeMap::from([("TOKEN".into(), "not-base64".into())]);
+        for (first_body, missing) in [("lookup", false), ("{{ CHALLENGE | sha512 }}", true)] {
+            let action: Revocation = serde_json::from_value(serde_json::json!({
+                "type": "HttpMultiStep",
+                "content": {"steps": [
+                    {"request": {"method": "GET", "url": "https://example.invalid/lookup",
+                                 "body": first_body},
+                     "extract": {"CHALLENGE": {"type": "Body"}}},
+                    {"request": {"method": "DELETE", "url": "{{ VALIDATION_ORIGIN }}/revoke",
+                                 "body": "{% assign signed = CHALLENGE | ecdsa_sign: TOKEN, 'P-256' %}{{ signed }}"}}
+                ]}
+            }))
+            .unwrap();
+            let mut diagnostics = Vec::new();
+            revocation(&parser, &action, &values, &mut diagnostics);
+            if missing {
+                assert_eq!(
+                    diagnostics,
+                    [CredentialInputDiagnostic::new(
+                        "revocation",
+                        "missing_variable",
+                        Some("CHALLENGE".into())
+                    )]
+                );
+            } else {
+                assert!(diagnostics.is_empty(), "{diagnostics:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_preparation_still_renders_before_lexical_missing_checks() {
+        let parser =
+            kingfisher_rules::register_liquid_filters(liquid::ParserBuilder::with_stdlib())
+                .build()
+                .unwrap();
+        let globals = liquid::object!({"TOKEN": "secret"});
+        let mut diagnostics = Vec::new();
+        template(
+            &parser,
+            "{% assign local = TOKEN %}{{ local }}{% if false %}{{ MISSING }}{% endif %}",
+            &globals,
+            "validation",
+            &mut diagnostics,
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        template(
+            &parser,
+            "{{ TOKEN | slice: 'not-an-integer' }}",
+            &globals,
+            "validation",
+            &mut diagnostics,
+        );
+        assert_eq!(
+            diagnostics,
+            [CredentialInputDiagnostic::new("validation", "invalid_configuration", None)]
+        );
+    }
 }

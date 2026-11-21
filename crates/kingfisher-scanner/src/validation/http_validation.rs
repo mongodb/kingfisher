@@ -1,7 +1,7 @@
 use super::limits::ResourceTimeout;
 use std::{collections::BTreeMap, future::Future, net::IpAddr, str::FromStr, time::Duration};
 
-use anyhow::{Error, Result, anyhow};
+use anyhow::{Error, Result, anyhow, bail};
 use http::StatusCode;
 use liquid::Object;
 use liquid_core::Value;
@@ -40,7 +40,7 @@ pub const SSRF_BLOCKED_MESSAGE: &str =
     "skipped non-public host (SSRF protection; use --allow-internal-ips to permit)";
 
 use super::GLOBAL_USER_AGENT;
-use kingfisher_rules::ResponseMatcher;
+use kingfisher_rules::{ResponseMatcher, liquid_filters::TemplateWorkBudget};
 
 /// Build a deterministic cache key from the immutable parts of an HTTP request.
 pub fn generate_http_cache_key_parts(
@@ -148,12 +148,37 @@ pub fn build_request_builder(
     parser: &liquid::Parser,
     globals: &liquid::Object,
 ) -> Result<RequestBuilder, String> {
+    build_request_builder_with_budget(
+        client,
+        method_str,
+        url,
+        headers,
+        body,
+        timeout,
+        parser,
+        globals,
+        &mut TemplateWorkBudget::default(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_request_builder_with_budget(
+    client: &Client,
+    method_str: &str,
+    url: &Url,
+    headers: &BTreeMap<String, String>,
+    body: &Option<String>,
+    timeout: Duration,
+    parser: &liquid::Parser,
+    globals: &liquid::Object,
+    budget: &mut TemplateWorkBudget,
+) -> Result<RequestBuilder, String> {
     let method = parse_http_method(method_str).map_err(|err_msg| {
         debug!("{}", err_msg);
         err_msg
     })?;
     let mut request_builder = client.request(method, url.clone()).resource_timeout(timeout);
-    let custom_headers = process_headers(headers, parser, globals, url)
+    let custom_headers = process_headers_with_budget(headers, parser, globals, budget)
         .map_err(|e| format!("Error processing headers: {}", e))?;
 
     let user_agent = GLOBAL_USER_AGENT.as_str();
@@ -179,12 +204,19 @@ pub fn build_request_builder(
     request_builder = request_builder.headers(combined_headers);
 
     if let Some(body_template) = body {
-        let template = parser
-            .parse(body_template)
-            .map_err(|e| format!("Error parsing body template: {}", e))?;
-        let rendered_body = template
-            .render(globals)
-            .map_err(|e| format!("Error rendering body template: {}", e))?;
+        let template = parser.parse(body_template).map_err(|error| {
+            // The returned error can reach reports, so it never quotes template literals.
+            // Parse errors contain only rule source (no runtime inputs), so log them for rule
+            // authors, except where the source may embed key material for crypto filters.
+            if !kingfisher_rules::liquid_filters::template_uses_crypto_filters(body_template) {
+                debug!("Error parsing body template: {error}");
+            }
+            "Error parsing body template".to_string()
+        })?;
+        let rendered_body = budget
+            .render(&template, globals)
+            // Liquid's outer FilterChain can attach secret inputs even to sanitized filter errors.
+            .map_err(|_| "Error rendering body template".to_string())?;
         request_builder = request_builder.body(rendered_body);
     }
 
@@ -192,31 +224,50 @@ pub fn build_request_builder(
 }
 
 /// Process headers from a BTreeMap, rendering any Liquid templates.
+///
+/// For backward compatibility, invalid templates/fields are omitted, not fatal. Headers that
+/// apply a newly added cryptographic filter instead fail closed at every stage: parsing,
+/// rendering, and HTTP field conversion. Sending without authentication could make a live
+/// credential look revoked. Legacy hashing/HMAC filters retain the omission behavior.
+/// Logs name the (rule-defined) header key but never its template, value, or the URL.
 pub fn process_headers(
     headers: &BTreeMap<String, String>,
     parser: &liquid::Parser,
     globals: &Object,
-    url: &Url,
+    _url: &Url,
+) -> Result<HeaderMap> {
+    process_headers_with_budget(headers, parser, globals, &mut TemplateWorkBudget::default())
+}
+
+fn process_headers_with_budget(
+    headers: &BTreeMap<String, String>,
+    parser: &liquid::Parser,
+    globals: &Object,
+    budget: &mut TemplateWorkBudget,
 ) -> Result<HeaderMap> {
     let mut headers_map = HeaderMap::new();
     for (key, value) in headers {
+        let uses_crypto = kingfisher_rules::liquid_filters::template_uses_crypto_filters(value);
         let template = match parser.parse(value) {
             Ok(t) => t,
-            Err(e) => {
-                debug!("Error parsing Liquid template for '{}': {}", key, e);
+            Err(error) => {
+                if uses_crypto {
+                    bail!("Failed to parse cryptographic header '{key}'");
+                }
+                // Parse errors quote only rule source, never runtime inputs.
+                debug!("Error parsing template for header '{key}': {error}");
                 continue;
             }
         };
 
-        let header_value = match template.render(globals) {
+        let header_value = match budget.render(&template, globals) {
             Ok(s) => s,
-            Err(e) => {
-                debug!(
-                    "Failed to render header template. URL = <{}> | Key '{}': {}",
-                    url.as_str(),
-                    key,
-                    e
-                );
+            Err(_) => {
+                // Liquid adds runtime inputs outside a filter's own sanitized error.
+                if uses_crypto {
+                    bail!("Failed to render cryptographic header '{key}'");
+                }
+                debug!("Failed to render template for header '{key}'");
                 continue;
             }
         };
@@ -225,25 +276,21 @@ pub fn process_headers(
         let cleaned_value = header_value.trim().replace(&['\n', '\r'][..], "");
         let name = match HeaderName::from_str(&cleaned_key) {
             Ok(n) => n,
-            Err(e) => {
-                debug!(
-                    "Invalid header name. URL = <{}> | Key '{}': {}",
-                    url.as_str(),
-                    cleaned_key,
-                    e
-                );
+            Err(_) => {
+                if uses_crypto {
+                    bail!("Invalid name for cryptographic header '{key}'");
+                }
+                debug!("Invalid header name '{cleaned_key}'");
                 continue;
             }
         };
         let value = match HeaderValue::from_str(&cleaned_value) {
             Ok(v) => v,
-            Err(e) => {
-                debug!(
-                    "Invalid header value. URL = <{}> | Value '{}': {}",
-                    url.as_str(),
-                    cleaned_value,
-                    e
-                );
+            Err(_) => {
+                if uses_crypto {
+                    bail!("Invalid value for cryptographic header '{key}'");
+                }
+                debug!("Invalid rendered value for header '{key}'");
                 continue;
             }
         };
@@ -681,6 +728,165 @@ mod tests {
     use time::OffsetDateTime;
 
     #[test]
+    fn crypto_body_errors_do_not_expose_liquid_input_or_source() {
+        let parser =
+            kingfisher_rules::register_liquid_filters(liquid::ParserBuilder::with_stdlib())
+                .build()
+                .unwrap();
+        let client = Client::new();
+        let globals = liquid::object!({"TOKEN": "SENSITIVE-KEY-MATERIAL"});
+        for body in [
+            "{{ TOKEN | ec_public_key: 'P-256' }}",
+            "{{ 'SENSITIVE-KEY-MATERIAL' | ec_public_key: 'P-256' }}",
+            "{{ 'SENSITIVE-KEY-MATERIAL' | unknown_crypto_filter }}",
+        ] {
+            let error = build_request_builder(
+                &client,
+                "POST",
+                &Url::parse("https://crypto.example.invalid").unwrap(),
+                &BTreeMap::new(),
+                &Some(body.into()),
+                Duration::from_secs(1),
+                &parser,
+                &globals,
+            )
+            .unwrap_err();
+            assert!(!error.contains("SENSITIVE-KEY-MATERIAL"));
+            assert!(
+                error == "Error rendering body template" || error == "Error parsing body template"
+            );
+        }
+    }
+
+    #[test]
+    fn crypto_header_errors_fail_the_request_while_legacy_headers_are_omitted() {
+        let parser =
+            kingfisher_rules::register_liquid_filters(liquid::ParserBuilder::with_stdlib())
+                .build()
+                .unwrap();
+        let client = Client::new();
+        let globals = liquid::object!({"TOKEN": "SENSITIVE-KEY-MATERIAL", "OTHER": "x"});
+        let build = |value: &str| {
+            let headers = BTreeMap::from([
+                ("Authorization".into(), value.into()),
+                ("Content-Type".into(), "application/json".into()),
+            ]);
+            // Build only: no request is sent by this test.
+            build_request_builder(
+                &client,
+                "POST",
+                &Url::parse("https://crypto.example.invalid").unwrap(),
+                &headers,
+                &None,
+                Duration::from_secs(1),
+                &parser,
+                &globals,
+            )
+        };
+        // A failed signature/key header must not be silently dropped: the provider would
+        // reject the unauthenticated request and the live credential would look inactive.
+        for value in [
+            "{{ TOKEN | ec_public_key: 'P-256' }}",
+            "{{ 'SENSITIVE-KEY-MATERIAL' | ec_public_key: 'P-256' }}",
+            "Signature {{ OTHER | b64enc | ecdsa_sign: TOKEN, 'P-256' }}",
+        ] {
+            let error = build(value).unwrap_err();
+            assert!(error.contains("Failed to render cryptographic header 'Authorization'"));
+            assert!(!error.contains("SENSITIVE-KEY-MATERIAL"));
+        }
+        // Legacy, non-crypto header failures keep the historical omission behavior.
+        let request = build("{{ TOKEN | unknown_legacy_filter }}").unwrap().build().unwrap();
+        assert!(!request.headers().contains_key("authorization"));
+        assert_eq!(request.headers()["content-type"], "application/json");
+    }
+
+    #[test]
+    fn crypto_header_parse_and_http_field_errors_fail_closed() {
+        let parser =
+            kingfisher_rules::register_liquid_filters(liquid::ParserBuilder::with_stdlib())
+                .build()
+                .unwrap();
+        let globals = liquid::object!({"TOKEN": "SENSITIVE-KEY-MATERIAL"});
+        let url = Url::parse("https://crypto.example.invalid").unwrap();
+        for (key, value, expected) in [
+            (
+                "Authorization",
+                "{{ TOKEN | ecdsa_sign: TOKEN }}",
+                "Failed to parse cryptographic header 'Authorization'",
+            ),
+            (
+                "Authorization",
+                "{{ TOKEN | ed25519_sign }}",
+                "Failed to parse cryptographic header 'Authorization'",
+            ),
+            (
+                "Authorization",
+                "{% assign proof = TOKEN | ecdsa_sign: TOKEN %}{{ proof }}",
+                "Failed to parse cryptographic header 'Authorization'",
+            ),
+            (
+                "Invalid Header",
+                "{{ TOKEN | sha512 }}",
+                "Invalid name for cryptographic header 'Invalid Header'",
+            ),
+            (
+                "Authorization",
+                "{{ TOKEN | sha512 }}\0",
+                "Invalid value for cryptographic header 'Authorization'",
+            ),
+        ] {
+            let headers = BTreeMap::from([(key.into(), value.into())]);
+            let error = process_headers(&headers, &parser, &globals, &url).unwrap_err();
+            assert_eq!(error.to_string(), expected);
+            assert!(!error.to_string().contains("SENSITIVE-KEY-MATERIAL"));
+        }
+    }
+
+    #[test]
+    fn legacy_headers_ignore_inert_crypto_names_and_keep_omission_behavior() {
+        let parser =
+            kingfisher_rules::register_liquid_filters(liquid::ParserBuilder::with_stdlib())
+                .build()
+                .unwrap();
+        let globals = liquid::object!({"TOKEN": "legacy-token"});
+        let url = Url::parse("https://crypto.example.invalid").unwrap();
+        // These templates do not apply new crypto filters, even if their source mentions one.
+        for value in [
+            "| sha512 {{ MISSING }}",
+            "{% comment %}| sha512{% endcomment %}{{ MISSING }}",
+            "{% raw %}{{ TOKEN | sha512 }}{% endraw %}{{ MISSING }}",
+            "{{ '| sha512' }}{{ MISSING }}",
+            "{% assign literal = '| sha512' %}{{ MISSING }}",
+            "{{ TOKEN | unknown_legacy_filter }}",
+            "{{ TOKEN | sha256 }}\0",
+        ] {
+            let headers = BTreeMap::from([
+                ("Authorization".into(), value.into()),
+                ("Content-Type".into(), "application/json".into()),
+                ("Invalid Header".into(), "legacy-value".into()),
+            ]);
+            let rendered = process_headers(&headers, &parser, &globals, &url).unwrap();
+            assert!(!rendered.contains_key("authorization"), "{value}");
+            assert_eq!(rendered["content-type"], "application/json");
+            assert_eq!(rendered.len(), 1);
+        }
+        // Old cryptographic helpers are not reclassified as new crypto-policy opt-ins.
+        for value in [
+            "{{ TOKEN | sha256 }}",
+            "{{ TOKEN | hmac_sha1: 'key' }}",
+            "{{ TOKEN | hmac_sha256: 'key' }}",
+            "{{ TOKEN | hmac_sha384: 'key' }}",
+        ] {
+            let expected = parser.parse(value).unwrap().render(&globals).unwrap();
+            let headers = BTreeMap::from([("Authorization".into(), value.into())]);
+            let rendered = process_headers(&headers, &parser, &globals, &url).unwrap();
+            assert_eq!(rendered["authorization"], expected, "{value}");
+            let invalid = BTreeMap::from([("Authorization".into(), format!("{value}\0"))]);
+            assert!(process_headers(&invalid, &parser, &globals, &url).unwrap().is_empty());
+        }
+    }
+
+    #[test]
     fn request_template_globals_add_stable_values() {
         let globals = Object::new();
         let rendered = with_request_template_globals(&globals);
@@ -696,15 +902,22 @@ mod tests {
     }
 
     #[test]
-    fn request_template_globals_preserve_explicit_overrides() {
+    fn request_and_cache_key_globals_preserve_explicit_overrides() {
         let mut globals = Object::new();
         globals.insert("REQUEST_RFC1123_DATE".into(), Value::scalar("custom-date"));
         globals.insert("REQUEST_UNIX_MILLIS".into(), Value::scalar("123"));
 
-        let rendered = with_request_template_globals(&globals);
-
-        assert_eq!(rendered.get("REQUEST_RFC1123_DATE").unwrap().to_kstr(), "custom-date");
-        assert_eq!(rendered.get("REQUEST_UNIX_MILLIS").unwrap().to_kstr(), "123");
+        for (source, rendered) in [
+            ("request", with_request_template_globals(&globals)),
+            ("cache key", with_cache_key_template_globals(&globals)),
+        ] {
+            assert_eq!(
+                rendered.get("REQUEST_RFC1123_DATE").unwrap().to_kstr(),
+                "custom-date",
+                "{source}"
+            );
+            assert_eq!(rendered.get("REQUEST_UNIX_MILLIS").unwrap().to_kstr(), "123", "{source}");
+        }
     }
 
     #[test]
@@ -714,18 +927,6 @@ mod tests {
 
         assert_eq!(rendered.get("REQUEST_RFC1123_DATE").unwrap().to_kstr(), "REQUEST_RFC1123_DATE");
         assert_eq!(rendered.get("REQUEST_UNIX_MILLIS").unwrap().to_kstr(), "REQUEST_UNIX_MILLIS");
-    }
-
-    #[test]
-    fn cache_key_template_globals_preserve_explicit_overrides() {
-        let mut globals = Object::new();
-        globals.insert("REQUEST_RFC1123_DATE".into(), Value::scalar("custom-date"));
-        globals.insert("REQUEST_UNIX_MILLIS".into(), Value::scalar("123"));
-
-        let rendered = with_cache_key_template_globals(&globals);
-
-        assert_eq!(rendered.get("REQUEST_RFC1123_DATE").unwrap().to_kstr(), "custom-date");
-        assert_eq!(rendered.get("REQUEST_UNIX_MILLIS").unwrap().to_kstr(), "123");
     }
 
     #[test]

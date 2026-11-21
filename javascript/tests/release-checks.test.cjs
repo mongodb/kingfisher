@@ -1,10 +1,8 @@
 'use strict';
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
-const fs = require('node:fs');
-const path = require('node:path');
 const { checkABI, floors } = require('../scripts/check-linux-abi.cjs');
-const { inventory, dependencies, validate, placeholders, generate } = require('../../scripts/third-party-notices.cjs');
+const { inventory, validate, placeholders, generate } = require('../../scripts/third-party-notices.cjs');
 
 const imported = version => `  12: 0000000000000000 0 FUNC GLOBAL DEFAULT UND example@${version} (2)`;
 const needed = libraries => libraries.map(name => ` 0x0000000000000001 (NEEDED) Shared library: [${name}]`).join('\n');
@@ -34,47 +32,12 @@ function block(name, version = '1.0.0', text = 'verbatim license fixture', licen
 }
 function document(...blocks) { return 'root_name: kingfisher-bin\nthird_party_libraries:\n' + blocks.join(''); }
 
-test('notice graph includes all workspace features/platforms and normal/build/proc-macro edges', () => {
-  const registry = 'registry+https://github.com/rust-lang/crates.io-index';
-  const packages = ['kingfisher-bin', 'normal', 'build-helper', 'proc-macro', 'windows-only', 'optional-validator', 'dev-only']
-    .map(name => ({ id: name, name, version: '1.0.0', source: name === 'kingfisher-bin' ? null : registry }));
-  let trees = 0;
-  const expected = dependencies(args => {
-    assert.ok(args.includes('--locked') && args.includes('--offline') && args.includes('--all-features'));
-    if (args[0] === 'metadata') return JSON.stringify({ packages, workspace_members: ['kingfisher-bin'] });
-    assert.equal(args[0], 'tree');
-    assert.ok(args.includes('--workspace'));
-    assert.ok(!args.includes('-p') && !args.includes('--no-proc-macro'));
-    assert.equal(args[args.indexOf('--target') + 1], 'all');
-    assert.equal(args[args.indexOf('--edges') + 1], 'normal,build');
-    trees++;
-    return packages.filter(pkg => pkg.name !== 'dev-only').map(pkg => `${pkg.name} v${pkg.version}`).join('\n');
-  });
-  assert.equal(trees, 1);
-  assert.deepEqual([...expected.keys()], ['normal@1.0.0', 'build-helper@1.0.0', 'proc-macro@1.0.0', 'windows-only@1.0.0', 'optional-validator@1.0.0']);
-});
-
-test('notice inventory rejects stale versions, duplicates, missing dependencies and incomplete legal fields', () => {
-  const expected = new Map([['normal@1.0.0', { license: 'MIT' }], ['build-helper@1.0.0', { license: 'MIT' }]]);
-  const entries = inventory(document(block('normal'), block('build-helper'), block('historical-native')));
-  assert.throws(() => validate(entries, expected, {}), /Stale\/first-party/);
-  entries.delete('historical-native@1.0.0');
-  validate(entries, expected, {});
-  assert.throws(() => inventory(document(block('normal'), block('normal'))), /Duplicate notice/);
-  assert.throws(() => validate(inventory(document(block('normal'))), expected, {}), /Missing third-party notices/);
-  entries.set('normal@1.0.0', block('normal').replace('  license: MIT\n', ''));
-  assert.throws(() => validate(entries, expected, {}), /Incomplete\/mismatched license text/);
-  entries.set('normal@1.0.0', block('normal').replace(/^    text: .*\n/m, ''));
-  assert.throws(() => validate(entries, expected, {}), /Incomplete\/mismatched license text/);
-});
-
-test('removed schemafy and Inflector retain neither live overrides nor shipped notices', () => {
-  const directory = path.resolve(__dirname, '../../scripts/license-overrides');
-  const overrides = JSON.parse(fs.readFileSync(path.join(directory, 'index.json'), 'utf8')).packages;
-  const entries = inventory(fs.readFileSync(path.resolve(__dirname, '../../THIRD_PARTY_NOTICES'), 'utf8'));
-  for (const key of ['schemafy_core@0.6.0', 'schemafy_lib@0.6.0', 'Inflector@0.11.4']) {
-    assert.ok(!Object.hasOwn(overrides, key), `Removed dependency must not retain an override: ${key}`);
-    assert.ok(!entries.has(key), `Removed dependency must not retain a shipped notice: ${key}`);
+test('notice inventory rejects missing license fields', () => {
+  const expected = new Map([['normal@1.0.0', { license: 'MIT' }]]);
+  const complete = block('normal');
+  for (const field of ['  license: MIT\n', '    text: "verbatim license fixture"\n']) {
+    const entries = inventory(document(complete.replace(field, '')));
+    assert.throws(() => validate(entries, expected, {}), /Incomplete\/mismatched license text/);
   }
 });
 

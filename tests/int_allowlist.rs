@@ -240,6 +240,7 @@ fn run_skiplist(skip_regex: Vec<String>, skip_skipword: Vec<String>) -> Result<u
         endpoint: Vec::new(),
         endpoint_config: None,
         config: None,
+        ..Default::default()
     };
 
     let loaded = RuleLoader::from_rule_specifiers(&scan_args.rules).load(&scan_args)?;

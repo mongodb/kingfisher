@@ -33,6 +33,9 @@ impl Revoker {
         if error.is::<super::revocation::RevocationIndeterminate>() {
             return "provider_unknown";
         }
+        if error.is::<super::SsrfBlockedError>() {
+            return "target_blocked";
+        }
         if error.downcast_ref::<tokio::time::error::Elapsed>().is_some() {
             return "timeout";
         }

@@ -41,11 +41,13 @@ fn unlimited_file_size_overrides_explicit_limit_and_config() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("secret.txt");
     std::fs::write(&path, format!("{}\ntoken={SECRET}\n", "padding ".repeat(100)))?;
-    scan(&path)
-        .arg("--max-file-size=0.0001")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(SECRET).not());
+    for target in [path.as_path(), dir.path()] {
+        scan(target)
+            .arg("--max-file-size=0.0001")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(SECRET).not());
+    }
     scan(&path)
         .args(["--max-file-size=0.0001", "--no-timeouts"])
         .assert()

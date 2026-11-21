@@ -37,6 +37,7 @@ use crate::{
         revoke_aws_access_key_with_options, validate_aws_credentials_input,
     },
     validation::gcp::revoke_gcp_service_account_key,
+    validation::internal_ip_policy::RuleInternalIpPolicy,
 };
 
 use kingfisher_rules::{
@@ -45,7 +46,8 @@ use kingfisher_rules::{
 
 pub use kingfisher_scanner::validation::revocation::DirectRevocationResult;
 use kingfisher_scanner::validation::revocation::{
-    RevocationSubmitted, execute_http_revocation, execute_multi_step_revocation,
+    RevocationSubmitted, execute_http_revocation_with_policy,
+    execute_multi_step_revocation_with_policy,
 };
 
 fn has_non_default_aws_options(args: &RevokeArgs) -> bool {
@@ -424,6 +426,7 @@ pub(crate) fn fallback_input_vars(rule: &RuleSyntax) -> Result<BTreeSet<String>>
 async fn validated_fallback_globals(
     args: &RevokeArgs,
     global_args: &GlobalArgs,
+    allow_internal_ips: bool,
     rule: &Rule,
     secret: &str,
     parser: &liquid::Parser,
@@ -484,7 +487,7 @@ async fn validated_fallback_globals(
         .http_fallbacks(true)
         .timeout(timeout)
         .retries(args.retries)
-        .allow_internal_ips(global_args.allow_internal_ips)
+        .allow_internal_ips(allow_internal_ips)
         .use_lax_tls(use_lax_tls)
         .validate(rule, &globals)
         .await;
@@ -599,6 +602,7 @@ pub async fn run_direct_revocation_detailed(
     args: &RevokeArgs,
     global_args: &GlobalArgs,
 ) -> Result<Vec<DetailedDirectRevocationResult>> {
+    let rule_internal_ip_policy = RuleInternalIpPolicy::from_global_args(global_args)?;
     let secret = read_secret(args.secret.as_deref())?;
 
     if secret.is_empty() {
@@ -672,6 +676,7 @@ pub async fn run_direct_revocation_detailed(
     for rule in matching_rules {
         let rule_id = rule.id().to_string();
         let rule_name = rule.name().to_string();
+        let allow_internal_ips = rule_internal_ip_policy.allows(rule);
 
         debug!("Trying rule: {} ({})", rule_name, rule_id);
 
@@ -679,6 +684,7 @@ pub async fn run_direct_revocation_detailed(
             let globals = validated_fallback_globals(
                 args,
                 global_args,
+                allow_internal_ips,
                 rule,
                 &secret,
                 &parser,
@@ -691,7 +697,7 @@ pub async fn run_direct_revocation_detailed(
                 .syntax()
                 .selected_revocation(fallback_id.as_deref())?
                 .context("Verified environment has no revocation configured")?;
-            prepared.push((rule_id, rule_name, revocation, globals));
+            prepared.push((rule_id, rule_name, revocation, globals, allow_internal_ips));
             continue;
         }
 
@@ -761,11 +767,12 @@ pub async fn run_direct_revocation_detailed(
             );
         }
 
-        prepared.push((rule_id, rule_name, revocation, globals));
+        // Preserve direct-primary revocation against caller-configured endpoints.
+        prepared.push((rule_id, rule_name, revocation, globals, true));
     }
 
     let mut results = Vec::new();
-    for (rule_id, rule_name, revocation, globals) in prepared {
+    for (rule_id, rule_name, revocation, globals, allow_internal_ips) in prepared {
         let (mut result, status) = match revocation.as_ref() {
             Revocation::AWS => {
                 let akid = get_global_var(&globals, "AKID")
@@ -841,7 +848,11 @@ pub async fn run_direct_revocation_detailed(
                 let result = tokio::time::timeout(
                     timeout,
                     kingfisher_scanner::validation::betterleaks::revoke_detailed(
-                        config, &captures, &globals, &client, true,
+                        config,
+                        &captures,
+                        &globals,
+                        &client,
+                        allow_internal_ips,
                     ),
                 )
                 .await
@@ -875,26 +886,28 @@ pub async fn run_direct_revocation_detailed(
                 (result, status)
             }
             Revocation::Http(http_revocation) => {
-                let result = execute_http_revocation(
+                let result = execute_http_revocation_with_policy(
                     http_revocation,
                     &globals,
                     &client,
                     &parser,
                     timeout,
                     args.retries,
+                    allow_internal_ips,
                 )
                 .await;
                 http_revocation_outcome(result)
             }
             Revocation::HttpMultiStep(multi_step) => {
                 let mut globals_mut = globals.clone();
-                let result = execute_multi_step_revocation(
+                let result = execute_multi_step_revocation_with_policy(
                     multi_step,
                     &mut globals_mut,
                     &client,
                     &parser,
                     timeout,
                     args.retries,
+                    allow_internal_ips,
                 )
                 .await;
                 http_revocation_outcome(result)
@@ -1037,6 +1050,8 @@ pub fn any_revoked(results: &[DirectRevocationResult]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kingfisher_rules::HttpValidation;
+    use std::collections::{BTreeMap, BTreeSet};
 
     #[test]
     fn reported_aws_command_uses_secret_key_as_positional_input() {
@@ -1079,21 +1094,6 @@ mod tests {
         assert_eq!(secret, secret_key);
         assert!(validate_aws_credentials_input(&akid, &secret).is_ok());
     }
-
-    #[test]
-    fn explicit_commands_decode_original_betterleaks_named_capture_context() {
-        let globals=build_globals("custom.primary","secret",&[],&[
-            "__BETTERLEAKS_FINDING_CAPTURES={\"MixedCase\":\"original-value\"}".into(),
-            "__BETTERLEAKS_COMPONENTS={\"custom.helper\":{\"secret\":\"component\",\"captures\":{\"Realm\":\"east\"}}}".into(),
-        ],&BTreeSet::new(),&ProviderEndpointOverrides::default()).unwrap();
-        assert_eq!(
-            serde_json::to_value(&globals["__BETTERLEAKS_FINDING_CAPTURES"]).unwrap(),
-            serde_json::json!({"MixedCase":"original-value"})
-        );
-        assert!(globals["__BETTERLEAKS_COMPONENTS"].as_object().is_some());
-    }
-    use kingfisher_rules::HttpValidation;
-    use std::collections::{BTreeMap, BTreeSet};
 
     #[test]
     fn template_vars_basic() {

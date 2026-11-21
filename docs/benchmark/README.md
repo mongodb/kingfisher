@@ -9,41 +9,30 @@ a TLS tunnel and traffic that bypasses the proxy are not observed.
 ## Features
 
 - **Repository cloning** — clones a predefined list of repositories (skips ones already present).
-- **Tool execution** — runs each enabled scanner and collects timing, findings, and validation metrics.
+- **Tool execution** — runs each enabled scanner five times per repository and reports the median for each metric.
 - **Network-request counting** — an HTTP proxy on `127.0.0.1:9191` counts plain HTTP requests and HTTPS CONNECT tunnels sent through it.
 - **Tool versions** — records `kingfisher`/`trufflehog`/`gitleaks` versions in the report.
 - **Timestamped results folder** — every run writes a `benchmark-<timestamp>/` directory (see below).
 - **Markdown report** — environment, tool versions, runtime, findings, validated/verified, and
   network-request tables. The report is printed to stdout *and* saved as `comparison_<timestamp>.md`.
 - **Runtime chart** — renders `runtime-comparison-<timestamp>.png` via QuickChart.io, matching
-  [the reference chart](../runtime-comparison.png): 1360×966 pixels, green/blue/amber bars,
+  [the original chart](../runtime-comparison-original.png): 1360×966 pixels, green/blue/amber bars,
   outlined Kingfisher bars, and straight downward arrows labeled with the runtime reduction
   relative to the fastest successful competitor, or labeled "slower" when another
   scanner wins.
-  Versions are shown beneath tool names, and the analysis month/year appears
-  directly beneath the title. The filename carries a timestamp, so existing charts
-  are never overwritten.
+  Versions appear beneath tool names. The scan month and trials per median
+  appear beneath the title. The filename carries a timestamp, so existing
+  charts are never overwritten.
 - **Failure reporting** — saves stderr logs, marks failed scans as `ERROR`, and excludes them
   from the chart. Saves a progress report after each repository.
 
-## Latest local results
+## Published results
 
-The [current three-tool comparison](benchmark-session-20261020-comparisons/three-tools/comparison_20261020-184315.md)
-contains Kingfisher, TruffleHog, and Gitleaks measurements for all nine repositories.
-Completed detection-only measurements are reused with explicit source provenance;
-no rescan is needed for chart-only presentation changes. Charts include program
-versions beneath tool names and the analysis month beneath the title. Successful
-TruffleHog timings remain included despite localized diagnostics.
-
-Automation supports only these three scanners. Historical results, logs, source
-snapshots, and archived notes are retained as evidence, not supported run commands.
-
-The [redundant partial rerun](benchmark-session-20261020-three-tools/README.md)
-was stopped under the reuse instruction. The
-[earlier complete baseline](benchmark-session-20261020/README.md) and
-[performance investigation](benchmark-session-20261020/investigation-20261020/README.md)
-remain preserved with explicit source links; partial rerun measurements are not
-merged into the completed comparison.
+The November 20, 2026 benchmark used Kingfisher 2.20.0, TruffleHog 3.100.0,
+and Gitleaks 8.30.1 across nine repositories. See the [runtime results](../COMPARISON.md#runtime-comparison-seconds)
+and the [three-tool chart](../runtime-comparison.png).
+Use the saved detection-only report to regenerate a chart without running the
+scanners again.
 
 ### Audit before publishing
 
@@ -55,10 +44,8 @@ the affected metadata, file, or decoder-stream coverage rather than calling the
 whole run a fatal failure or its timing invalid. Omit only fatal or missing
 measurements from the runtime chart, never plot them as zero. Keep original
 reports, exact command timings, and coverage caveats alongside any corrected
-report/chart. Finding and network counts remain observations, not complete-history
-recall claims. Neither exit success nor the absence of logged errors establishes
-complete or equivalent cross-tool coverage. See the local session's
-[TruffleHog investigation](benchmark-session-20261020/investigation-20261020/trufflehog-findings.md).
+report or chart. Finding and network counts reflect each scanner's coverage and
+settings.
 
 ## How it works
 
@@ -77,10 +64,11 @@ Each run creates a `benchmark-<timestamp>/` directory (under `-out`) containing:
 benchmark-20260529-193512/
 ├── comparison_20260529-193512.md      # the full Markdown report
 ├── runtime-comparison-20260529-193512.png
-├── croc-kingfisher.json               # raw tool output, per repo + tool
-├── croc-trufflehog.json
-├── croc-gitleaks.json
-├── croc-gitleaks.json.stderr          # scanner diagnostics, per repo + tool
+├── commands.jsonl                    # exact commands, timings, and exit status
+├── croc-kingfisher-trial-1.json        # raw output, per repo, tool, and trial
+├── croc-trufflehog-trial-1.json
+├── croc-gitleaks-trial-1.json
+├── croc-gitleaks-trial-1.json.stderr  # scanner diagnostics, one file per trial
 └── ...
 ```
 
@@ -103,12 +91,16 @@ refs:
   Kingfisher and TruffleHog only. This separate run supplies **Network Requests
   Comparison** and **Validated / Verified Findings**, not the runtime chart.
 
-Each tool runs once per repository with full available Git history and its default
-detection settings. Update checks are disabled where supported, and Kingfisher's
-repository timeout is disabled. TruffleHog's automatic private clone preparation is
-included in its runtime. Worker counts use tool defaults; on the measured 16-core
-host, Kingfisher uses 16 scanning threads. No repetitions or cache flushing are
-performed. Different rules, file-size limits, archive handling, filters, provenance
+Each tool runs five times per repository with full available Git history and its
+default detection settings. Trials run sequentially and the starting scanner
+rotates each round. Each cell is the median of the five values for that metric.
+A tool and repository need five successful trials to report a median. The harness
+keeps the system's normal caches in place. Update checks are disabled where
+supported, and Kingfisher's repository timeout is disabled. Worker counts use
+tool defaults. TruffleHog normally prepares a private clone within its timed run.
+For a corpus with trusted local Git configuration, `-trufflehog-in-place` makes
+TruffleHog use the existing local clone directly. Different rules, file-size
+limits, archive handling, filters, provenance
 collection, and deduplication mean finding counts do not measure equivalent recall.
 Kingfisher may also enumerate working-tree files, unlike the Git-diff-oriented
 scanners; existing working-tree changes must be recorded rather than discarded.
@@ -162,7 +154,7 @@ go run main.go -chart-from "detection-only/benchmark-<timestamp>"
 ```
 
 Each mode creates its own timestamped directory and preserves separate JSON and
-stderr files. `commands.jsonl` records exact subprocess argument arrays, durations,
+stderr files for each trial. `commands.jsonl` records exact subprocess argument arrays, durations,
 and exit errors. Reports record repository HEADs, refs fingerprints, shallow
 status, and working-tree changes alongside tool versions and environment. Do not
 update, fetch, checkout, edit, or run garbage collection on the corpus between runs.
@@ -205,7 +197,9 @@ trufflehog git "$REPO_URI" --json --no-update --fail-on-scan-errors > "$RAW"
 ```
 
 Omitting the disabling flags enables Kingfisher validation and TruffleHog
-verification by default. Gitleaks is excluded from this mode. No concurrency
+verification by default. Gitleaks is excluded from this mode. With
+`-trufflehog-in-place`, the harness also passes `--trust-local-git-config`
+to TruffleHog in either mode. No concurrency
 overrides, branch/depth bounds, custom rules, revocation, or access-map flags are
 passed. TruffleHog additional refs are not skipped. Full-history flags select all
 **available** local history;
@@ -218,23 +212,26 @@ for additional input-processing warnings even when the process exits zero.
 
 ### Regenerating just the chart
 
-`go run main.go -chart-from <results-directory>` rebuilds the chart from a previous
-run's `comparison_*.md` report (it reads runtimes and tool versions), writing a
-fresh `runtime-comparison-<timestamp>.png` into the same directory and exiting
-without cloning or scanning. The report must explicitly identify **detection-only**
-mode; validation-enabled and legacy unlabelled reports are rejected. Runtime
-columns may contain only Kingfisher, TruffleHog, and GitLeaks; unsupported scanner
-columns are rejected rather than rendered. Derive a supported-tool-only report
-from historical measurements before regenerating an archived mixed-tool chart.
-Rerun the benchmark rather than relabelling older validation-enabled measurements.
+`go run main.go -chart-from <results-directory>` rebuilds the chart from a saved
+detection-only `comparison_*.md` report. It writes
+`runtime-comparison-<timestamp>.png` in the same directory without scanning.
+The report must include `Validation mode: detection-only` and a runtime table.
+Use Kingfisher, TruffleHog, and GitLeaks as the scanner names in that table.
 
-Charts display the saved tool versions beneath their legend names. A report line
-such as `Analysis month: October 2026` displays **October 2026** beneath the title;
-the month value must use the `January 2006` format. If that line is absent, the
-month is derived from the dated report heading; it is never inferred from the
-regeneration clock. Invalid,
-repeated, or missing analysis dates are rejected. This lets saved data be replotted
-without changing the reported analysis period or running scanners again.
+Add `-nosey-parker-chart` to render the green-and-blue Kingfisher vs. NoseyParker
+chart. The report needs `Kingfisher Runtime` and `NoseyParker Runtime` columns,
+the NoseyParker version, and a successful NoseyParker median for every plotted
+repository. Use five-trial medians measured on the same inputs, with archive
+extraction and Base64 decoding enabled for Kingfisher. The output is
+`runtime-comparison-<timestamp>-with-nosey-parker.png`.
+
+Charts display tool versions below the legend names, dropping a zero patch
+number for Kingfisher. Arrow labels bold **faster** when Kingfisher wins.
+The saved scan month appears below the title. Reports can supply `Scan date` in
+`January 2, 2006` format, `Analysis month` in `January 2006` format, or a dated
+report heading. For median runtimes, a line such as
+`Trials per tool per repository: 5` adds the trial count to the subtitle.
+Reports without a count show the scan month alone.
 
 ### Flags
 
@@ -243,7 +240,9 @@ without changing the reported analysis period or running scanners again.
 | `-basedir`  | `$TMPDIR/benchmark`| Directory to clone repositories into.                    |
 | `-validate` | `false`            | Enable live validation; requires `-gitleaks=false`. Runtime chart generation is skipped. |
 | `-gitleaks` | `true`             | Include Gitleaks (requires `gitleaks` in `PATH`).         |
+| `-trufflehog-in-place` | `false` | Have TruffleHog scan the existing local clone directly. Use for repositories with trusted local Git configuration. |
 | `-repos`    | `""`               | Comma-separated repository names; defaults to all nine.   |
 | `-chart`    | `true`             | Render the runtime-comparison PNG chart.                 |
 | `-out`      | `.`                | Directory under which the `benchmark-<timestamp>/` folder is created. |
 | `-chart-from` | `""`             | Regenerate only the chart from an existing results directory, then exit. |
+| `-nosey-parker-chart` | `false`  | Render the Kingfisher vs. NoseyParker chart from the saved report. Requires `-chart-from`. |

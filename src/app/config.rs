@@ -351,6 +351,12 @@ pub(crate) fn apply_config(
     {
         global_args.allow_internal_ips = v;
     }
+    if let Some(v) = cfg.global.enable_rule_internal_ips
+        && config_wins(scan_matches, "enable_rule_internal_ips")
+    {
+        global_args.enable_rule_internal_ips = v;
+    }
+    global_args.enable_internal_ips_for.extend(cfg.global.enable_internal_ips_for.iter().cloned());
     if let Some(v) = cfg.global.no_update_check
         && config_wins(scan_matches, "no_update_check")
     {

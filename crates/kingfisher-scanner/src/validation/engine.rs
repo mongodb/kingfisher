@@ -1,10 +1,11 @@
 //! Shared execution for already-resolved rule inputs.
+use super::http_validation::build_request_builder_with_budget;
 use super::{ValidationReason, ValidationResult};
-use super::{
-    build_request_builder, check_url_resolvable, validate_response, with_request_template_globals,
-};
+use super::{check_url_resolvable, validate_response, with_request_template_globals};
 use crate::ValidationOutcome;
-use kingfisher_rules::{HttpValidation, ResponseMatcher, Rule, Validation};
+use kingfisher_rules::{
+    HttpValidation, ResponseMatcher, Rule, Validation, liquid_filters::TemplateWorkBudget,
+};
 use liquid::Object;
 use liquid_core::ValueView;
 use reqwest::{Client, StatusCode, Url};
@@ -292,9 +293,10 @@ impl<'a> ValidationEngine<'a> {
         &self,
         template: &str,
         globals: &Object,
+        budget: &mut TemplateWorkBudget,
     ) -> std::result::Result<Url, Box<ValidationResult>> {
         let rendered =
-            self.parser.parse(template).and_then(|t| t.render(globals)).map_err(|_| {
+            self.parser.parse(template).and_then(|t| budget.render(&t, globals)).map_err(|_| {
                 ValidationResult::unavailable(ValidationReason::InvalidConfiguration)
             })?;
         let url = Url::parse(&rendered)
@@ -417,7 +419,8 @@ impl<'a> ValidationEngine<'a> {
             return ValidationResult::unavailable(reason);
         }
         let globals = with_request_template_globals(globals);
-        let url = match self.url(url_template, &globals).await {
+        let mut budget = TemplateWorkBudget::default();
+        let url = match self.url(url_template, &globals, &mut budget).await {
             Ok(url) => url,
             Err(check) => return *check,
         };
@@ -447,7 +450,7 @@ impl<'a> ValidationEngine<'a> {
         } else {
             None
         };
-        let mut builder = match build_request_builder(
+        let mut builder = match build_request_builder_with_budget(
             oauth2.as_ref().map(|(_, _, client)| client).unwrap_or(self.client),
             &request.method,
             &url,
@@ -456,6 +459,7 @@ impl<'a> ValidationEngine<'a> {
             self.timeout.unwrap_or_default(),
             self.parser,
             &globals,
+            &mut budget,
         ) {
             Ok(builder) => builder,
             Err(_) => return ValidationResult::unavailable(ValidationReason::InvalidConfiguration),
@@ -466,15 +470,18 @@ impl<'a> ValidationEngine<'a> {
         if let Some(multipart) = request.multipart.as_ref().or(config.multipart.as_ref()) {
             let mut form = reqwest::multipart::Form::new();
             for part in &multipart.parts {
-                let content =
-                    match self.parser.parse(&part.content).and_then(|t| t.render(&globals)) {
-                        Ok(content) => content,
-                        Err(_) => {
-                            return ValidationResult::unavailable(
-                                ValidationReason::InvalidConfiguration,
-                            );
-                        }
-                    };
+                let content = match self
+                    .parser
+                    .parse(&part.content)
+                    .and_then(|t| budget.render(&t, &globals))
+                {
+                    Ok(content) => content,
+                    Err(_) => {
+                        return ValidationResult::unavailable(
+                            ValidationReason::InvalidConfiguration,
+                        );
+                    }
+                };
                 let mut value = match part.part_type.as_str() {
                     "text" => reqwest::multipart::Part::text(content),
                     // File parts are inline template bytes, never paths read from the host.
@@ -648,19 +655,27 @@ impl<'a> ValidationEngine<'a> {
             return ValidationResult::unavailable(ValidationReason::InvalidConfiguration);
         }
         let globals = with_request_template_globals(globals);
-        let url = match self.url(&request.url, &globals).await {
+        let mut budget = TemplateWorkBudget::default();
+        let url = match self.url(&request.url, &globals, &mut budget).await {
             Ok(url) => url,
             Err(check) => return *check,
         };
-        match super::grpc::grpc_unary_call_from_rule(
-            &url,
+        let (headers, body) = match super::grpc::render_request(
             &request.headers,
             &request.body,
             self.parser,
             &globals,
-            self.timeout.unwrap_or_default(),
-        )
-        .await
+            &mut budget,
+        ) {
+            Ok(request) => request,
+            Err(error) => {
+                tracing::debug!(%error, "Failed to prepare gRPC request");
+                return ValidationResult::unavailable(ValidationReason::InvalidConfiguration)
+                    .body("Failed to render gRPC request".into());
+            }
+        };
+        match super::grpc::grpc_unary_call(&url, headers, body, self.timeout.unwrap_or_default())
+            .await
         {
             Ok(response) => {
                 let grpc_status =
@@ -776,6 +791,71 @@ pub fn is_aws_session_token_rule(rule: &Rule) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn yaml_http_crypto_budget_spans_all_fields_and_resets_on_retry() {
+        use axum::{Router, routing::post};
+        use std::{
+            net::Ipv4Addr,
+            sync::{
+                Arc,
+                atomic::{AtomicUsize, Ordering},
+            },
+        };
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&calls);
+        let app = Router::new().route(
+            "/validate",
+            post(move || {
+                let status = if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                    StatusCode::TOO_MANY_REQUESTS
+                } else {
+                    StatusCode::OK
+                };
+                async move { status }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let target = format!("http://{}/validate", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = Client::builder().no_proxy().build().unwrap();
+        let parser =
+            kingfisher_rules::register_liquid_filters(liquid::ParserBuilder::with_stdlib())
+                .build()
+                .unwrap();
+        let engine = ValidationEngine::new(&client, &parser).allow_internal_ips(true).retries(1);
+
+        // Each field spends just over one third of the total budget and emits no extra text.
+        let work = "{% for i in (1..1700) %}{% assign ignored = 'a' | sha512 %}{% endfor %}";
+        for omit in ["none", "url", "headers", "body"] {
+            let with_work = |field| if field == omit { "" } else { work };
+            let mut rule =
+                kingfisher_rules::RuleSyntax::new("custom.crypto", "Crypto test", "(token)");
+            rule.validation = Some(
+                serde_json::from_value(serde_json::json!({
+                    "type": "Http", "content": {"request": {
+                        "method": "POST",
+                        "url": format!("{target}{}", with_work("url")),
+                        "headers": {"x-proof": format!("proof{}", with_work("headers"))},
+                        "body": format!("body{}", with_work("body")),
+                        "response_matcher": [{"type":"StatusMatch","status":[200]}]
+                    }}
+                }))
+                .unwrap(),
+            );
+            let result = engine.validate(&Rule::new(rule), &Object::new()).await;
+            if omit == "none" {
+                assert_eq!(result.reason, Some(ValidationReason::InvalidConfiguration));
+                assert_eq!(calls.load(Ordering::SeqCst), 0);
+            } else {
+                assert_eq!(result.outcome, ValidationOutcome::VerifiedActive, "{omit}: {result:?}");
+            }
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
+        server.abort();
+    }
+
     #[test]
     fn resolution_failures_distinguish_network_errors_from_policy_blocks() {
         let network = std::io::Error::other("resolver unavailable");

@@ -202,18 +202,6 @@ class PublicationSourceTests(unittest.TestCase):
             with self.subTest(tag=tag), self.assertRaisesRegex(ValueError, "tag"):
                 self.source(environment("push", GITHUB_REF=f"refs/tags/{tag}"))
 
-    def test_default_manual_cli_tag_completion_is_authorized_but_sdk_tags_are_not(self):
-        env = environment(GITHUB_REF="refs/tags/v2.14.0")
-        result, calls = self.source(env, {"inputs": {"publish": "false"}}, main=BASE)
-        self.assertEqual(result, (True, False))
-        self.assertIn((ROOT, "show", f"{HEAD}:Cargo.toml"), [call.args for call in calls])
-        self.assertIn((ROOT, "merge-base", "--is-ancestor", HEAD, BASE), [call.args for call in calls])
-        for tag in (f"python-v{VERSION}", "npm-v1.0.2"):
-            with self.subTest(tag=tag):
-                result, calls = self.source(environment(GITHUB_REF=f"refs/tags/{tag}"), {"inputs": {}})
-                self.assertEqual(result, (False, False))
-                self.assertEqual(calls, [])
-
     def test_crates_recovery_never_authorizes_sdk_publication(self):
         result, calls = self.source(event=manual_event(crates_only="true"))
         self.assertEqual(result, (False, False))

@@ -37,6 +37,20 @@ fn external_fingerprint_value<'a>(rule: &Rule, captures: &'a SerializableCapture
     capture.map_or("", SerializableCapture::raw_value)
 }
 
+fn origin_fingerprint(
+    rule: &Rule,
+    captures: &SerializableCaptures,
+    offset_span: OffsetSpan,
+    origin_type: &str,
+) -> u64 {
+    compute_finding_fingerprint(
+        external_fingerprint_value(rule, captures),
+        origin_type,
+        offset_span.start.try_into().unwrap(),
+        offset_span.end.try_into().unwrap(),
+    )
+}
+
 // -------------------------------------------------------------------------------------------------
 // OwnedBlobMatch
 // -------------------------------------------------------------------------------------------------
@@ -233,23 +247,17 @@ impl Match {
         origin_type: &'a str,
     ) -> Self {
         let offset_span = owned_blob_match.matching_input_offset_span;
-        let finding_value_for_fp =
-            external_fingerprint_value(&owned_blob_match.rule, &owned_blob_match.captures);
 
         let source_span =
             loc_mapping.map(|lm| lm.get_source_span(&offset_span)).unwrap_or(SourceSpan {
                 start: SourcePoint { line: 0, column: 0 },
                 end: SourcePoint { line: 0, column: 0 },
             });
-        let offset_start: u64 =
-            owned_blob_match.matching_input_offset_span.start.try_into().unwrap();
-        let offset_end: u64 = owned_blob_match.matching_input_offset_span.end.try_into().unwrap();
-
-        let finding_fingerprint = compute_finding_fingerprint(
-            finding_value_for_fp,
+        let finding_fingerprint = origin_fingerprint(
+            &owned_blob_match.rule,
+            &owned_blob_match.captures,
+            offset_span,
             origin_type,
-            offset_start,
-            offset_end,
         );
 
         Match {
@@ -269,6 +277,18 @@ impl Match {
             ambiguous_dependencies: owned_blob_match.ambiguous_dependencies.clone(),
             dependency_candidates: owned_blob_match.dependency_candidates.clone(),
         }
+    }
+
+    pub(crate) fn fingerprint_for_origin(&self, origin_type: &str) -> u64 {
+        self.fingerprint_for_origin_at(origin_type, self.location.offset_span)
+    }
+
+    pub(crate) fn fingerprint_for_origin_at(&self, origin_type: &str, span: OffsetSpan) -> u64 {
+        origin_fingerprint(&self.rule, &self.groups, span, origin_type)
+    }
+
+    pub(crate) fn fingerprint_value(&self) -> &str {
+        external_fingerprint_value(&self.rule, &self.groups)
     }
 
     /// Returns the `blob_id` of the match.

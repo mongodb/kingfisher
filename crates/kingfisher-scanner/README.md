@@ -3,9 +3,12 @@
 Embeddable, synchronous secret detection for Rust 1.99+. The public Rust API
 follows semantic versioning; breaking changes require a new major version.
 
+**No Git executable required.** The optional `git` feature reads local Git history,
+snapshots, diffs, and staged changes directly from the repository.
+
 ```toml
 [dependencies]
-kingfisher-scanner = "4.0.0"
+kingfisher-scanner = "4.1.0"
 anyhow = "1"
 ```
 
@@ -36,6 +39,14 @@ requests retain strict TLS and environment proxy/`NO_PROXY` behavior. Only expli
 allowed loopback plain-HTTP token/verifier requests bypass proxies; redirects stay
 disabled for both transports.
 
+Custom Liquid and Betterleaks expression rules also share
+[cryptographic authentication helpers](../../docs/RULES.md#cryptographic-authentication):
+ECDH/ECDSA, AES-GCM, HKDF/PBKDF2, Ed25519, random bytes and constant-time
+comparison. Load the [complete authentication scaffold](examples/rules/cryptographic-auth.yml)
+through the normal rules loader and run `Validator` with the `validation` feature.
+Its `.invalid` destination and published test keys are nonproduction placeholders;
+adapt the reviewed provider protocol before live use. Scanning stays offline.
+
 Betterleaks v2 rules can include explicit Expr analysis and revocation. Use
 `Validator::analyze_validated` after validation and `Revoker::revoke_validated`
 for deliberate revocation; neither runs during scanning. HTTP fallbacks are off
@@ -58,7 +69,7 @@ and [rule format guide](../../docs/RULES.md).
 
 ## Migrating to 4.0
 
-Use core `2.0.0`, rules `3.2.1`, and scanner `4.0.0` together when depending on
+Use core `2.0.0`, rules `3.3.0`, and scanner `4.1.0` together when depending on
 these crates directly. Scanner 4.x re-exports core 2.x types; core 1.x buffers and
 identifiers are distinct Rust types. The `git` feature's public object IDs now
 come from `gix` 0.90; align direct `gix` dependencies to that version.
@@ -217,7 +228,7 @@ scratch allocation or reentrant borrowing errors; prefer `try_with`.
 Validation is disabled by default. Enable all supported validators and revocation:
 
 ```toml
-kingfisher-scanner = { version = "4.0.0", features = ["validation"] }
+kingfisher-scanner = { version = "4.1.0", features = ["validation"] }
 ```
 
 `validation` enables every supported family and its dependencies. Legacy
@@ -602,8 +613,8 @@ See the [PDF example](examples/pdf.rs) and [library guide](../../docs/LIBRARY.md
 ## Offline Git inputs (`git` feature)
 
 Enable `git` for `git::{GitInputs, GitScope, GitMode, GitOptions, GitEvent}`.
-This is a read-only input source independent of detection and validation. No Git
-executable, network, checkout, or repository writes are required. History visits
+This is a read-only input source independent of detection and validation. It works
+offline and reads bare repositories as well as working repositories. History visits
 all merge parents, compares each selected commit with its first parent, and skips
 identical subtrees. Snapshot, net-diff, and staged-index scopes are also available.
 

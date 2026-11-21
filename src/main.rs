@@ -75,6 +75,7 @@ mod allocator_startup_tests {
 }
 
 use std::{
+    ffi::OsString,
     io::{IsTerminal, Read, Write},
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -82,6 +83,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use clap::CommandFactory;
 use kingfisher::{
     access_map, azure, bitbucket,
     cli::{
@@ -93,7 +95,7 @@ use kingfisher::{
     findings_store::FindingsStore,
     gitea, github, huggingface,
     reporter::{DetailsReporter, ScanAuditContext, styles::Styles},
-    scanner::{load_and_record_rules, run_scan},
+    scanner::{load_and_record_rules, run_scan_with_pre_commit_files, write_scan_preview},
     update::{UpdateCheckStatus, check_for_update_async, rewrite_argv_for_reexec},
     util::tokio_blocking_threads_limit,
     validation::set_user_agent_suffix,
@@ -107,7 +109,7 @@ use tracing_subscriber::{
 };
 
 use crate::cli::commands::{
-    scan::{ListRepositoriesCommand, ScanOperation},
+    scan::{ListRepositoriesCommand, ScanArgs, ScanOperation},
     view,
 };
 
@@ -141,12 +143,15 @@ fn main() -> anyhow::Result<std::process::ExitCode> {
     let parser = std::thread::Builder::new()
         .name("kingfisher-args".to_string())
         .stack_size(STACK_SIZE)
-        .spawn(|| {
-            let (args, matches) = CommandLineArgs::parse_args_with_matches();
-            (Box::new(args), matches)
-        })
+        .spawn(parse_command_line)
         .context("Failed to spawn argument parser thread")?;
-    let (args, matches) = parser.join().unwrap_or_else(|e| std::panic::resume_unwind(e));
+    let (args, matches, pre_commit_files) =
+        parser.join().unwrap_or_else(|e| std::panic::resume_unwind(e))?;
+    if pre_commit_files.as_ref().is_some_and(Vec::is_empty)
+        && !matches!(&args.command, Command::Scan(scan) if scan.preview)
+    {
+        return Ok(std::process::ExitCode::SUCCESS);
+    }
 
     // Run the real entry point on a thread with an explicit, larger stack so that
     // deeply-nested async state machines (validation pipeline) cannot overflow the
@@ -154,7 +159,9 @@ fn main() -> anyhow::Result<std::process::ExitCode> {
     let builder =
         std::thread::Builder::new().name("kingfisher-main".to_string()).stack_size(STACK_SIZE);
 
-    let handler = builder.spawn(move || run(*args, matches)).expect("failed to spawn main thread");
+    let handler = builder
+        .spawn(move || run(*args, matches, pre_commit_files.as_deref()))
+        .expect("failed to spawn main thread");
     let result = handler.join().unwrap_or_else(|e| std::panic::resume_unwind(e));
     if let Err(error) = &result
         && error.is::<kingfisher::scanner::NoScanInputsError>()
@@ -163,6 +170,65 @@ fn main() -> anyhow::Result<std::process::ExitCode> {
         return Ok(std::process::ExitCode::from(3));
     }
     result
+}
+
+type ParsedCommandLine = (Box<CommandLineArgs>, clap::ArgMatches, Option<Vec<PathBuf>>);
+
+fn parse_command_line() -> Result<ParsedCommandLine> {
+    let mut argv: Vec<_> = std::env::args_os().collect();
+    let pre_commit_files = split_pre_commit_files(&mut argv);
+    let (mut args, matches) = CommandLineArgs::parse_args_from_with_matches(argv);
+    let pre_commit_files = match (pre_commit_files, &mut args.command) {
+        (Some(files), Command::Scan(scan)) => {
+            let input = &scan.scan_args.input_specifier_args;
+            let scan_matches = matches.subcommand_matches("scan").expect("parsed scan command");
+            let explicit =
+                |id| scan_matches.value_source(id) == Some(clap::parser::ValueSource::CommandLine);
+            anyhow::ensure!(
+                !explicit("git_history")
+                    || input.git_history == cli::commands::github::GitHistoryMode::None,
+                "Pre-commit file hooks cannot be combined with --git-history full"
+            );
+            anyhow::ensure!(
+                !explicit("scan_nested_repos") || !input.scan_nested_repos,
+                "Pre-commit file hooks cannot be combined with --scan-nested-repos"
+            );
+            Some(scan.prepare_pre_commit_files(files)?)
+        }
+        _ => None,
+    };
+    Ok((Box::new(args), matches, pre_commit_files))
+}
+
+/// The framework appends filenames to configured arguments. An empty argument
+/// separates them because it cannot also be a filename. Use the last one so an
+/// option may still take an empty value.
+fn split_pre_commit_files(argv: &mut Vec<OsString>) -> Option<Vec<PathBuf>> {
+    if !matches!(argv.get(1..3), Some([command, mode]) if command == "scan" && mode == "--pre-commit-files")
+    {
+        if argv.iter().skip(1).any(|arg| arg == "--pre-commit-files") {
+            CommandLineArgs::command()
+                .error(
+                    clap::error::ErrorKind::ArgumentConflict,
+                    "--pre-commit-files must immediately follow `scan` (for example: kingfisher scan --pre-commit-files --quiet '')",
+                )
+                .exit();
+        }
+        return None;
+    }
+    let Some(boundary) = argv[3..].iter().rposition(|arg| arg.is_empty()).map(|index| index + 3)
+    else {
+        CommandLineArgs::command()
+            .error(
+                clap::error::ErrorKind::MissingRequiredArgument,
+                "pre-commit file hooks require an empty string at the end of args (for example: args: [--redact, ''])",
+            )
+            .exit();
+    };
+    let files = argv.drain(boundary + 1..).map(PathBuf::from).collect();
+    argv.pop();
+    argv.remove(2);
+    Some(files)
 }
 
 /// Outcome of `async_main`. Command exit codes must reach the OS main thread
@@ -199,7 +265,11 @@ fn raise_nproc_soft_limit() {
 #[cfg(not(unix))]
 fn raise_nproc_soft_limit() {}
 
-fn run(args: CommandLineArgs, matches: clap::ArgMatches) -> anyhow::Result<std::process::ExitCode> {
+fn run(
+    args: CommandLineArgs,
+    matches: clap::ArgMatches,
+    pre_commit_files: Option<&[PathBuf]>,
+) -> anyhow::Result<std::process::ExitCode> {
     // Install the AWS-LC Rustls provider before initializing any TLS clients.
     match rustls::crypto::aws_lc_rs::default_provider().install_default() {
         Ok(()) => {}
@@ -237,7 +307,7 @@ fn run(args: CommandLineArgs, matches: clap::ArgMatches) -> anyhow::Result<std::
         .enable_all()
         .build()
         .context("Failed to create Tokio runtime")?;
-    let outcome = runtime.block_on(async_main(args, matches))?;
+    let outcome = runtime.block_on(async_main(args, matches, pre_commit_files))?;
     // Drain the runtime before exiting or re-execing. Calling process::exit from
     // a worker leaves other threads running during Windows CRT/allocator teardown.
     drop(runtime);
@@ -620,7 +690,27 @@ pub fn determine_exit_code(datastore: &Arc<Mutex<findings_store::FindingsStore>>
     }
 }
 
-async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<AsyncMainOutcome> {
+fn effective_scan_args(
+    mut scan_args: ScanArgs,
+    mut global_args: GlobalArgs,
+    matches: &clap::ArgMatches,
+) -> Result<(ScanArgs, GlobalArgs)> {
+    if let Some(cfg) = load_project_config(global_args.config.as_deref())? {
+        apply_config(&mut scan_args, &mut global_args, &cfg, matches.subcommand_matches("scan"));
+    }
+    // A configured output path can collide with the audit log after argument parsing.
+    scan_args.validate_audit_log_collisions(
+        global_args.endpoint_config.as_deref(),
+        global_args.config.as_deref(),
+    )?;
+    Ok((scan_args, global_args))
+}
+
+async fn async_main(
+    args: CommandLineArgs,
+    matches: clap::ArgMatches,
+    pre_commit_files: Option<&[PathBuf]>,
+) -> Result<AsyncMainOutcome> {
     setup_logging(&args.global_args);
     let global_args = args.global_args.clone();
 
@@ -743,6 +833,23 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
                 Ok(AsyncMainOutcome::Exit(1))
             }
         }
+        Command::Scan(scan_command) if scan_command.preview => {
+            anyhow::ensure!(
+                !global_args.self_update,
+                "--preview cannot be used with --self-update"
+            );
+            let ScanOperation::Scan(scan_args) = scan_command.into_operation()? else {
+                anyhow::bail!("--preview cannot be used with --list-only");
+            };
+            let (scan_args, global_args) = effective_scan_args(scan_args, global_args, &matches)?;
+            write_scan_preview(
+                &mut std::io::stdout().lock(),
+                &scan_args,
+                &global_args,
+                pre_commit_files,
+            )?;
+            Ok(AsyncMainOutcome::Done)
+        }
         command => {
             let update_status = check_for_update_async(&global_args, None).await;
             // If the on-disk binary was just replaced by --self-update, return early so
@@ -753,33 +860,10 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
             }
             match command {
                 Command::Scan(scan_command) => match scan_command.into_operation()? {
-                    ScanOperation::Scan(mut scan_args) => {
-                        // Load only the explicitly selected config. Scalars respect CLI/env
-                        // precedence; list values are additive, except that configured rules
-                        // replace Clap's synthetic `all` default.
-                        let loaded_config = load_project_config(global_args.config.as_deref())?;
-                        let scan_matches = matches.subcommand_matches("scan");
-                        let mut effective_global_args = global_args.clone();
-                        if let Some(cfg) = &loaded_config {
-                            apply_config(
-                                &mut scan_args,
-                                &mut effective_global_args,
-                                cfg,
-                                scan_matches,
-                            );
-                            // Re-publish the user-agent suffix in case the config supplied it
-                            // — the initial set_user_agent_suffix call ran before config load.
-                            set_user_agent_suffix(effective_global_args.user_agent_suffix.clone());
-                        }
-                        let global_args = effective_global_args;
-                        // Config merging can introduce `output_args.output`
-                        // (output.path) after CLI validation already ran, so
-                        // re-check the effective --audit-log / --output paths
-                        // against the merged values.
-                        scan_args.validate_audit_log_collisions(
-                            global_args.endpoint_config.as_deref(),
-                            global_args.config.as_deref(),
-                        )?;
+                    ScanOperation::Scan(scan_args) => {
+                        let (mut scan_args, global_args) =
+                            effective_scan_args(scan_args, global_args, &matches)?;
+                        set_user_agent_suffix(global_args.user_agent_suffix.clone());
                         warn_on_alert_misconfiguration(&scan_args);
                         if scan_args.view_report {
                             view::ensure_port_available(
@@ -834,15 +918,17 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
                             &datastore,
                             global_args.use_progress(),
                         )?);
-                        run_scan(
+                        run_scan_with_pre_commit_files(
                             &global_args,
                             &scan_args,
                             &rules_db,
                             Arc::clone(&datastore),
                             &update_status,
                             auto_cleanup_clones,
+                            pre_commit_files,
                         )
-                        .await?;
+                        .await
+                        .context("Failed to run scan command")?;
                         if update_status.is_outdated
                             && let Some(styled) = &update_status.styled_message
                         {

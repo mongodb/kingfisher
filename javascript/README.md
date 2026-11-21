@@ -29,6 +29,9 @@ and Python SDK—directly inside your Node.js process.
 **Stable SDK: 1.0.2.** No CLI subprocess, Python interpreter, or separate Kingfisher
 installation. ESM, CommonJS and TypeScript declarations are included.
 
+**No Git executable required.** The SDK reads local Git history and staged changes
+directly from the repository.
+
 ## Why Kingfisher?
 
 - **Native detection, async APIs.** Rust and Vectorscan/Hyperscan do the matching;

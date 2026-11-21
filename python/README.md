@@ -4,6 +4,9 @@ Fast secret detection, credential validation and revocation for Python, powered
 by [Kingfisher's Rust libraries](https://github.com/mongodb/kingfisher).
 Native, in-process execution; no CLI subprocess required. Requires CPython 3.10+.
 
+**No Git executable required.** The SDK reads local Git history and staged changes
+directly from the repository.
+
 ## Install
 
 ```bash
@@ -273,9 +276,9 @@ for result in Scanner().scan_inputs(expand_archives(inputs, depth=2)):
 
 Supply your own Python enumerator with `ScanInput.from_file(path)` or
 `ScanInput(path="config.txt", data=blob_bytes, commit=commit_hex)` instead of either
-native iterator. Both use the same scanner and archive transform. Native Git runs
-without a Git executable and enumerates reachable file versions, including merge
-parents; filesystem enumeration honors local ignore files and skips symlinks.
+native iterator. Both use the same scanner and archive transform. Native Git
+enumerates reachable file versions, including merge parents. Filesystem enumeration
+honors local ignore files and skips symlinks.
 Archive expansion shares CLI extractors, with explicit depth and per-root budgets.
 Repeated TAR member names retain each occurrence's bytes. The byte budget also caps
 intermediate decompressed streams (including TAR headers/padding); exhaustion

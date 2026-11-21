@@ -1,5 +1,6 @@
 use kingfisher_scanner::validation::limits::{NetworkLimits, ResourceTimeout};
 use std::{
+    collections::{BTreeMap, BTreeSet},
     panic::AssertUnwindSafe,
     sync::Arc,
     time::{Duration, Instant},
@@ -7,7 +8,7 @@ use std::{
 
 use std::sync::{
     LazyLock, OnceLock,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use anyhow::Result;
@@ -17,6 +18,7 @@ use http::StatusCode;
 use kingfisher_core::ValidationOutcome;
 use liquid::Object;
 use liquid_core::{Value, ValueView};
+use parking_lot::Mutex;
 use reqwest::Client;
 #[cfg(test)]
 use reqwest::{
@@ -25,7 +27,7 @@ use reqwest::{
 };
 use rustc_hash::FxHashMap;
 use tokio::sync::Notify;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::{
     cli::global::TlsMode,
@@ -34,7 +36,7 @@ use crate::{
     provider_endpoints::{
         ProviderEndpointOverrides, endpoint_var_names, hydrate_endpoint_globals_for_rule,
     },
-    rules::rule::Validation,
+    rules::rule::{Rule, RuleSyntax, Validation},
     validation_body::{self},
 };
 
@@ -52,7 +54,10 @@ pub use kingfisher_scanner::validation::{
     azure, coinbase, gcp, jdbc, jwt, mongodb, mysql, postgres,
 };
 pub(crate) mod candidates;
+pub(crate) mod internal_ip_policy;
 pub mod utils;
+
+use internal_ip_policy::RuleInternalIpPolicy;
 
 fn truncate_to_char_boundary(s: &mut String, max_len: usize) {
     if s.len() <= max_len {
@@ -112,6 +117,93 @@ pub fn set_user_agent_suffix<S: Into<String>>(suffix: Option<S>) {
     }
 }
 
+const VALIDATION_TIMING_TARGET: &str = "kingfisher::validation::timing";
+static NEXT_VALIDATION_PHASE: AtomicU64 = AtomicU64::new(1);
+
+struct ValidationPhaseProfile {
+    phase: u64,
+    started: Instant,
+    by_rule: Mutex<BTreeMap<String, ValidationCheckTimings>>,
+}
+
+#[derive(Default)]
+struct ValidationCheckTimings {
+    checks: u64,
+    unavailable: u64,
+    interrupted: u64,
+    total: Duration,
+    slowest: Duration,
+}
+
+impl ValidationPhaseProfile {
+    fn new() -> Self {
+        Self {
+            phase: NEXT_VALIDATION_PHASE.fetch_add(1, Ordering::Relaxed),
+            started: Instant::now(),
+            by_rule: Mutex::default(),
+        }
+    }
+
+    fn start_check<'a>(&'a self, rule_id: &'a str) -> ValidationCheckTimer<'a> {
+        ValidationCheckTimer { profile: self, rule_id, started: Instant::now(), outcome: None }
+    }
+
+    fn log(&self) {
+        let phase = self.phase;
+        let mut by_rule: Vec<_> = std::mem::take(&mut *self.by_rule.lock()).into_iter().collect();
+        if by_rule.is_empty() {
+            return;
+        }
+        debug!(
+            target: VALIDATION_TIMING_TARGET,
+            phase,
+            elapsed_ms = self.started.elapsed().as_secs_f64() * 1000.0,
+            "Secret validation phase timing"
+        );
+        by_rule.sort_by_key(|(_, timing)| std::cmp::Reverse(timing.total));
+        for (rule_id, timing) in by_rule {
+            // Concurrent checks overlap. The total sums individual check durations.
+            debug!(
+                target: VALIDATION_TIMING_TARGET,
+                phase,
+                rule_id,
+                checks = timing.checks,
+                unavailable = timing.unavailable,
+                interrupted = timing.interrupted,
+                total_check_ms = timing.total.as_secs_f64() * 1000.0,
+                slowest_check_ms = timing.slowest.as_secs_f64() * 1000.0,
+                "Secret validation rule timing"
+            );
+        }
+    }
+}
+
+struct ValidationCheckTimer<'a> {
+    profile: &'a ValidationPhaseProfile,
+    rule_id: &'a str,
+    started: Instant,
+    outcome: Option<ValidationOutcome>,
+}
+
+impl ValidationCheckTimer<'_> {
+    fn finish(mut self, outcome: ValidationOutcome) {
+        self.outcome = Some(outcome);
+    }
+}
+
+impl Drop for ValidationCheckTimer<'_> {
+    fn drop(&mut self) {
+        let elapsed = self.started.elapsed();
+        let mut rules = self.profile.by_rule.lock();
+        let timing = rules.entry(self.rule_id.to_owned()).or_default();
+        timing.checks += 1;
+        timing.interrupted += u64::from(self.outcome.is_none());
+        timing.unavailable += u64::from(self.outcome == Some(ValidationOutcome::Unavailable));
+        timing.total += elapsed;
+        timing.slowest = timing.slowest.max(elapsed);
+    }
+}
+
 /// Holds HTTP clients for different TLS validation modes.
 ///
 /// This struct is created once at scan startup and passed through the validation chain.
@@ -131,12 +223,17 @@ pub struct ValidationClients {
     lax: Client,
     /// The global TLS mode from CLI arguments.
     pub global_mode: TlsMode,
-    /// When true, skip SSRF IP validation and allow requests to internal/private addresses.
+    /// When true, every validator may reach internal/private addresses (`--allow-internal-ips`).
+    #[deprecated(
+        note = "Set global access through the constructor and read it with allows_internal_ips_for_all_rules"
+    )]
     pub allow_internal_ips: bool,
+    rule_internal_ip_policy: RuleInternalIpPolicy,
     pub http_fallbacks: bool,
     pub unlimited_response: bool,
     /// Candidate budgets are independent of response body caps.
     pub unlimited_results: bool,
+    phase_profile: Option<Arc<ValidationPhaseProfile>>,
 }
 
 impl ValidationClients {
@@ -145,6 +242,7 @@ impl ValidationClients {
         Self::with_timeout(global_mode, allow_internal_ips, Duration::from_secs(30), false)
     }
 
+    #[allow(deprecated)]
     pub fn with_timeout(
         global_mode: TlsMode,
         allow_internal_ips: bool,
@@ -180,12 +278,27 @@ impl ValidationClients {
                     lax,
                     global_mode,
                     allow_internal_ips,
+                    rule_internal_ip_policy: RuleInternalIpPolicy::default(),
                     http_fallbacks: false,
                     unlimited_response,
                     unlimited_results: false,
+                    phase_profile: None,
                 })
             },
         )
+    }
+
+    pub(crate) fn profiled_for_scan(&self) -> Option<Self> {
+        tracing::enabled!(target: VALIDATION_TIMING_TARGET, tracing::Level::DEBUG).then(|| Self {
+            phase_profile: Some(Arc::new(ValidationPhaseProfile::new())),
+            ..self.clone()
+        })
+    }
+
+    pub(crate) fn log_phase_profile(&self) {
+        if let Some(profile) = &self.phase_profile {
+            profile.log();
+        }
     }
 
     /// Explicitly configure candidate budgets independently of HTTP response caps.
@@ -196,6 +309,24 @@ impl ValidationClients {
 
     pub fn with_http_fallbacks(mut self, enabled: bool) -> Self {
         self.http_fallbacks = enabled;
+        self
+    }
+
+    /// Whether the effective validation policy allows internal IPs for every rule.
+    #[allow(deprecated)]
+    pub fn allows_internal_ips_for_all_rules(&self) -> bool {
+        self.allow_internal_ips
+    }
+
+    fn allows_internal_ips_for_rule(&self, rule: &Rule) -> bool {
+        self.allows_internal_ips_for_all_rules()
+            || self.rule_internal_ip_policy.allows_rule_grant(rule)
+    }
+
+    #[allow(deprecated)]
+    pub(crate) fn with_rule_internal_ip_policy(mut self, policy: RuleInternalIpPolicy) -> Self {
+        self.allow_internal_ips = policy.allows_all();
+        self.rule_internal_ip_policy = policy;
         self
     }
 
@@ -291,29 +422,43 @@ pub(crate) fn validation_context_values(m: &OwnedBlobMatch) -> Vec<(String, Opti
     values.into_iter().collect()
 }
 
-fn original_named_captures(m: &OwnedBlobMatch) -> std::collections::BTreeMap<String, String> {
-    let names = m
-        .rule
-        .syntax()
-        .as_anchored_regex()
-        .map(|regex| {
-            regex
-                .capture_names()
-                .flatten()
-                .map(str::to_owned)
-                .collect::<std::collections::BTreeSet<_>>()
-        })
-        .unwrap_or_default();
-    m.captures
-        .captures
-        .iter()
-        .filter_map(|capture| {
-            capture
-                .name
-                .filter(|name| names.contains(*name))
-                .map(|name| (name.to_owned(), capture.raw_value().to_owned()))
-        })
-        .collect()
+type ValidationPatternMetadata = std::result::Result<BTreeSet<String>, String>;
+static VALIDATION_PATTERN_CACHE: OnceLock<DashMap<String, ValidationPatternMetadata>> =
+    OnceLock::new();
+
+fn with_validation_pattern_metadata<T>(
+    syntax: &RuleSyntax,
+    read: impl FnOnce(&ValidationPatternMetadata) -> T,
+) -> T {
+    // Validation only needs the compile result and the original capture names.
+    // Key by pattern so a custom rule can reuse an ID without sharing metadata.
+    let cache = VALIDATION_PATTERN_CACHE.get_or_init(DashMap::new);
+    if let Some(metadata) = cache.get(&syntax.pattern) {
+        return read(&metadata);
+    }
+    let metadata = cache.entry(syntax.pattern.clone()).or_insert_with(|| {
+        syntax
+            .as_anchored_regex()
+            .map(|regex| regex.capture_names().flatten().map(str::to_owned).collect())
+            .map_err(|error| error.to_string())
+    });
+    read(&metadata)
+}
+
+fn original_named_captures(m: &OwnedBlobMatch) -> BTreeMap<String, String> {
+    with_validation_pattern_metadata(m.rule.syntax(), |metadata| {
+        let Ok(names) = metadata else { return BTreeMap::new() };
+        m.captures
+            .captures
+            .iter()
+            .filter_map(|capture| {
+                capture
+                    .name
+                    .filter(|name| names.contains(*name))
+                    .map(|name| (name.to_owned(), capture.raw_value().to_owned()))
+            })
+            .collect()
+    })
 }
 
 /// Decode the private JSON contexts accepted by explicit validate/revoke commands.
@@ -438,6 +583,12 @@ pub(crate) fn cached_betterleaks_validation(m: &OwnedBlobMatch) -> Option<serde_
     BETTERLEAKS_ANALYSIS_CACHE.get()?.get(&validation_dedup_key(m)).map(|value| value.clone())
 }
 
+pub(crate) fn cached_fastly_token_usage(m: &OwnedBlobMatch) -> Option<Option<String>> {
+    let evidence = BETTERLEAKS_ANALYSIS_CACHE.get()?.get(&validation_dedup_key(m))?;
+    kingfisher_scanner::validation::betterleaks::fastly_token_usage(&evidence)
+        .map(|timestamp| timestamp.map(str::to_owned))
+}
+
 pub(crate) fn endpoint_variables(
     captures: &std::collections::BTreeMap<String, String>,
 ) -> std::collections::BTreeMap<String, String> {
@@ -508,6 +659,10 @@ pub fn init_validation_caches() {
 /// Clear the static validation caches at a scan boundary to reclaim memory and
 /// prevent validation results from leaking into a later scan.
 pub fn clear_validation_caches() {
+    if let Some(c) = VALIDATION_PATTERN_CACHE.get() {
+        c.clear();
+        c.shrink_to_fit();
+    }
     if let Some(c) = BETTERLEAKS_ANALYSIS_CACHE.get() {
         c.clear();
         c.shrink_to_fit();
@@ -904,19 +1059,18 @@ async fn timed_validate_single_match(
     }
 
     // 3. capture processing
-    let match_re_result = m.rule.syntax().as_anchored_regex();
-    let mut captured_values: Vec<(String, String, usize, usize)> = match match_re_result {
-        Ok(_) => utils::process_captures(&m.captures),
-        Err(e) => {
-            m.validation_success = false;
-            m.validation_response_body =
-                validation_body::from_string(format!("Regex error: {}", e));
-            m.validation_response_status = StatusCode::INTERNAL_SERVER_ERROR;
-            m.validation_outcome = ValidationOutcome::Unavailable;
-            commit_and_return(m);
-            return;
-        }
-    };
+    let pattern_error = with_validation_pattern_metadata(m.rule.syntax(), |metadata| {
+        metadata.as_ref().err().cloned()
+    });
+    if let Some(error) = pattern_error {
+        m.validation_success = false;
+        m.validation_response_body = validation_body::from_string(format!("Regex error: {error}"));
+        m.validation_response_status = StatusCode::INTERNAL_SERVER_ERROR;
+        m.validation_outcome = ValidationOutcome::Unavailable;
+        commit_and_return(m);
+        return;
+    }
+    let mut captured_values = utils::process_captures(&m.captures);
 
     for dep in m.rule.syntax().depends_on_rule.iter().flatten() {
         // Skip adding captured values for TOKEN dependencies
@@ -957,6 +1111,15 @@ async fn timed_validate_single_match(
         }
     }
 
+    // The owner has passed cache and dependency checks. Time the rate-limit wait
+    // and the validator, including retries. Dropping an unfinished timer retains
+    // the time spent when the enclosing timeout or panic aborts the check.
+    let timer = clients.phase_profile.as_ref().and_then(|profile| {
+        match m.rule.syntax().validation.as_ref() {
+            None | Some(Validation::Assumed) => None,
+            Some(_) => Some(profile.start_check(m.rule.id())),
+        }
+    });
     {
         let rule_syntax = m.rule.syntax();
         if let (Some(limiter), Some(validation)) = (rate_limiter, rule_syntax.validation.as_ref())
@@ -980,10 +1143,13 @@ async fn timed_validate_single_match(
                 .map(|gate| gate as &dyn kingfisher_scanner::validation::engine::HttpRequestGate),
         )
         .max_response_bytes(if clients.unlimited_response { 0 } else { 1 << 20 })
-        .allow_internal_ips(clients.allow_internal_ips)
+        .allow_internal_ips(clients.allows_internal_ips_for_rule(&m.rule))
         .use_lax_tls(use_lax_tls)
         .validate(&m.rule, &globals)
         .await;
+    if let Some(timer) = timer {
+        timer.finish(result.outcome);
+    }
     m.validation_outcome = result.outcome;
     apply_endpoint_variables(&m.rule, &mut m.dependent_captures, result.endpoint_variables());
     if let Some(evidence) = result.analysis_data {
@@ -1036,7 +1202,73 @@ fn populate_globals_from_captures(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::rule::{Confidence, DependsOnRule, Rule, RuleSyntax};
+    use crate::rules::rule::{Confidence, DependsOnRule};
+
+    #[test]
+    #[allow(deprecated)]
+    fn validation_clients_honor_changes_to_legacy_global_internal_ip_setting() {
+        let glob = "custom.marked".to_owned();
+        let args = crate::cli::GlobalArgs {
+            allow_internal_ips: true,
+            enable_internal_ips_for: vec![glob],
+            ..Default::default()
+        };
+        let mut clients = ValidationClients::new(TlsMode::Strict, true)
+            .unwrap()
+            .with_rule_internal_ip_policy(RuleInternalIpPolicy::from_global_args(&args).unwrap());
+        let marked = aws_rule("custom.marked", false);
+        let other = aws_rule("custom.other", false);
+        assert!(clients.allows_internal_ips_for_rule(&other));
+
+        clients.allow_internal_ips = false;
+        assert!(!clients.allows_internal_ips_for_all_rules());
+        assert!(!clients.allows_internal_ips_for_rule(&other));
+        assert!(clients.allows_internal_ips_for_rule(&marked));
+
+        clients.allow_internal_ips = true;
+        assert!(clients.allows_internal_ips_for_all_rules());
+        assert!(clients.allows_internal_ips_for_rule(&other));
+    }
+
+    #[test]
+    fn validation_profile_aggregates_completed_and_interrupted_checks_per_rule() {
+        let profile = ValidationPhaseProfile::new();
+        profile.start_check("custom.first").finish(ValidationOutcome::VerifiedInactive);
+        profile.start_check("custom.first").finish(ValidationOutcome::Unavailable);
+        drop(profile.start_check("custom.first"));
+        profile.start_check("custom.second").finish(ValidationOutcome::VerifiedActive);
+
+        let by_rule = profile.by_rule.lock();
+        let first = &by_rule["custom.first"];
+        assert_eq!((first.checks, first.unavailable, first.interrupted), (3, 1, 1));
+        assert!(first.total >= first.slowest);
+        let second = &by_rule["custom.second"];
+        assert_eq!((second.checks, second.unavailable, second.interrupted), (1, 0, 0));
+        assert_eq!(second.total, second.slowest);
+    }
+
+    #[test]
+    fn validation_pattern_metadata_preserves_capture_names_and_compile_errors() {
+        let mut syntax = aws_rule("custom.regex-metadata", false).syntax().clone();
+        syntax.pattern = r"(?P<CamelCase>a)(b)".to_owned();
+        assert_eq!(
+            with_validation_pattern_metadata(&syntax, Clone::clone).unwrap(),
+            BTreeSet::from(["CamelCase".to_owned()]),
+        );
+
+        // Reloading a custom rule with the same ID can change its pattern.
+        syntax.pattern = r"(?P<lowercase>c)".to_owned();
+        assert_eq!(
+            with_validation_pattern_metadata(&syntax, Clone::clone).unwrap(),
+            BTreeSet::from(["lowercase".to_owned()]),
+        );
+
+        syntax.pattern = "(".to_owned();
+        let error = syntax.as_anchored_regex().unwrap_err().to_string();
+        for _ in 0..2 {
+            assert_eq!(with_validation_pattern_metadata(&syntax, Clone::clone), Err(error.clone()));
+        }
+    }
 
     #[test]
     fn private_endpoint_cache_preserves_provider_context_without_secret_captures() {

@@ -3,14 +3,18 @@
 //! A negative result must be safe before paths, context, and component resolution are
 //! available. Positives always go through the ordinary extraction and matching pipeline.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+    },
 };
 
 use anyhow::Result;
 use kingfisher_rules::scanner_pool::ScannerPool as RulesScannerPool;
-use kingfisher_scanner::primitives::is_base64_byte;
+use kingfisher_scanner::primitives::has_ascii_base64_candidate;
+use parking_lot::Mutex;
 
 use crate::{
     decompress::looks_like_zip,
@@ -19,21 +23,150 @@ use crate::{
     scanner_pool::ScannerPool,
 };
 const BASE64_SCAN_LIMIT: usize = 64 * 1024 * 1024;
+const MAX_RETAINED_BLOB_BYTES: usize = 256 * 1024 * 1024;
 
-pub(crate) struct GitContentFilter {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GitContentCandidate {
+    Clean,
+    NeedsScan,
+    // The raw native scan completed with no candidates. Base64 still needs scanning.
+    Base64Only,
+}
+
+pub(crate) struct RetainedGitBlob {
+    data: Vec<u8>,
+    native_negative: bool,
+    retained_bytes: Arc<AtomicUsize>,
+    reserved: usize,
+}
+
+impl RetainedGitBlob {
+    fn reservation_size(len: usize) -> usize {
+        // Budget the payload plus the entry's allocation and temporary OID storage.
+        const ENTRY_OVERHEAD: usize = 3 * size_of::<(gix::ObjectId, Arc<RetainedGitBlob>)>()
+            + size_of::<RetainedGitBlob>()
+            + 2 * size_of::<usize>();
+        len.saturating_add(ENTRY_OVERHEAD)
+    }
+
+    fn reserve(
+        len: usize,
+        native_negative: bool,
+        retained_bytes: &Arc<AtomicUsize>,
+        limit: usize,
+    ) -> Option<Self> {
+        let reserved = Self::reservation_size(len);
+        retained_bytes
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                used.checked_add(reserved).filter(|&total| total <= limit)
+            })
+            .ok()?;
+        Some(Self {
+            data: Vec::new(),
+            native_negative,
+            retained_bytes: Arc::clone(retained_bytes),
+            reserved,
+        })
+    }
+
+    fn copy_payload(mut self, data: &[u8]) -> Arc<Self> {
+        // Keep the worker's scratch allocation for subsequent delta decoding.
+        self.data = data.to_vec();
+        Arc::new(self)
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    pub(crate) fn native_negative(&self) -> bool {
+        self.native_negative
+    }
+
+    pub(crate) fn into_data(blob: Arc<Self>) -> Option<(Vec<u8>, bool)> {
+        // Ordinarily the final loader owns the only reference. If the metadata
+        // was cloned, fall back to the object database and discard the proof.
+        Arc::into_inner(blob).map(|mut blob| (std::mem::take(&mut blob.data), blob.native_negative))
+    }
+}
+
+impl Drop for RetainedGitBlob {
+    fn drop(&mut self) {
+        drop(std::mem::take(&mut self.data));
+        self.retained_bytes.fetch_sub(self.reserved, Ordering::Relaxed);
+    }
+}
+
+pub(crate) struct GitBlobHandoff<'a> {
+    retained_bytes: &'a Arc<AtomicUsize>,
+    limit: usize,
+    entries: Mutex<BTreeMap<(u8, usize), Arc<RetainedGitBlob>>>,
+}
+
+impl GitBlobHandoff<'_> {
+    pub(crate) fn offer(
+        &self,
+        index: usize,
+        delta_band: u8,
+        data: &[u8],
+        candidate: GitContentCandidate,
+    ) {
+        if RetainedGitBlob::reservation_size(data.len()) > self.limit {
+            return;
+        }
+        let reservation = {
+            let mut entries = self.entries.lock();
+            loop {
+                if let Some(reservation) = RetainedGitBlob::reserve(
+                    data.len(),
+                    candidate == GitContentCandidate::Base64Only,
+                    self.retained_bytes,
+                    self.limit,
+                ) {
+                    break reservation;
+                }
+                // Other repositories share the byte budget, but only this repository's
+                // entries are eligible for replacement. A missed handoff still gets read.
+                let Some(entry) = entries.first_entry() else { return };
+                if entry.key().0 >= delta_band {
+                    return;
+                }
+                drop(entry.remove());
+            }
+        };
+        // The budget includes this pending entry while the worker copies its payload.
+        let retained = reservation.copy_payload(data);
+        self.entries.lock().insert((delta_band, index), retained);
+    }
+
+    pub(crate) fn into_blobs(
+        self,
+        ids: &[gix::ObjectId],
+    ) -> Vec<(gix::ObjectId, Arc<RetainedGitBlob>)> {
+        let mut entries: Vec<_> = self.entries.into_inner().into_iter().collect();
+        entries.sort_unstable_by_key(|((_, index), _)| *index);
+        entries.into_iter().map(|((_, index), blob)| (ids[index], blob)).collect()
+    }
+}
+
+type ChunkedPrefilters<'a> = Box<dyn Fn() -> Option<Arc<RulesScannerPool>> + Send + Sync + 'a>;
+
+pub(crate) struct GitContentFilter<'a> {
     scanners: Arc<ScannerPool>,
-    chunked_prefilter_scanners: Option<Arc<RulesScannerPool>>,
-    has_replay_rules: bool,
+    chunked_prefilters: Option<ChunkedPrefilters<'a>>,
     num_rules: usize,
     base64: bool,
     archives: bool,
+    pdf: bool,
     resources: ResourceLimits,
     max_blob_size: Option<u64>,
     clean_blobs: AtomicU64,
     clean_bytes: AtomicU64,
+    // Concurrent repository prepasses in this scan share the same budget.
+    retained_bytes: Arc<AtomicUsize>,
 }
 
-impl GitContentFilter {
+impl<'a> GitContentFilter<'a> {
     pub(crate) fn new(
         scanners: Arc<ScannerPool>,
         num_rules: usize,
@@ -43,25 +176,24 @@ impl GitContentFilter {
     ) -> Self {
         Self {
             scanners,
-            chunked_prefilter_scanners: None,
-            has_replay_rules: false,
+            chunked_prefilters: None,
             num_rules,
             base64,
             archives,
+            pdf: archives,
             resources,
             max_blob_size: None,
             clean_blobs: AtomicU64::new(0),
             clean_bytes: AtomicU64::new(0),
+            retained_bytes: Arc::default(),
         }
     }
 
     pub(crate) fn with_chunked_prefilters(
         mut self,
-        scanners: Option<Arc<RulesScannerPool>>,
-        has_replay_rules: bool,
+        scanners: impl Fn() -> Option<Arc<RulesScannerPool>> + Send + Sync + 'a,
     ) -> Self {
-        self.chunked_prefilter_scanners = scanners;
-        self.has_replay_rules = has_replay_rules;
+        self.chunked_prefilters = Some(Box::new(scanners));
         self
     }
 
@@ -70,8 +202,35 @@ impl GitContentFilter {
         self
     }
 
+    pub(crate) fn with_archive_depth(mut self, depth: Option<usize>) -> Self {
+        // PDF text is a leaf transform even when archive expansion is disabled by depth.
+        self.archives &= depth != Some(0);
+        self
+    }
+
     pub(crate) fn exceeds_max_blob_size(&self, size: u64) -> bool {
         self.max_blob_size.is_some_and(|limit| size > limit)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retain_blob(&self, data: &[u8]) -> Option<Arc<RetainedGitBlob>> {
+        Some(
+            RetainedGitBlob::reserve(
+                data.len(),
+                self.classify(data).ok()? == GitContentCandidate::Base64Only,
+                &self.retained_bytes,
+                MAX_RETAINED_BLOB_BYTES,
+            )?
+            .copy_payload(data),
+        )
+    }
+
+    pub(crate) fn blob_handoff(&self) -> GitBlobHandoff<'_> {
+        GitBlobHandoff {
+            retained_bytes: &self.retained_bytes,
+            limit: MAX_RETAINED_BLOB_BYTES,
+            entries: Mutex::default(),
+        }
     }
 
     pub(crate) fn record_clean(&self, blobs: u64, bytes: u64) {
@@ -91,25 +250,32 @@ impl GitContentFilter {
         }
     }
 
-    pub(crate) fn may_match(&self, bytes: &[u8]) -> Result<bool> {
+    #[cfg(test)]
+    fn may_match(&self, bytes: &[u8]) -> Result<bool> {
+        Ok(self.classify(bytes)? != GitContentCandidate::Clean)
+    }
+
+    pub(crate) fn classify(&self, bytes: &[u8]) -> Result<GitContentCandidate> {
+        use GitContentCandidate::{Base64Only, Clean, NeedsScan};
         // Blob normalizes UTF-16/32 before matching. Retain every possible decoded
         // input, but do not mistake every image containing a NUL for Unicode text.
         if possible_unicode(bytes) {
-            return Ok(true);
+            return Ok(NeedsScan);
         }
-        if self.archives
-            && (possible_archive(bytes)
-                || kingfisher_scanner::extraction::pdf::has_pdf_magic(bytes))
+        if (self.archives && possible_archive(bytes))
+            || (self.pdf && kingfisher_scanner::extraction::pdf::has_pdf_magic(bytes))
         {
-            return Ok(true);
+            return Ok(NeedsScan);
         }
 
         // Exact whole-language gates can miss long matches crossing the chunk overlap.
         // Keep the former broad gates for those inputs, including conservative retention
         // if their auxiliary native database could not be compiled.
-        let chunked_prefilters = if bytes.len() > MAX_CHUNK_SIZE && self.has_replay_rules {
-            let Some(scanners) = self.chunked_prefilter_scanners.as_ref() else {
-                return Ok(true);
+        let chunked_prefilters = if bytes.len() > MAX_CHUNK_SIZE
+            && let Some(chunked_prefilters) = &self.chunked_prefilters
+        {
+            let Some(scanners) = chunked_prefilters() else {
+                return Ok(NeedsScan);
             };
             Some(scanners)
         } else {
@@ -131,9 +297,9 @@ impl GitContentFilter {
                 })
             })??;
             if found {
-                return Ok(true);
+                return Ok(NeedsScan);
             }
-            if let Some(scanners) = chunked_prefilters {
+            if let Some(scanners) = &chunked_prefilters {
                 scanners.try_with(|scanner| {
                     scanner.scan(&bytes[offset..end], |rule, _, _, _| {
                         if (rule as usize) < self.num_rules {
@@ -145,7 +311,7 @@ impl GitContentFilter {
                     })
                 })??;
                 if found {
-                    return Ok(true);
+                    return Ok(NeedsScan);
                 }
             }
             if end == bytes.len() {
@@ -154,9 +320,15 @@ impl GitContentFilter {
             offset = end - CHUNK_OVERLAP;
         }
 
-        Ok(self.base64
-            && !self.resources.exceeds(bytes.len(), BASE64_SCAN_LIMIT)
-            && possible_base64(bytes))
+        if !self.base64
+            || self.resources.exceeds(bytes.len(), BASE64_SCAN_LIMIT)
+            || !has_ascii_base64_candidate(bytes)
+        {
+            return Ok(Clean);
+        }
+        // The final matcher uses the same native database for one segment.
+        // Leave segmented matching to the normal path with its own fallback.
+        Ok(if bytes.len() <= MAX_CHUNK_SIZE { Base64Only } else { NeedsScan })
     }
 }
 
@@ -193,9 +365,13 @@ fn possible_archive(bytes: &[u8]) -> bool {
                 && header[0] >> 4 <= 7
                 && u16::from_be_bytes([header[0], header[1]]).is_multiple_of(31)
         })
-        || bytes
-            .get(..512)
-            .is_some_and(|header| tar::Header::from_byte_slice(header).cksum().is_ok())
+        || bytes.get(..512).is_some_and(|bytes| {
+            let header = tar::Header::from_byte_slice(bytes);
+            // A valid octal field contains a digit. Avoid constructing parse errors
+            // for ordinary source text, while retaining the parser's full syntax.
+            header.as_old().cksum.iter().any(|byte| matches!(byte, b'0'..=b'7'))
+                && header.cksum().is_ok()
+        })
         // The ASAR reader ignores its nominal magic, but its JSON-length field
         // must fit in the input. Do not require stricter magic than the extractor.
         || bytes.get(12..16).is_some_and(|size| {
@@ -204,63 +380,13 @@ fn possible_archive(bytes: &[u8]) -> bool {
         })
 }
 
-fn possible_base64(bytes: &[u8]) -> bool {
-    // Match the decoder's standalone-run boundaries, minimum length, padding and
-    // divisibility requirements, but do not allocate decoded buffers here.
-    let mut i = 0;
-    while i < bytes.len() {
-        while i < bytes.len() && !is_base64_byte(bytes[i]) {
-            i += 1;
-        }
-        let start = i;
-        while i < bytes.len() && is_base64_byte(bytes[i]) {
-            i += 1;
-        }
-        for _ in 0..2 {
-            if bytes.get(i) == Some(&b'=') {
-                i += 1;
-            } else {
-                break;
-            }
-        }
-        let len = i - start;
-        if len >= 32 && len.is_multiple_of(4) && decodes_to_ascii(&bytes[start..i]) {
-            return true;
-        }
-    }
-    false
-}
-
-fn base64_sextet(byte: u8) -> u8 {
-    match byte {
-        b'A'..=b'Z' => byte - b'A',
-        b'a'..=b'z' => byte - b'a' + 26,
-        b'0'..=b'9' => byte - b'0' + 52,
-        b'+' | b'-' => 62,
-        b'/' | b'_' => 63,
-        _ => 0,
-    }
-}
-
-fn decodes_to_ascii(bytes: &[u8]) -> bool {
-    // The ordinary Base64 decoder only retains ASCII decoded content. Check the
-    // high bit of each decoded byte directly, without allocating decoded buffers.
-    // Runs already consist of full quartets with at most two trailing '=' bytes.
-    // Invalid trailing bits/mixed alphabets can remain conservative positives.
-    bytes.as_chunks::<4>().0.iter().all(|quartet| {
-        base64_sextet(quartet[0]) < 32
-            && (quartet[2] == b'=' || base64_sextet(quartet[1]) & 8 == 0)
-            && (quartet[3] == b'=' || base64_sextet(quartet[2]) & 2 == 0)
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use kingfisher_vectorscan::{BlockDatabase, Flag, Pattern};
 
     use super::*;
 
-    fn filter(base64: bool, archives: bool) -> GitContentFilter {
+    fn filter(base64: bool, archives: bool) -> GitContentFilter<'static> {
         let db = BlockDatabase::new(vec![Pattern::new(
             b"candidate_secret_[a-z0-9]{16}".to_vec(),
             Flag::default(),
@@ -274,6 +400,53 @@ mod tests {
             archives,
             ResourceLimits::default(),
         )
+    }
+
+    #[test]
+    fn retained_git_blob_budget_releases_on_consume_or_drop() {
+        let budget = Arc::new(AtomicUsize::new(0));
+        let data = b"synthetic retained Git content";
+        let blob =
+            RetainedGitBlob::reserve(data.len(), true, &budget, 1024).unwrap().copy_payload(data);
+        let limit = budget.load(Ordering::Relaxed);
+        assert!(RetainedGitBlob::reserve(data.len(), false, &budget, limit).is_none());
+
+        let shared = Arc::clone(&blob);
+        assert!(RetainedGitBlob::into_data(blob).is_none());
+        assert_eq!(budget.load(Ordering::Relaxed), limit);
+        assert_eq!(RetainedGitBlob::into_data(shared).unwrap(), (data.to_vec(), true));
+        assert_eq!(budget.load(Ordering::Relaxed), 0);
+
+        drop(RetainedGitBlob::reserve(data.len(), false, &budget, limit).unwrap());
+        assert_eq!(budget.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn handoff_prefers_higher_delta_depth_and_restores_object_order() {
+        let budget = Arc::new(AtomicUsize::new(0));
+        let limit = 2 * RetainedGitBlob::reservation_size(12);
+        let handoff = GitBlobHandoff { retained_bytes: &budget, limit, entries: Mutex::default() };
+        use GitContentCandidate::{Base64Only, NeedsScan};
+        handoff.offer(3, 1, b"first object", NeedsScan);
+        handoff.offer(0, 0, b"cheap object", NeedsScan);
+        handoff.offer(2, 1, b"third object", NeedsScan);
+        handoff.offer(1, 2, b"costly entry", Base64Only);
+        handoff.offer(4, 3, &[0; 1024], NeedsScan);
+        assert_eq!(budget.load(Ordering::Relaxed), limit);
+        let ids = [0, 1, 2, 3, 4].map(|i| gix::ObjectId::Sha1([i; 20]));
+        let retained: Vec<_> = handoff
+            .into_blobs(&ids)
+            .into_iter()
+            .map(|(oid, blob)| (oid, RetainedGitBlob::into_data(blob).unwrap()))
+            .collect();
+        assert_eq!(
+            retained,
+            [
+                (ids[1], (b"costly entry".to_vec(), true)),
+                (ids[3], (b"first object".to_vec(), false))
+            ]
+        );
+        assert_eq!(budget.load(Ordering::Relaxed), 0);
     }
 
     #[test]
@@ -302,6 +475,17 @@ mod tests {
     }
 
     #[test]
+    fn gate_keeps_pdf_candidates_without_expanding_archive_layers() -> Result<()> {
+        let pdf = b"%PDF-1.7 synthetic content without a raw match";
+        let zip = b"PK\x03\x04 synthetic content without a raw match";
+        let depth_zero = filter(false, true).with_archive_depth(Some(0));
+        assert!(depth_zero.may_match(pdf)?);
+        assert!(!depth_zero.may_match(zip)?);
+        assert!(!filter(false, false).with_archive_depth(Some(0)).may_match(pdf)?);
+        Ok(())
+    }
+
+    #[test]
     fn base64_gate_is_a_superset_of_the_normal_decoder() {
         use base64::{Engine, engine::general_purpose};
 
@@ -310,14 +494,18 @@ mod tests {
                 let encoded = engine.encode(vec![b'a'; len]);
                 for input in [encoded.clone(), format!("value=\"{encoded}\";\n")] {
                     if !crate::matcher::get_base64_strings(input.as_bytes()).is_empty() {
-                        assert!(possible_base64(input.as_bytes()));
+                        assert!(has_ascii_base64_candidate(input.as_bytes()));
                     }
                 }
             }
         }
         let bytes = b"YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4";
-        assert!(filter(true, false).may_match(bytes).unwrap());
-        assert!(!filter(false, false).may_match(bytes).unwrap());
+        let with_base64 = filter(true, false);
+        assert_eq!(with_base64.classify(bytes).unwrap(), GitContentCandidate::Base64Only);
+        let mut mixed = bytes.to_vec();
+        mixed.extend_from_slice(b"\ncandidate_secret_0123456789abcdef");
+        assert_eq!(with_base64.classify(&mixed).unwrap(), GitContentCandidate::NeedsScan);
+        assert_eq!(filter(false, false).classify(bytes).unwrap(), GitContentCandidate::Clean);
     }
 
     #[test]
@@ -365,17 +553,24 @@ mod tests {
             Some(0),
         )])
         .unwrap();
-        let filter = filter
-            .with_chunked_prefilters(Some(Arc::new(RulesScannerPool::new(Arc::new(broad)))), true);
+        let broad = Arc::new(RulesScannerPool::new(Arc::new(broad)));
+        let filter = filter.with_chunked_prefilters(move || Some(Arc::clone(&broad)));
         assert!(filter.may_match(&bytes).unwrap());
         assert!(!filter.may_match(b"long_gate_start but no valid ending").unwrap());
     }
 
     #[test]
     fn missing_chunked_prefilters_conservatively_keep_only_large_inputs() {
-        let filter = filter(false, false).with_chunked_prefilters(None, true);
+        let initialized = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let scanner_initialized = Arc::clone(&initialized);
+        let filter = filter(false, false).with_chunked_prefilters(move || {
+            scanner_initialized.store(true, Ordering::Relaxed);
+            None
+        });
         assert!(!filter.may_match(b"ordinary text").unwrap());
+        assert!(!initialized.load(Ordering::Relaxed));
         assert!(filter.may_match(&vec![b'.'; MAX_CHUNK_SIZE + 1]).unwrap());
+        assert!(initialized.load(Ordering::Relaxed));
     }
 
     #[test]
@@ -436,7 +631,7 @@ mod tests {
         assert!(!filter.may_match(&jpeg).unwrap());
         jpeg.extend_from_slice(b"candidate_secret_0123456789abcdef");
         assert!(filter.may_match(&jpeg).unwrap());
-        assert!(!possible_base64(b"0123456789abcdef0123456789abcdef01234567"));
+        assert!(!has_ascii_base64_candidate(b"0123456789abcdef0123456789abcdef01234567"));
     }
 
     #[test]
@@ -453,10 +648,13 @@ mod tests {
                         let encoded = engine.encode(&payload);
                         let normal = crate::matcher::get_base64_strings(encoded.as_bytes());
                         if !normal.is_empty() {
-                            assert!(possible_base64(encoded.as_bytes()));
+                            assert!(has_ascii_base64_candidate(encoded.as_bytes()));
                         }
                         if encoded.len().is_multiple_of(4) {
-                            assert_eq!(possible_base64(encoded.as_bytes()), payload.is_ascii());
+                            assert_eq!(
+                                has_ascii_base64_candidate(encoded.as_bytes()),
+                                payload.is_ascii()
+                            );
                         }
                     }
                 }

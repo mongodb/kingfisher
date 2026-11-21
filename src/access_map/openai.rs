@@ -1,20 +1,26 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
+use chrono::{DateTime, SecondsFormat};
 use kingfisher_scanner::validation::limits::{NetworkLimits, ResourceTimeout};
 use reqwest::{Client as HttpClient, StatusCode, header};
 use serde::{Deserialize, de::DeserializeOwned};
+use tracing::debug;
 
 use crate::{cli::commands::access_map::AccessMapArgs, validation::GLOBAL_USER_AGENT};
 
 use super::{
-    AccessMapResult, AccessSummary, AccessTokenDetails, PermissionSummary, ResourceExposure,
-    RoleBinding, Severity, build_recommendations,
+    AccessMapResult, AccessSummary, AccessTokenDetails, PermissionSummary, ProviderMetadata,
+    ResourceExposure, RoleBinding, Severity, build_recommendations,
 };
 
 const OPENAI_API: &str = "https://api.openai.com/v1";
 const MAX_OPENAI_SERVICE_RESOURCES: usize = 50;
 const MAX_OPENAI_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+const KEY_USAGE_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
+const KEY_USAGE_SOURCE: &str = "OpenAI API key metadata";
+const ADMIN_KEY_OBJECT: &str = "organization.admin_api_key";
+const PROJECT_KEY_OBJECT: &str = "organization.project.api_key";
 
 struct OpenAiClient {
     http_client: HttpClient,
@@ -139,6 +145,14 @@ struct OpenAiProjectApiKey {
     redacted_value: String,
 }
 
+#[derive(Deserialize)]
+struct OpenAiKeyUsage {
+    id: String,
+    object: String,
+    redacted_value: String,
+    last_used_at: Option<i64>,
+}
+
 #[derive(Debug, Deserialize)]
 struct OpenAiServiceAccount {
     id: String,
@@ -205,15 +219,87 @@ struct OpenAiAssistant {
 // ---------------------------------------------------------------------------
 
 pub async fn map_access(args: &AccessMapArgs) -> Result<AccessMapResult> {
-    let token = if let Some(path) = args.credential_path.as_deref() {
-        let raw = std::fs::read_to_string(path)
-            .with_context(|| format!("Failed to read OpenAI token from {}", path.display()))?;
-        raw.trim().to_string()
-    } else {
-        return Err(anyhow!("OpenAI access-map requires a validated token from scan results"));
-    };
+    let path = args.credential_path.as_deref().ok_or_else(|| {
+        anyhow!(
+            "OpenAI access-map requires a credential file or a validated token from scan results"
+        )
+    })?;
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read OpenAI credential from {}", path.display()))?;
+    let raw = raw.trim();
+    if !raw.starts_with('{') {
+        return map_access_from_token(raw).await;
+    }
 
-    map_access_from_token(&token).await
+    let credential: OpenAiCredentialFile = serde_json::from_str(raw).map_err(|_| {
+        anyhow!("Invalid OpenAI credential JSON; expected a token and optional audit fields")
+    })?;
+    map_access_from_token_at(credential.token.trim(), credential.key_lookup()?, OPENAI_API).await
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OpenAiCredentialFile {
+    token: String,
+    key_id: Option<String>,
+    project_id: Option<String>,
+    audit_token: Option<String>,
+}
+
+struct OpenAiKeyLookup<'a> {
+    audit_token: &'a str,
+    key_id: &'a str,
+    path: String,
+    object: &'static str,
+}
+
+impl OpenAiCredentialFile {
+    fn key_lookup(&self) -> Result<Option<OpenAiKeyLookup<'_>>> {
+        if self.token.trim().is_empty() {
+            return Err(anyhow!("OpenAI credential JSON requires a non-empty token"));
+        }
+        let (audit_token, key_id, project_id) = (
+            self.audit_token.as_deref().map(str::trim),
+            self.key_id.as_deref(),
+            self.project_id.as_deref(),
+        );
+        if audit_token.is_none() && key_id.is_none() && project_id.is_none() {
+            return Ok(None);
+        }
+        let audit_token = audit_token
+            .filter(|token| token.starts_with("sk-admin-") && token.len() > "sk-admin-".len())
+            .context("OpenAI key history requires an organization Admin API key as audit_token")?;
+        if audit_token == self.token.trim() {
+            return Err(anyhow!(
+                "OpenAI key history requires an audit_token distinct from the target token"
+            ));
+        }
+        let key_id = key_id
+            .filter(|id| valid_lookup_id(id, "key_"))
+            .context("OpenAI key history requires a valid key_id")?;
+        let (path, object) = if detect_token_type(self.token.trim()) == "admin_api_key" {
+            if project_id.is_some() {
+                return Err(anyhow!("OpenAI admin key history must omit project_id"));
+            }
+            (format!("/organization/admin_api_keys/{key_id}"), ADMIN_KEY_OBJECT)
+        } else {
+            let project_id = project_id
+                .filter(|id| valid_lookup_id(id, "proj_"))
+                .context("OpenAI project key history requires a valid project_id")?;
+            (format!("/organization/projects/{project_id}/api_keys/{key_id}"), PROJECT_KEY_OBJECT)
+        };
+        Ok(Some(OpenAiKeyLookup { audit_token, key_id, path, object }))
+    }
+}
+
+fn valid_lookup_id(id: &str, prefix: &str) -> bool {
+    id.len() <= 256
+        && id.strip_prefix(prefix).is_some_and(|identifier| {
+            !identifier.is_empty()
+                && identifier
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        })
 }
 
 fn http_client_builder() -> reqwest::ClientBuilder {
@@ -223,14 +309,75 @@ fn http_client_builder() -> reqwest::ClientBuilder {
 }
 
 pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
+    map_access_from_token_at(token, None, OPENAI_API).await
+}
+
+async fn map_access_from_token_at(
+    token: &str,
+    key_lookup: Option<OpenAiKeyLookup<'_>>,
+    api_base: &str,
+) -> Result<AccessMapResult> {
     let http_client =
         http_client_builder().build().context("Failed to build OpenAI HTTP client")?;
     // The token was found by a scan, so it belongs to someone else's organization.
     // Never apply the operator's own OPENAI_BASE_URL/OPENAI_ORG_ID/OPENAI_PROJECT_ID:
     // they would send the key to another endpoint or add mismatched headers that
     // OpenAI rejects, making an accessible key look denied.
-    let client = OpenAiClient::new(http_client, token, OPENAI_API, "", "")?;
-    map_access_with_client(&client, token).await
+    let client = OpenAiClient::new(http_client.clone(), token, api_base, "", "")?;
+    let last_used_at = match key_lookup {
+        Some(lookup) => fetch_key_last_used(http_client, api_base, token, lookup).await,
+        None => None,
+    };
+
+    let mut result = map_access_with_client(&client, token).await?;
+    if let Some(timestamp) = last_used_at
+        && let Some(details) = &mut result.token_details
+    {
+        details.last_used_at = Some(timestamp);
+        result
+            .provider_metadata
+            .get_or_insert_with(ProviderMetadata::default)
+            .credential_last_used_source = Some(KEY_USAGE_SOURCE.into());
+    }
+    Ok(result)
+}
+
+async fn fetch_key_last_used(
+    http_client: HttpClient,
+    api_base: &str,
+    token: &str,
+    lookup: OpenAiKeyLookup<'_>,
+) -> Option<String> {
+    // Use the explicit auditor for this fixed-origin lookup only. The target credential
+    // is reserved for inventory probes so they cannot contaminate the returned snapshot.
+    let client = OpenAiClient::new(http_client, lookup.audit_token, api_base, "", "")
+        .inspect_err(|_| debug!("OpenAI access-map: invalid key activity audit header"))
+        .ok()?;
+    let key = match tokio::time::timeout(
+        KEY_USAGE_LOOKUP_TIMEOUT,
+        client.get::<OpenAiKeyUsage>(&lookup.path, &[], &[]),
+    )
+    .await
+    {
+        Ok(Ok(Some(key))) => key,
+        _ => {
+            debug!("OpenAI access-map: key activity lookup unavailable");
+            return None;
+        }
+    };
+    let matching_redaction =
+        key.redacted_value.split_once("...").is_some_and(|(prefix, suffix)| {
+            !prefix.is_empty()
+                && !suffix.is_empty()
+                && token.starts_with(prefix)
+                && token.ends_with(suffix)
+        });
+    if key.id != lookup.key_id || key.object != lookup.object || !matching_redaction {
+        debug!("OpenAI access-map: activity record does not match supplied key metadata");
+        return None;
+    }
+    let date = DateTime::from_timestamp(key.last_used_at?, 0)?;
+    Some(date.to_rfc3339_opts(SecondsFormat::Secs, true))
 }
 
 async fn map_access_with_client(client: &OpenAiClient, token: &str) -> Result<AccessMapResult> {
@@ -722,7 +869,9 @@ async fn list_fine_tuning_jobs(client: &OpenAiClient) -> Result<Inventory<FineTu
 // ---------------------------------------------------------------------------
 
 fn detect_token_type(token: &str) -> &'static str {
-    if token.starts_with("sk-proj-") {
+    if token.starts_with("sk-admin-") {
+        "admin_api_key"
+    } else if token.starts_with("sk-proj-") {
         "project_api_key"
     } else if token.starts_with("sk-svcacct-") {
         "service_account_api_key"
@@ -836,6 +985,98 @@ mod tests {
         assert!(!client.headers.contains_key("openai-organization"));
         assert!(!client.headers.contains_key("openai-project"));
         assert!(OpenAiClient::new(http, "bad\r\ntoken", OPENAI_API, "", "").is_err());
+    }
+
+    #[test]
+    fn key_history_requires_an_explicit_credential_id_and_selects_the_exact_endpoint() {
+        let mut credential: OpenAiCredentialFile =
+            serde_json::from_value(json!({"token":"sk-proj-target-secret"})).unwrap();
+        assert!(credential.key_lookup().unwrap().is_none());
+
+        credential.audit_token = Some("sk-admin-audit-secret".into());
+        assert!(credential.key_lookup().is_err());
+        credential.key_id = Some("key_a".into());
+        assert!(credential.key_lookup().is_err());
+        credential.project_id = Some("proj_a".into());
+        let lookup = credential.key_lookup().unwrap().unwrap();
+        assert_eq!(lookup.path, "/organization/projects/proj_a/api_keys/key_a");
+        assert_eq!(lookup.object, PROJECT_KEY_OBJECT);
+
+        credential.token = "sk-admin-target-secret".into();
+        assert!(credential.key_lookup().is_err());
+        credential.project_id = None;
+        let lookup = credential.key_lookup().unwrap().unwrap();
+        assert_eq!(lookup.path, "/organization/admin_api_keys/key_a");
+        assert_eq!(lookup.object, ADMIN_KEY_OBJECT);
+
+        credential.audit_token = Some(credential.token.clone());
+        assert!(credential.key_lookup().is_err());
+        credential.audit_token = Some("sk-admin-audit-secret".into());
+        credential.key_id = Some("key_a/../../other".into());
+        assert!(credential.key_lookup().is_err());
+    }
+
+    #[tokio::test]
+    async fn key_history_is_read_only_exact_and_separate_from_inventory() {
+        const TARGET: &str = "sk-proj-target-secret";
+        const AUDIT: &str = "sk-admin-audit-secret";
+        const HISTORY_PATH: &str = "/organization/projects/proj_a/api_keys/key_a";
+        let credential: OpenAiCredentialFile = serde_json::from_value(json!({
+            "token": TARGET, "audit_token": AUDIT, "project_id": "proj_a", "key_id": "key_a",
+        }))
+        .unwrap();
+        let record = |id: &str, redacted: &str, last_used_at: Option<i64>| {
+            ResponseTemplate::new(200).set_body_json(json!({
+                "object": PROJECT_KEY_OBJECT,
+                "id": id,
+                "redacted_value": redacted,
+                "last_used_at": last_used_at,
+            }))
+        };
+        for (response, expected) in [
+            (record("key_a", "sk-proj...cret", Some(1_735_689_600)), Some("2025-01-01T00:00:00Z")),
+            (record("key_b", "sk-proj...cret", Some(1_735_689_600)), None),
+            (record("key_a", "sk-proj...else", Some(1_735_689_600)), None),
+            (record("key_a", "sk-proj...cret", None), None),
+            (ResponseTemplate::new(403), None),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path(HISTORY_PATH))
+                .and(header("authorization", format!("Bearer {AUDIT}")))
+                .respond_with(response)
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/models"))
+                .and(header("authorization", format!("Bearer {TARGET}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(last_page(json!([]))))
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            let mapped =
+                map_access_from_token_at(TARGET, credential.key_lookup().unwrap(), &server.uri())
+                    .await
+                    .unwrap();
+            let report = serde_json::to_string(&mapped).unwrap();
+            assert!(!report.contains(TARGET) && !report.contains(AUDIT));
+            assert_eq!(mapped.token_details.unwrap().last_used_at.as_deref(), expected);
+            assert_eq!(
+                mapped.provider_metadata.and_then(|metadata| metadata.credential_last_used_source),
+                expected.map(|_| KEY_USAGE_SOURCE.to_owned()),
+            );
+            let requests = server.received_requests().await.unwrap();
+            assert_eq!(requests[0].url.path(), HISTORY_PATH);
+            let target_header = format!("Bearer {TARGET}");
+            assert!(requests[1..].iter().all(|request| {
+                request
+                    .headers
+                    .get("authorization")
+                    .is_some_and(|header| header.as_bytes() == target_header.as_bytes())
+            }));
+        }
     }
 
     #[test]

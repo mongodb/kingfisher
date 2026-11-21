@@ -4,20 +4,25 @@ use std::{collections::BTreeMap, future::Future, pin::Pin, time::SystemTime};
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use chrono::{DateTime, SecondsFormat};
 use hmac::{Hmac, KeyInit, Mac};
 use http::StatusCode;
 use kingfisher_core::ValidationOutcome;
-use kingfisher_rules::rule::{BetterleaksExpr, BetterleaksValidation};
+use kingfisher_rules::rule::{BetterleaksAccessMapHandler, BetterleaksExpr, BetterleaksValidation};
 use liquid::Object as LiquidObject;
 use liquid_core::ValueView;
 use reqwest::{Client, Method, Url};
 use serde_json::Value as JsonValue;
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
+use zeroize::Zeroizing;
 
+mod crypto;
 mod response_metadata;
 
 const MAX_RESPONSE_BODY: usize = 1 << 20;
+const FASTLY_TOKEN_ENDPOINT: &str = "https://api.fastly.com/tokens/self";
+const FASTLY_TOKEN_USAGE: &str = "__kingfisher_fastly_token_usage";
 
 pub struct BetterleaksValidationOutcome {
     pub valid: bool,
@@ -50,12 +55,16 @@ enum Value {
     Integer(i64),
     Float(f64),
     String(String),
-    Bytes(Vec<u8>),
+    Bytes(Zeroizing<Vec<u8>>),
     Array(Vec<Value>),
     Object(BTreeMap<String, Value>),
 }
 
 impl Value {
+    fn bytes(value: impl Into<Zeroizing<Vec<u8>>>) -> Self {
+        Self::Bytes(value.into())
+    }
+
     fn as_string(&self) -> String {
         match self {
             Self::Null => String::new(),
@@ -88,10 +97,10 @@ impl Value {
         }
     }
 
-    fn as_bytes(&self) -> Vec<u8> {
+    fn as_bytes(&self) -> Zeroizing<Vec<u8>> {
         match self {
             Self::Bytes(value) => value.clone(),
-            _ => self.as_string().into_bytes(),
+            _ => self.as_string().into_bytes().into(),
         }
     }
 
@@ -162,6 +171,37 @@ impl Value {
 type EvalFuture<'a> = Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>>;
 type ChainFuture<'a> = Pin<Box<dyn Future<Output = Result<Option<Value>>> + Send + 'a>>;
 
+struct FastlyTokenUsage<'a> {
+    credential: &'a str,
+    endpoint: &'a str,
+    observed: bool,
+    last_used_at: Option<String>,
+}
+
+impl FastlyTokenUsage<'_> {
+    fn matches_request(&self, request: &reqwest::Request) -> bool {
+        if self.observed
+            || request.method() != Method::GET
+            || request.url().as_str() != self.endpoint
+        {
+            return false;
+        }
+        let mut keys = request.headers().get_all("fastly-key").iter();
+        keys.next().is_some_and(|key| key.as_bytes() == self.credential.as_bytes())
+            && keys.next().is_none()
+    }
+
+    fn record(&mut self, response: &Value) {
+        self.observed = true;
+        let Value::Object(fields) = response else { return };
+        let Some(Value::String(timestamp)) = fields.get("last_used_at") else { return };
+        self.last_used_at = DateTime::parse_from_rfc3339(timestamp)
+            .ok()
+            .map(|time| time.to_utc().to_rfc3339_opts(SecondsFormat::AutoSi, true))
+            .filter(|timestamp| !timestamp.contains(self.credential));
+    }
+}
+
 struct Evaluator<'a> {
     client: &'a Client,
     allow_internal_ips: bool,
@@ -171,6 +211,9 @@ struct Evaluator<'a> {
     last_status: Option<StatusCode>,
     revocation: bool,
     mutation_submitted: bool,
+    fastly_token_usage: Option<FastlyTokenUsage<'a>>,
+    /// Cumulative cryptographic work for this program run.
+    crypto_budget: kingfisher_rules::crypto::WorkBudget,
 }
 
 pub async fn validate(
@@ -180,21 +223,84 @@ pub async fn validate(
     client: &Client,
     allow_internal_ips: bool,
 ) -> BetterleaksValidationOutcome {
+    validate_with_fastly_endpoint(
+        validation,
+        captures,
+        globals,
+        client,
+        allow_internal_ips,
+        FASTLY_TOKEN_ENDPOINT,
+    )
+    .await
+}
+
+async fn validate_with_fastly_endpoint(
+    validation: &BetterleaksValidation,
+    captures: &[(String, String, usize, usize)],
+    globals: &LiquidObject,
+    client: &Client,
+    allow_internal_ips: bool,
+    fastly_endpoint: &str,
+) -> BetterleaksValidationOutcome {
     let mut evaluator = evaluator(validation, captures, globals, client, allow_internal_ips, false);
+    let fastly_enabled = cfg!(feature = "__cli-internals")
+        && validation
+            .capabilities
+            .access_map
+            .as_ref()
+            .is_some_and(|mapping| mapping.handler == BetterleaksAccessMapHandler::Fastly);
+    if fastly_enabled
+        && let Some((_, credential, ..)) =
+            captures.iter().rev().find(|(name, ..)| name.eq_ignore_ascii_case("TOKEN"))
+        && !credential.is_empty()
+    {
+        evaluator.fastly_token_usage = Some(FastlyTokenUsage {
+            credential,
+            endpoint: fastly_endpoint,
+            observed: false,
+            last_used_at: None,
+        });
+    }
     match evaluator.eval(&validation.expression).await {
-        Ok(value) => {
+        Ok(mut value) => {
+            if fastly_enabled && let Value::Object(fields) = &mut value {
+                // Reserve the private handoff key for the authenticated provider response.
+                fields.remove(FASTLY_TOKEN_USAGE);
+            }
             let mut result = classify(value, evaluator.last_status);
             response_metadata::include(&mut result, validation, &evaluator.variables);
+            if result.valid
+                && let Some(usage) = evaluator.fastly_token_usage
+                && usage.observed
+                && let Some(JsonValue::Object(private)) = &mut result.analysis_data
+            {
+                private.insert(FASTLY_TOKEN_USAGE.into(), JsonValue::from(usage.last_used_at));
+            }
             result
         }
         Err(error) => BetterleaksValidationOutcome {
-            reason: Some(super::ValidationReason::RequestFailed),
+            reason: Some(if crypto::configuration_failure(&error) {
+                super::ValidationReason::InvalidConfiguration
+            } else {
+                super::ValidationReason::RequestFailed
+            }),
             valid: false,
             status: StatusCode::BAD_GATEWAY,
             body: format!("Betterleaks validation error: {error:#}"),
             outcome: ValidationOutcome::Unavailable,
             analysis_data: None,
         },
+    }
+}
+
+/// `Some(None)` means the validation request checked the exact token and returned no date.
+#[cfg(feature = "__cli-internals")]
+#[doc(hidden)]
+pub fn fastly_token_usage(validation_result: &JsonValue) -> Option<Option<&str>> {
+    match validation_result.get(FASTLY_TOKEN_USAGE)? {
+        JsonValue::Null => Some(None),
+        JsonValue::String(timestamp) => Some(Some(timestamp)),
+        _ => None,
     }
 }
 
@@ -452,6 +558,8 @@ fn evaluator<'a>(
         last_status: None,
         revocation,
         mutation_submitted: false,
+        fastly_token_usage: None,
+        crypto_budget: Default::default(),
     }
 }
 
@@ -864,7 +972,7 @@ impl Evaluator<'_> {
             "base64.encode" => Ok(Value::String(
                 BASE64.encode(args.first().map(Value::as_bytes).unwrap_or_default()),
             )),
-            "base64.decode" => Ok(Value::Bytes(
+            "base64.decode" => Ok(Value::bytes(
                 BASE64
                     .decode(args.first().map(Value::as_string).unwrap_or_default())
                     .context("base64.decode")?,
@@ -875,17 +983,23 @@ impl Evaluator<'_> {
             "crypto.sha256" => Ok(Value::String(hex::encode(Sha256::digest(
                 args.first().map(Value::as_bytes).unwrap_or_default(),
             )))),
-            "crypto.md5" => Ok(Value::Bytes(
+            "crypto.md5" => Ok(Value::bytes(
                 md5::Md5::digest(args.first().map(Value::as_bytes).unwrap_or_default()).to_vec(),
             )),
             "crypto.sha1" => {
                 // Betterleaks' OVH validation protocol requires the SHA-1 160-bit
                 // digest of its UTF-8 signing payload. SHA-256 is not wire-compatible.
                 let bytes = args.first().map(Value::as_bytes).unwrap_or_default();
-                Ok(Value::Bytes(Sha1::digest(bytes).to_vec()))
+                Ok(Value::bytes(Sha1::digest(bytes).to_vec()))
             }
-            "crypto.hmacSha1" => Ok(Value::Bytes(hmac_sha1(&args)?)),
-            "crypto.hmacSha256" => Ok(Value::Bytes(hmac_sha256(&args)?)),
+            "crypto.hmacSha1" => Ok(Value::bytes(hmac_sha1(&args)?)),
+            "crypto.hmacSha256" => Ok(Value::bytes(hmac_sha256(&args)?)),
+            name if name.starts_with("crypto.")
+                || matches!(name, "hex.decode" | "base64url.encode" | "base64url.decode") =>
+            {
+                crypto::call(name, &args, &mut self.crypto_budget)
+                    .map_err(|error| crypto::classify_input_error(error, arguments))
+            }
             "strings.obfuscate" => Ok(Value::String(obfuscate(
                 &args.first().map(Value::as_string).unwrap_or_default(),
             ))),
@@ -1078,6 +1192,8 @@ impl Evaluator<'_> {
         // Resolve deferred header/URL/builder errors before marking submission.
         let request =
             request.build().map_err(|_| anyhow!("Betterleaks request could not be built"))?;
+        let records_fastly_usage =
+            self.fastly_token_usage.as_ref().is_some_and(|usage| usage.matches_request(&request));
         if may_mutate {
             self.mutation_submitted = true;
         }
@@ -1105,6 +1221,12 @@ impl Evaluator<'_> {
         let json = serde_json::from_str(&body)
             .map(Value::from_json)
             .unwrap_or_else(|_| Value::Object(BTreeMap::new()));
+        if records_fastly_usage
+            && status.is_success()
+            && let Some(usage) = &mut self.fastly_token_usage
+        {
+            usage.record(&json);
+        }
         let headers = headers
             .iter()
             .map(|(name, value)| {
@@ -1278,6 +1400,9 @@ impl Evaluator<'_> {
         let key = args.get(1).map(Value::as_string).unwrap_or_default();
         if account.is_empty() || key.is_empty() {
             return Ok(input_error("missing_storage_account_or_key"));
+        }
+        if !super::azure::is_storage_account_name(&account) {
+            return Ok(input_error("invalid_storage_account"));
         }
         let date = chrono::Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
         let canonical_headers = format!("x-ms-date:{date}\nx-ms-version:2023-11-03\n");
@@ -2150,6 +2275,86 @@ mod tests {
     impl Drop for LocalProvider {
         fn drop(&mut self) {
             self.server.abort();
+        }
+    }
+
+    #[test]
+    fn fastly_activity_matches_only_the_exact_current_credential_request() {
+        const TOKEN: &str = "test-fastly-token";
+        let selector = FastlyTokenUsage {
+            credential: TOKEN,
+            endpoint: FASTLY_TOKEN_ENDPOINT,
+            observed: false,
+            last_used_at: None,
+        };
+        let client = Client::new();
+        for (method, endpoint, credential, expected) in [
+            (Method::GET, FASTLY_TOKEN_ENDPOINT, TOKEN, true),
+            (Method::POST, FASTLY_TOKEN_ENDPOINT, TOKEN, false),
+            (Method::GET, "https://api.fastly.com/tokens/self?other=true", TOKEN, false),
+            (Method::GET, "https://example.test/tokens/self", TOKEN, false),
+            (Method::GET, FASTLY_TOKEN_ENDPOINT, "another-token", false),
+        ] {
+            let request =
+                client.request(method, endpoint).header("Fastly-Key", credential).build().unwrap();
+            assert_eq!(selector.matches_request(&request), expected);
+        }
+        let request = client
+            .get(FASTLY_TOKEN_ENDPOINT)
+            .header("Fastly-Key", TOKEN)
+            .header("Fastly-Key", "another-token")
+            .build()
+            .unwrap();
+        assert!(!selector.matches_request(&request));
+    }
+
+    #[cfg(feature = "__cli-internals")]
+    #[tokio::test]
+    async fn fastly_validation_carries_only_checked_activity_from_the_provider() {
+        const TOKEN: &str = "test-fastly-token";
+        const OMITTED: &str = "unretained-response-secret";
+        let rules = get_betterleaks_rules(None).unwrap();
+        let Some(Validation::Betterleaks(template)) =
+            rules.rules.get("betterleaks.fastly-api-token").unwrap().validation.as_ref()
+        else {
+            panic!("expected bundled Fastly validation");
+        };
+        let captures = [("TOKEN".to_string(), TOKEN.to_string(), 0, TOKEN.len())];
+        let client = Client::builder().no_proxy().build().unwrap();
+        for (status, value, expected) in [
+            (
+                StatusCode::OK,
+                JsonValue::from("2025-01-02T03:04:05+01:00"),
+                Some(Some("2025-01-02T02:04:05Z")),
+            ),
+            (StatusCode::OK, JsonValue::Null, Some(None)),
+            (StatusCode::OK, JsonValue::from(OMITTED), Some(None)),
+            (StatusCode::FORBIDDEN, JsonValue::from("2025-01-02T03:04:05Z"), None),
+        ] {
+            let response = serde_json::json!({
+                "id":"key-example", "last_used_at":value, "unrelated_secret":OMITTED,
+            });
+            let provider = LocalProvider::new(vec![(status, response.to_string())]).await;
+            let validation = localize_program(
+                template,
+                &provider.endpoint,
+                &[(FASTLY_TOKEN_ENDPOINT, "/tokens/self")],
+            );
+            let result = validate_with_fastly_endpoint(
+                &validation,
+                &captures,
+                &LiquidObject::new(),
+                &client,
+                true,
+                &format!("{}/tokens/self", provider.endpoint),
+            )
+            .await;
+            assert_eq!(provider.request_count(), 1);
+            let private = result.analysis_data.as_ref().unwrap();
+            assert_eq!(fastly_token_usage(private), expected);
+            assert!(!private.to_string().contains(OMITTED));
+            assert!(!result.body.contains(FASTLY_TOKEN_USAGE));
+            assert!(!result.body.contains(OMITTED));
         }
     }
 
@@ -3521,6 +3726,8 @@ mod tests {
             last_status: None,
             revocation: false,
             mutation_submitted: false,
+            fastly_token_usage: None,
+            crypto_budget: Default::default(),
         };
         let array = BetterleaksExpr::Array {
             nodes: vec![string("read"), BetterleaksExpr::Integer { value: 42 }, string("write")],
@@ -3618,6 +3825,8 @@ mod tests {
             last_status: None,
             revocation: false,
             mutation_submitted: false,
+            fastly_token_usage: None,
+            crypto_budget: Default::default(),
         };
 
         assert_eq!(

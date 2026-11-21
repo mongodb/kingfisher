@@ -8,7 +8,12 @@ pub use crate::git_repo_enumerator::{
 use anyhow::{Result, bail};
 use crossbeam_channel::Sender;
 pub use gix::{self, Repository, ThreadSafeRepository};
-use gix::{open::Options, open_opts};
+use gix::{
+    object::Kind,
+    odb::pack::cache::{DecodeEntry, lru::MemoryCappedHashmap},
+    open::Options,
+    open_opts,
+};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 pub use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use ignore::{DirEntry, WalkBuilder, WalkState};
@@ -19,10 +24,67 @@ use crate::{cli, limits};
 const DEFAULT_GIX_PACK_CACHE_BYTES: usize = 96 * 1024 * 1024;
 const MIN_GIX_PACK_CACHE_BYTES: usize = 16 * 1024 * 1024;
 const TOTAL_GIX_PACK_CACHE_BUDGET_BYTES: usize = 256 * 1024 * 1024;
+const DEFAULT_GIX_PACK_CACHE_KEY: &str = "gitoxide.core.deltaBaseCacheLimit";
 
 pub(crate) fn gix_pack_cache_bytes_for_threads(num_threads: usize) -> usize {
     (TOTAL_GIX_PACK_CACHE_BUDGET_BYTES / num_threads.max(1))
         .clamp(MIN_GIX_PACK_CACHE_BYTES, DEFAULT_GIX_PACK_CACHE_BYTES)
+}
+
+struct ScanPackCache {
+    inner: MemoryCappedHashmap,
+    limit: usize,
+}
+
+impl DecodeEntry for ScanPackCache {
+    fn put(&mut self, pack_id: u32, offset: u64, data: &[u8], kind: Kind, compressed_size: usize) {
+        // The hash-backed LRU copies data before testing its weight. Avoid
+        // making or retaining a copy of any entry too large for the cache.
+        if data.len() < self.limit {
+            self.inner.put(pack_id, offset, data, kind, compressed_size);
+        }
+    }
+
+    fn get(&mut self, pack_id: u32, offset: u64, out: &mut Vec<u8>) -> Option<(Kind, usize)> {
+        self.inner.get(pack_id, offset, out)
+    }
+}
+
+fn configure_default_pack_cache(repo: &mut Repository) {
+    let config = repo.config_snapshot();
+    // Honor the same trusted core setting that gix used at open, including
+    // zero to disable the cache. Invalid values are ignored by lenient open.
+    if config
+        .plumbing()
+        .integer_filter("core.deltaBaseCacheLimit", gix::config::section::is_trusted)
+        .ok()
+        .flatten()
+        .and_then(|bytes| usize::try_from(bytes).ok())
+        .is_some()
+    {
+        return;
+    }
+    let Some(limit) = config
+        .plumbing()
+        .integer_filter(DEFAULT_GIX_PACK_CACHE_KEY, |meta| meta.source == gix::config::Source::Api)
+        .ok()
+        .flatten()
+        .and_then(|bytes| usize::try_from(bytes).ok())
+        .filter(|&bytes| bytes != 0)
+    else {
+        return;
+    };
+    repo.objects.set_pack_cache(move || {
+        Box::new(ScanPackCache { inner: MemoryCappedHashmap::new(limit), limit })
+    });
+}
+
+pub(crate) fn scan_repo_from_sync(repo: &ThreadSafeRepository) -> Repository {
+    let mut repo = repo.to_thread_local();
+    // The thread-safe repository preserves configuration and discards custom
+    // thread-local cache factories. Restore the scan's cache on each reader.
+    configure_default_pack_cache(&mut repo);
+    repo
 }
 
 #[derive(Clone)]
@@ -59,6 +121,7 @@ pub type Output = Sender<FoundInput>;
 
 struct VisitorBuilder<'t> {
     max_file_size: Option<u64>,
+    defer_file_size: bool,
     extract_archives: bool,
     extraction_depth: Option<usize>,
     resources: limits::ResourceLimits,
@@ -72,6 +135,7 @@ where
     fn build(&mut self) -> Box<dyn ignore::ParallelVisitor + 's> {
         Box::new(Visitor {
             max_file_size: self.max_file_size,
+            defer_file_size: self.defer_file_size,
             extract_archives: self.extract_archives,
             extraction_depth: self.extraction_depth,
             resources: self.resources,
@@ -82,6 +146,7 @@ where
 
 struct Visitor<'t> {
     max_file_size: Option<u64>,
+    defer_file_size: bool,
     extract_archives: bool,
     extraction_depth: Option<usize>,
     resources: limits::ResourceLimits,
@@ -117,16 +182,22 @@ impl<'t> ignore::ParallelVisitor for Visitor<'t> {
         };
 
         let path = entry.path();
-        let metadata = match entry.metadata() {
-            Ok(md) => md,
-            Err(e) => {
-                debug!("Skipping {}: {e}", path.display());
-                return WalkState::Continue;
-            }
+        // On Unix the walker reports an explicitly named symlink's target type but its
+        // metadata describes the link. Preserve the eager walk's treatment of root links.
+        let defer_file_size = self.defer_file_size && (cfg!(windows) || entry.depth() > 0);
+        let (file_type, num_bytes) = match entry.file_type().filter(|_| defer_file_size) {
+            // The scan validates the type and size on the file it opens later.
+            Some(file_type) => (file_type, 0),
+            None => match entry.metadata() {
+                Ok(md) => (md.file_type(), md.len()),
+                Err(e) => {
+                    debug!("Skipping {}: {e}", path.display());
+                    return WalkState::Continue;
+                }
+            },
         };
 
-        if metadata.is_file() {
-            let num_bytes = metadata.len();
+        if file_type.is_file() {
             if self.file_too_big(num_bytes) {
                 debug!("Skipping {}: size {num_bytes} too big", path.display());
             } else {
@@ -138,9 +209,9 @@ impl<'t> ignore::ParallelVisitor for Visitor<'t> {
                     resources: self.resources,
                 });
             }
-        } else if metadata.is_dir() {
+        } else if file_type.is_dir() {
             self.found_directory(DirectoryResult { path: path.to_owned() });
-        } else if metadata.is_symlink() {
+        } else if file_type.is_symlink() {
             // Ignored; if follow_symlinks was set, we'd see the pointed-to entry instead.
         } else {
             debug!("Unhandled type for {}", path.display());
@@ -179,7 +250,6 @@ impl FilesystemEnumerator {
 
         let max_file_size = args.content_filtering_args.max_file_size_bytes();
         builder.follow_links(Self::DEFAULT_FOLLOW_LINKS);
-        builder.max_filesize(max_file_size);
         builder.standard_filters(false);
 
         Ok(Self {
@@ -223,7 +293,6 @@ impl FilesystemEnumerator {
     }
 
     pub fn max_filesize(&mut self, max_filesize: Option<u64>) -> &mut Self {
-        self.walk_builder.max_filesize(max_filesize);
         self.max_file_size = max_filesize;
         self
     }
@@ -287,8 +356,19 @@ impl FilesystemEnumerator {
     }
 
     pub fn run(&self, output: Output) -> Result<()> {
+        self.run_with_visitor(output, false)
+    }
+
+    // The CLI validates each file when it opens it. The public `run` method
+    // populates `FileResult::num_bytes` for callers that enumerate without loading.
+    pub(crate) fn run_with_deferred_file_size(&self, output: Output) -> Result<()> {
+        self.run_with_visitor(output, true)
+    }
+
+    fn run_with_visitor(&self, output: Output, defer_file_size: bool) -> Result<()> {
         let mut visitor_builder = VisitorBuilder {
             max_file_size: self.max_file_size,
+            defer_file_size,
             extract_archives: self.extract_archives,
             extraction_depth: self.extraction_depth,
             resources: self.resources,
@@ -339,7 +419,7 @@ pub fn open_git_repo_with_options(
     // aggregate cache footprint bounded as scan parallelism grows instead of multiplying its
     // 96 MiB default by every Rayon worker.
     let pack_cache_bytes = gix_pack_cache_bytes_for_threads(rayon::current_num_threads());
-    let pack_cache_override = format!("gitoxide.core.deltaBaseCacheLimit={pack_cache_bytes}");
+    let pack_cache_override = format!("{DEFAULT_GIX_PACK_CACHE_KEY}={pack_cache_bytes}");
     let opts = Options::isolated()
         .config_overrides([pack_cache_override])
         .open_path_as_is(open_path_as_is);
@@ -351,7 +431,10 @@ pub fn open_git_repo_with_options(
         // or to explicit corruption, even when they contain a NotFound cause.
         Err(err) if is_non_repository_discovery_error(&err) => Ok(None),
         Err(err) => Err(err.into()),
-        Ok(repo) => Ok(Some(repo)),
+        Ok(mut repo) => {
+            configure_default_pack_cache(&mut repo);
+            Ok(Some(repo))
+        }
     }
 }
 
@@ -375,6 +458,39 @@ mod tests {
         assert_eq!(gix_pack_cache_bytes_for_threads(16), MIN_GIX_PACK_CACHE_BYTES);
         assert_eq!(gix_pack_cache_bytes_for_threads(32), MIN_GIX_PACK_CACHE_BYTES);
         assert_eq!(gix_pack_cache_bytes_for_threads(128), MIN_GIX_PACK_CACHE_BYTES);
+    }
+
+    #[test]
+    fn scan_pack_cache_keeps_recent_small_entries_without_copying_oversize_entries() {
+        let limit = 1024;
+        let mut cache = ScanPackCache { inner: MemoryCappedHashmap::new(limit), limit };
+        for offset in 0..100 {
+            cache.put(1, offset, &[1, 2], Kind::Blob, 3);
+        }
+        cache.put(1, 100, &[0; 1024], Kind::Blob, 3);
+        let mut out = Vec::new();
+        assert_eq!(cache.get(1, 100, &mut out), None);
+        assert_eq!(cache.get(1, 0, &mut out), Some((Kind::Blob, 3)));
+        assert_eq!(out, [1, 2]);
+        assert_eq!(cache.get(2, 0, &mut out), None);
+    }
+
+    #[test]
+    fn scan_pack_cache_respects_explicit_repository_limits() -> Result<()> {
+        for (limit, enabled) in [(0, false), (8 * 1024, true)] {
+            let temp = tempdir()?;
+            let repo = gix::init_bare(temp.path())?;
+            let config_path = repo.git_dir().join("config");
+            drop(repo);
+            let mut config = std::fs::read_to_string(&config_path)?;
+            config.push_str(&format!("\n[core]\n\tdeltaBaseCacheLimit = {limit}\n"));
+            std::fs::write(config_path, config)?;
+            let repo = open_git_repo(temp.path())?.expect("bare repository");
+            assert_eq!(repo.objects.has_pack_cache(), enabled);
+            let worker_repo = scan_repo_from_sync(&repo.into_sync());
+            assert_eq!(worker_repo.objects.has_pack_cache(), enabled);
+        }
+        Ok(())
     }
 
     #[test]

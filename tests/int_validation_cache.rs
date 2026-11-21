@@ -348,6 +348,7 @@ async fn check_validation_cache_and_depvars(
         endpoint: Vec::new(),
         endpoint_config: None,
         config: None,
+        ..Default::default()
     };
     let update_status = UpdateStatus::default();
 

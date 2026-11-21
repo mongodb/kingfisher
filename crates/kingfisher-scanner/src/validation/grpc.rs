@@ -4,6 +4,7 @@ use anyhow::{Context, Result, anyhow};
 use bytes::Bytes;
 use h2::client;
 use http::{HeaderMap, HeaderValue, Request, Uri, header::HeaderName};
+use kingfisher_rules::liquid_filters::TemplateWorkBudget;
 use std::sync::OnceLock;
 
 use liquid::Object;
@@ -71,6 +72,7 @@ fn header_map_from_templates(
     templates: &BTreeMap<String, String>,
     parser: &liquid::Parser,
     globals: &Object,
+    budget: &mut TemplateWorkBudget,
 ) -> Result<HeaderMap> {
     let mut out = HeaderMap::new();
     for (k, v_template) in templates {
@@ -80,10 +82,11 @@ fn header_map_from_templates(
 
         let tmpl = parser
             .parse(v_template)
-            .map_err(|e| anyhow!("Failed to parse header template '{k}': {e}"))?;
-        let rendered = tmpl
-            .render(globals)
-            .map_err(|e| anyhow!("Failed to render header template '{k}': {e}"))?;
+            .map_err(|_| anyhow!("Failed to parse gRPC header template '{k}'"))?;
+        let rendered = budget
+            .render(&tmpl, globals)
+            // Liquid's outer FilterChain can attach evaluated secret inputs to errors.
+            .map_err(|_| anyhow!("Failed to render gRPC header template '{k}'"))?;
 
         let value = HeaderValue::from_str(&rendered)
             .with_context(|| format!("Invalid header value for '{k}'"))?;
@@ -211,18 +214,77 @@ pub async fn grpc_unary_call_from_rule(
     globals: &Object,
     timeout: Duration,
 ) -> Result<GrpcCallResult> {
-    let headers = header_map_from_templates(header_templates, parser, globals)?;
+    let (headers, body) = render_request(
+        header_templates,
+        body_template,
+        parser,
+        globals,
+        &mut TemplateWorkBudget::default(),
+    )?;
+    grpc_unary_call(url, headers, body, timeout).await
+}
+
+pub(crate) fn render_request(
+    header_templates: &BTreeMap<String, String>,
+    body_template: &Option<String>,
+    parser: &liquid::Parser,
+    globals: &Object,
+    budget: &mut TemplateWorkBudget,
+) -> Result<(HeaderMap, Vec<u8>)> {
+    let headers = header_map_from_templates(header_templates, parser, globals, budget)?;
     let body = match body_template {
         Some(t) => {
             let tmpl =
-                parser.parse(t).map_err(|e| anyhow!("Failed to parse gRPC body template: {e}"))?;
-            let rendered = tmpl
-                .render(globals)
-                .map_err(|e| anyhow!("Failed to render gRPC body template: {e}"))?;
+                parser.parse(t).map_err(|_| anyhow!("Failed to parse gRPC body template"))?;
+            let rendered = budget
+                .render(&tmpl, globals)
+                .map_err(|_| anyhow!("Failed to render gRPC body template"))?;
             rendered.into_bytes()
         }
         None => Vec::new(),
     };
 
-    grpc_unary_call(url, headers, body, timeout).await
+    Ok((headers, body))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn crypto_grpc_templates_do_not_expose_liquid_inputs() {
+        let parser =
+            kingfisher_rules::register_liquid_filters(liquid::ParserBuilder::with_stdlib())
+                .build()
+                .unwrap();
+        let globals = liquid::object!({"TOKEN": "SENSITIVE-KEY-MATERIAL"});
+        let url = Url::parse("https://crypto.example.invalid").unwrap();
+        for source in [
+            "{{ TOKEN | ec_public_key: 'P-256' }}",
+            "{{ 'SENSITIVE-KEY-MATERIAL' | ec_public_key: 'P-256' }}",
+            "{{ 'SENSITIVE-KEY-MATERIAL' | unknown_crypto_filter }}",
+        ] {
+            let templates = BTreeMap::from([("authorization".into(), source.into())]);
+            let error = header_map_from_templates(
+                &templates,
+                &parser,
+                &globals,
+                &mut TemplateWorkBudget::default(),
+            )
+            .unwrap_err();
+            assert!(!format!("{error:#}").contains("SENSITIVE-KEY-MATERIAL"));
+            let error = grpc_unary_call_from_rule(
+                &url,
+                &BTreeMap::new(),
+                &Some(source.into()),
+                &parser,
+                &globals,
+                Duration::from_secs(1),
+            )
+            .await
+            .err()
+            .expect("invalid template must fail before transport");
+            assert!(!format!("{error:#}").contains("SENSITIVE-KEY-MATERIAL"));
+        }
+    }
 }

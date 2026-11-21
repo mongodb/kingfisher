@@ -69,24 +69,30 @@ fn guess(input: &[u8]) -> Option<(Encoding, usize)> {
     if input.len() < 8 || !input.len().is_multiple_of(2) || memchr::memchr(0, input).is_none() {
         return None;
     }
-    // A few NULs in compressed/binary data are not Unicode padding. Every UTF-16
-    // guess needs >=60% zeros in one of two equal lanes; UTF-32 needs even more.
-    // Reject impossible inputs with a SIMD count instead of repeatedly scoring
-    // the entire binary blob's byte lanes. Keep the no-NUL text fast path above.
+    // A padded lane contains at least 60% zeros, rounded up to a whole byte.
+    let padded_zeros = |width: usize| width / 5 * 3 + (width % 5 * 3).div_ceil(5);
     let units = input.len() / 2;
-    let minimum_zeros = units / 5 * 3 + (units % 5 * 3).div_ceil(5);
-    if memchr::memchr_iter(0, input).count() < minimum_zeros {
+    let zero_count = memchr::memchr_iter(0, input).count();
+    if zero_count < padded_zeros(units) {
         return None;
     }
+    let try_utf32 = input.len().is_multiple_of(4);
+    let shortest_lane = if try_utf32 { units / 2 } else { units };
+    // Every guess needs an unpadded lane. If all nonzero bytes fit in a
+    // single shortest lane without making it unpadded, every lane is padded.
+    if input.len() - zero_count <= shortest_lane - padded_zeros(shortest_lane) {
+        return None;
+    }
+
     let score = |offset: usize, stride: usize| {
         let bytes = input[offset..].iter().step_by(stride).take(input.len() / stride);
         let (total, zeros) =
             bytes.fold((0, 0), |(total, zeros), &byte| (total + 1, zeros + usize::from(byte == 0)));
-        total > 1 && zeros * 100 / total >= 60
+        total > 1 && zeros >= padded_zeros(total)
     };
     // Text has zero padding in specific byte lanes, not in every lane.
     // Otherwise zero-filled binary headers (such as .pyc files) look like text.
-    if input.len().is_multiple_of(4) {
+    if try_utf32 {
         if !score(0, 4) && score(1, 4) && score(2, 4) && score(3, 4) {
             return Some((Encoding::Utf32Le, 0));
         }
@@ -124,6 +130,21 @@ mod tests {
         pyc_header.extend_from_slice(&[0; 12]);
         for input in [pyc_header, vec![0; 16], vec![0; 10]] {
             assert_eq!(decode(&input), None);
+        }
+    }
+
+    #[test]
+    fn all_lanes_padded_threshold_preserves_bomless_guesses() {
+        use super::{Encoding, guess};
+
+        for (width, encoding) in [(2, Encoding::Utf16Le), (4, Encoding::Utf32Le)] {
+            let mut input = vec![0; width * 5];
+            input[0] = b'A';
+            input[width] = b'B';
+            assert!(guess(&input).is_none());
+
+            input[width * 2] = b'C';
+            assert!(guess(&input) == Some((encoding, 0)));
         }
     }
 

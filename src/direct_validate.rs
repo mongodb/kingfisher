@@ -25,7 +25,10 @@ use crate::{
     rule_loader::RuleLoader,
     rules::{Validation, rule::Rule},
     template_vars::extract_template_vars,
-    validation::{GLOBAL_USER_AGENT, httpvalidation::is_auto_provided_request_var},
+    validation::{
+        GLOBAL_USER_AGENT, httpvalidation::is_auto_provided_request_var,
+        internal_ip_policy::RuleInternalIpPolicy,
+    },
     validation_rate_limit::{ValidationRateLimiter, should_rate_limit_validation},
 };
 
@@ -293,6 +296,7 @@ pub async fn run_direct_validation(
     args: &ValidateArgs,
     global_args: &GlobalArgs,
 ) -> Result<Vec<DirectValidationResult>> {
+    let rule_internal_ip_policy = RuleInternalIpPolicy::from_global_args(global_args)?;
     // Read the secret
     let secret = read_secret(args.secret.as_deref())?;
 
@@ -536,7 +540,7 @@ pub async fn run_direct_validation(
                 .http_request_gate(http_gate.as_ref().map(|gate| {
                     gate as &dyn kingfisher_scanner::validation::engine::HttpRequestGate
                 }))
-                .allow_internal_ips(global_args.allow_internal_ips)
+                .allow_internal_ips(rule_internal_ip_policy.allows(rule))
                 .use_lax_tls(use_lax_tls)
                 .validate(rule, &globals)
                 .await;
@@ -818,20 +822,6 @@ pub fn any_actionable(results: &[DirectValidationResult]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use liquid_core::ValueView;
-
-    #[test]
-    fn explicit_commands_decode_original_betterleaks_named_capture_context() {
-        let globals=build_globals("custom.primary","secret",&[],&[
-            "__BETTERLEAKS_FINDING_CAPTURES={\"MixedCase\":\"original-value\"}".into(),
-            "__BETTERLEAKS_COMPONENTS={\"custom.helper\":{\"secret\":\"component\",\"captures\":{\"Realm\":\"east\"}}}".into(),
-        ],&BTreeSet::new(),&ProviderEndpointOverrides::default()).unwrap();
-        assert_eq!(
-            serde_json::to_value(&globals["__BETTERLEAKS_FINDING_CAPTURES"]).unwrap(),
-            serde_json::json!({"MixedCase":"original-value"})
-        );
-        assert!(globals["__BETTERLEAKS_COMPONENTS"].as_object().is_some());
-    }
 
     #[tokio::test]
     async fn direct_http_credential_uri_preserves_sanitized_validator_errors() {

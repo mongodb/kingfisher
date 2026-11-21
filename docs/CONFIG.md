@@ -16,6 +16,9 @@ only when you pass `--config FILE` explicitly:
 kingfisher scan . --config ./kingfisher.yaml
 ```
 
+Add [`--preview`](USAGE.md#preview-a-scan) to inspect the inputs, filters, rule selection,
+and internal-IP grants after config and CLI options are merged.
+
 A missing or malformed file is a fatal error — there is no silent fallback,
 so a typo in the path or a broken YAML block fails fast instead of running
 with surprising defaults. Auto-discovery was rejected because it makes scan
@@ -72,6 +75,31 @@ including cloud buckets and Azure/Git repositories. Prefixes use `/` separators
 for repository and filesystem paths on every platform. The per-source
 `--object-cache-dir` destination is an acquisition setting, supplied on storage
 scan subcommands rather than saved as shared scan policy.
+
+## Internal IP validation policy
+
+Set `global.enable_rule_internal_ips` to honor `allow_internal_ips: true` declarations in trusted
+Kingfisher YAML rules. List exact rule IDs or shell globs in `global.enable_internal_ips_for` to
+grant internal IP access directly, including for Betterleaks TOML rules. Use either setting or both.
+
+```yaml
+global:
+  enable_rule_internal_ips: true
+  enable_internal_ips_for:
+    - 'custom.vault-*'
+```
+
+The list combines with any `--enable-internal-ips-for` patterns passed on the CLI. Patterns match
+the full, case-sensitive rule ID. See the [internal IP validation options](USAGE.md#allow-internal-ips-for-selected-rules)
+for the destination scope.
+
+To generate a config with these settings and use it for a scan, run the following commands.
+
+```bash
+kingfisher config init --enable-rule-internal-ips \
+  --enable-internal-ips-for 'custom.vault-*' --out kingfisher.yaml
+kingfisher scan ./repo --config ./kingfisher.yaml
+```
 
 ## End-to-end: create a config and scan with it
 
@@ -260,6 +288,8 @@ alerts:
 global:
   tls_mode: strict              # strict | lax | off             (--tls-mode)
   allow_internal_ips: false     # bool                           (--allow-internal-ips)
+  enable_rule_internal_ips: false # bool                         (--enable-rule-internal-ips)
+  enable_internal_ips_for: []   # rule ID globs, additive        (--enable-internal-ips-for)
   no_update_check: false        # bool                           (--no-update-check)
   user_agent_suffix: null       # string                         (--user-agent-suffix)
   endpoints:                    # list, additive                 (--endpoint)

@@ -1,23 +1,26 @@
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use base64::{Engine as _, engine::general_purpose::STANDARD as b64};
-use chrono::Utc;
+use chrono::{DateTime, SecondsFormat, Utc};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
-use reqwest::{Client, Url, header};
+use reqwest::{Client, Method, Url, header};
 use serde::Deserialize;
 use serde_json::Value;
 use sha1::{Digest, Sha1};
+use tracing::debug;
 use uuid::Uuid;
 
 use crate::{cli::commands::access_map::AccessMapArgs, validation::GLOBAL_USER_AGENT};
 
 use super::{
-    AccessMapResult, AccessSummary, AccessTokenDetails, PermissionSummary, ResourceExposure,
-    RoleBinding, Severity, build_recommendations,
+    AccessMapResult, AccessSummary, AccessTokenDetails, PermissionSummary, ProviderMetadata,
+    ResourceExposure, RoleBinding, Severity, build_recommendations,
 };
 
 const STS_API: &str = "https://sts.aliyuncs.com/";
+const RAM_API: &str = "https://ram.aliyuncs.com/";
 const ALIBABA_ENCODE_SET: &AsciiSet = &CONTROLS
     .add(b' ')
     .add(b'"')
@@ -59,6 +62,18 @@ struct CallerIdentity {
     role_id: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct KeyUsageResponse {
+    access_key_last_used: Option<KeyUsage>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct KeyUsage {
+    last_used_date: Option<String>,
+}
+
 pub async fn map_access(args: &AccessMapArgs) -> Result<AccessMapResult> {
     let path = args.credential_path.as_deref().ok_or_else(|| {
         anyhow!("Alibaba access-map requires a credential file with an access key pair")
@@ -80,6 +95,18 @@ pub async fn map_access_with_credentials(
         .build()
         .context("Failed to build Alibaba HTTP client")?;
 
+    let last_used_at = if session_token.is_none() {
+        // Read activity before making the mapper's other requests with this key.
+        match fetch_key_last_used(&client, RAM_API, access_key, secret_key).await {
+            Ok(timestamp) => timestamp,
+            Err(err) => {
+                debug!("Alibaba access-map: RAM GetAccessKeyLastUsed failed: {err}");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let caller = fetch_caller_identity(&client, access_key, secret_key, session_token).await?;
     let identity_type = caller.identity_type.clone().unwrap_or_else(|| "Unknown".to_string());
     let severity = derive_severity(&identity_type, session_token);
@@ -169,6 +196,10 @@ pub async fn map_access_with_credentials(
         risk_notes.push("Caller identity includes a RAM role context.".into());
     }
 
+    let provider_metadata = last_used_at.as_ref().map(|_| ProviderMetadata {
+        credential_last_used_source: Some("Alibaba Cloud RAM access key activity".into()),
+        ..ProviderMetadata::default()
+    });
     Ok(AccessMapResult {
         cloud: "alibaba".into(),
         identity,
@@ -192,12 +223,12 @@ pub async fn map_access_with_credentials(
                 "access_key".into()
             }),
             created_at: None,
-            last_used_at: None,
+            last_used_at,
             expires_at: None,
             user_id: caller.principal_id.or(caller.user_id),
             scopes: Vec::new(),
         }),
-        provider_metadata: None,
+        provider_metadata,
         fingerprint: None,
     })
 }
@@ -208,7 +239,14 @@ async fn fetch_caller_identity(
     secret_key: &str,
     session_token: Option<&str>,
 ) -> Result<CallerIdentity> {
-    let url = signed_sts_url(access_key, secret_key, session_token)?;
+    let mut params = BTreeMap::from([
+        ("Action".to_string(), "GetCallerIdentity".to_string()),
+        ("Version".to_string(), "2015-04-01".to_string()),
+    ]);
+    if let Some(token) = session_token {
+        params.insert("SecurityToken".to_string(), token.to_string());
+    }
+    let url = signed_rpc_url(STS_API, Method::GET, access_key, secret_key, params);
     let resp = client
         .get(url)
         .header(header::ACCEPT, "application/json")
@@ -226,32 +264,62 @@ async fn fetch_caller_identity(
     resp.json().await.context("Alibaba access-map: invalid STS GetCallerIdentity JSON")
 }
 
-fn signed_sts_url(access_key: &str, secret_key: &str, session_token: Option<&str>) -> Result<Url> {
-    let mut params = BTreeMap::from([
+async fn fetch_key_last_used(
+    client: &Client,
+    endpoint: &str,
+    access_key: &str,
+    secret_key: &str,
+) -> Result<Option<String>> {
+    let params = BTreeMap::from([
+        ("Action".to_string(), "GetAccessKeyLastUsed".to_string()),
+        ("Version".to_string(), "2015-05-01".to_string()),
+        ("UserAccessKeyId".to_string(), access_key.to_string()),
+    ]);
+    let url = signed_rpc_url(endpoint, Method::POST, access_key, secret_key, params);
+    let response = client
+        .post(url)
+        .header(header::ACCEPT, "application/json")
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(reqwest::Error::without_url)?;
+    let usage: KeyUsageResponse = response.json().await.map_err(reqwest::Error::without_url)?;
+
+    Ok(usage
+        .access_key_last_used
+        .and_then(|usage| usage.last_used_date)
+        .and_then(|date| DateTime::parse_from_rfc3339(&date).ok())
+        .map(|date| date.to_utc().to_rfc3339_opts(SecondsFormat::AutoSi, true)))
+}
+
+fn signed_rpc_url(
+    endpoint: &str,
+    method: Method,
+    access_key: &str,
+    secret_key: &str,
+    mut params: BTreeMap<String, String>,
+) -> Url {
+    params.extend([
         ("AccessKeyId".to_string(), access_key.to_string()),
-        ("Action".to_string(), "GetCallerIdentity".to_string()),
         ("Format".to_string(), "JSON".to_string()),
         ("SignatureMethod".to_string(), "HMAC-SHA1".to_string()),
         ("SignatureNonce".to_string(), Uuid::new_v4().to_string().to_uppercase()),
         ("SignatureVersion".to_string(), "1.0".to_string()),
         ("Timestamp".to_string(), Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()),
-        ("Version".to_string(), "2015-04-01".to_string()),
     ]);
-    if let Some(token) = session_token {
-        params.insert("SecurityToken".to_string(), token.to_string());
-    }
 
     let canonical_query = canonical_query_string(&params);
-    let string_to_sign = format!("GET&%2F&{}", encode_openapi(&canonical_query));
+    let string_to_sign = format!("{method}&%2F&{}", encode_openapi(&canonical_query));
     let signature =
         b64.encode(hmac_sha1(format!("{secret_key}&").as_bytes(), string_to_sign.as_bytes()));
     params.insert("Signature".to_string(), signature);
 
-    let mut url = Url::parse(STS_API).expect("valid Alibaba STS URL");
+    let mut url = Url::parse(endpoint).expect("valid Alibaba API URL");
     for (key, value) in params {
         url.query_pairs_mut().append_pair(&key, &value);
     }
-    Ok(url)
+    url
 }
 
 fn canonical_query_string(params: &BTreeMap<String, String>) -> String {
@@ -462,6 +530,32 @@ fn severity_to_str(severity: Severity) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, query_param},
+    };
+
+    #[tokio::test]
+    async fn reads_activity_for_the_exact_access_key() {
+        let server = MockServer::start().await;
+        let key = "LTAIexample";
+        Mock::given(method("POST"))
+            .and(query_param("Action", "GetAccessKeyLastUsed"))
+            .and(query_param("Version", "2015-05-01"))
+            .and(query_param("AccessKeyId", key))
+            .and(query_param("UserAccessKeyId", key))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "AccessKeyLastUsed": {"LastUsedDate": "2025-02-03T04:05:06+01:00"},
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let last_used = fetch_key_last_used(&Client::new(), &server.uri(), key, "example-secret")
+            .await
+            .unwrap();
+        assert_eq!(last_used.as_deref(), Some("2025-02-03T03:05:06Z"));
+    }
 
     #[test]
     fn parses_json_credentials_with_security_token() {

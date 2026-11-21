@@ -31,6 +31,10 @@ Kingfisher is a fast, free, open-source secret scanner and credential response t
  - send real-time alerts to Slack, Microsoft Teams, Discord, Mattermost, Google Chat, or any JSON webhook
  - revoke supported secrets
 
+**No Git executable required.** Kingfisher reads local Git history and staged changes
+and clones repositories over HTTPS using native Rust libraries. The SDKs read local Git
+repositories in-process. SSH remotes require an SSH client.
+
 > **Defender workflow:** Follow the [end-to-end defender workflow](docs/DEFENDER_WORKFLOW.md) for secret detection, validation, notifications, blast-radius mapping, and revocation.
 
 ## Embed Kingfisher in Python, Node.js, or Rust

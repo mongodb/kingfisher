@@ -50,8 +50,6 @@ struct MondayUser {
     #[serde(default)]
     created_at: Option<String>,
     #[serde(default)]
-    last_activity: Option<String>,
-    #[serde(default)]
     account: Option<MondayAccount>,
     #[serde(default)]
     teams: Vec<MondayTeam>,
@@ -319,16 +317,14 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
             url: account_slug.map(|slug| format!("https://{slug}.monday.com")),
             token_type,
             created_at: me.created_at.clone(),
-            last_used_at: me.last_activity.clone(),
+            last_used_at: None,
             expires_at: None,
             user_id,
             scopes: Vec::new(),
         }),
         provider_metadata: Some(ProviderMetadata {
-            betterleaks_analysis: None,
             version: plan_tier,
-            enterprise: None,
-            authorization_evidence: None,
+            ..ProviderMetadata::default()
         }),
         fingerprint: None,
     })
@@ -346,7 +342,6 @@ async fn fetch_me(client: &Client, token: &str) -> Result<MondayUser> {
                 is_view_only
                 enabled
                 created_at
-                last_activity
                 account { id name slug plan { tier } }
                 teams { id name }
             }

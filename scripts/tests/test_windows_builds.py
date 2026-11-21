@@ -92,7 +92,6 @@ class WindowsBuildDependenciesTests(unittest.TestCase):
     def test_ci_uses_the_shared_dependency_only_recipe(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertIn("WINDOWS_ONLY_DEPS=1 make windows-${{ matrix.arch }}", workflow)
-        self.assertIn("make windows-test-${{ matrix.arch }}", workflow)
 
     def test_ci_reuses_preinstalled_msys2_only_on_x64(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")

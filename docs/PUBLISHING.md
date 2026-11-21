@@ -22,10 +22,10 @@ The manifests currently prepare these releases; a Git tag does not override Carg
 
 | Package | Version | Published targets |
 | ------- | ------- | ----------------- |
-| `kingfisher-core` | `2.0.0` | `kingfisher_core` library |
-| `kingfisher-rules` | `3.2.1` | `kingfisher_rules` library |
-| `kingfisher-scanner` | `4.0.0` | `kingfisher_scanner` library |
-| `kingfisher-bin` | `2.19.1` | `kingfisher` executable and library |
+| `kingfisher-core` | `2.1.0` | `kingfisher_core` library |
+| `kingfisher-rules` | `3.3.0` | `kingfisher_rules` library |
+| `kingfisher-scanner` | `4.1.0` | `kingfisher_scanner` library |
+| `kingfisher-bin` | `2.20.0` | `kingfisher` executable and library |
 
 The Python SDK (`kingfisher-secret-scanner`) is independently versioned at
 `1.6.4` in `crates/kingfisher-python/Cargo.toml`; Python modules share that version.
@@ -34,6 +34,11 @@ The stable npm SDK uses **1.0.2** in `crates/kingfisher-node/Cargo.toml` and
 independent, but release triggers share the coordinated build gate below.
 
 The libraries follow semantic versioning and do not inherit the CLI version.
+Rules 3.3.0 and scanner 4.1.0 add opt-in cryptographic custom-rule helpers,
+including ECDH, ECDSA, AES-GCM, key derivation, and Ed25519; CLI 2.20.0 embeds
+them. Existing YAML/TOML rules and SDK call signatures remain compatible. Core
+is unchanged and remains at 2.0.0.
+
 Core 2.0.0 and scanner 4.0.0 migrate public Git types to `gix` 0.90;
 scanner 4.0.0 also exposes `jsonwebtoken` 12 decoding keys under `validation`. The root
 package follows CLI version 2.19.1 and also replaces the public `gouqi` Jira models

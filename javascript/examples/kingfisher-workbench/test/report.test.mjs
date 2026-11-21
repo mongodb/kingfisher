@@ -113,15 +113,6 @@ test('outcome summary counts not-attempted explicitly, preserving other native o
   assert.match(html, /<option value="assumed">Assumed<\/option>/);
 });
 
-test('report client test extraction handles case-insensitive tags and closing-tag attributes', () => {
-  const html = renderReport({ entries: [], meta: fakeMeta() });
-  const expected = reportClientSource(html);
-  for (const tag of ['SCRIPT', 'ScRiPt']) {
-    const variant = html.replace('<script>', `<${tag} data-test="fixed">`).replace('</script>', `</${tag} ignored="yes">`);
-    assert.equal(reportClientSource(variant), expected);
-  }
-});
-
 test('report client distinguishes empty scans and filters native outcome categories accurately', () => {
   function client(rows) {
     const elements = new Map();

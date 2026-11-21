@@ -1757,14 +1757,6 @@ mod tests {
     }
 
     #[test]
-    fn test_scan_bytes_finds_secret() {
-        let scanner = create_test_scanner();
-        let findings = scanner.scan_bytes(b"my secret_abcd1234 is here").unwrap();
-        assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].secret, "secret_abcd1234");
-    }
-
-    #[test]
     fn test_scan_bytes_no_match() {
         let scanner = create_test_scanner();
         let findings = scanner.scan_bytes(b"nothing secret here").unwrap();

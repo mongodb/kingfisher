@@ -274,79 +274,84 @@ Uninstall the **global** hook:
 
 ### Using the `pre-commit` Framework
 
-Add Kingfisher as a hook in your `.pre-commit-config.yaml`:
+The file-scoped hooks are available starting with Kingfisher v2.20.0. Add one
+to `.pre-commit-config.yaml`.
 
 ```yaml
 repos:
   - repo: https://github.com/mongodb/kingfisher
-    rev: <version-or-commit>
+    rev: v2.20.0
     hooks:
-      # Recommended: Auto-downloads and caches the binary - no manual install or Docker required
-      - id: kingfisher-auto
-
-      # Alternative: Runs Kingfisher from Docker (requires Docker)
-      - id: kingfisher-docker
-
-      # Alternative: Uses locally installed Kingfisher (fastest, requires manual install)
-      - id: kingfisher
+      - id: kingfisher-auto-files
 ```
 
-**Available hooks:**
+Choose the hook that matches how you install Kingfisher.
 
-| Hook ID | Description | Requirements |
+| Hook ID | How it runs | Requirements |
 | ------- | ----------- | ------------ |
-| `kingfisher-auto` | Automatically downloads and caches the appropriate binary for your platform | curl, tar (or unzip on Windows) |
-| `kingfisher-docker` | Runs Kingfisher in Docker | Docker |
-| `kingfisher` | Uses locally installed Kingfisher binary | Manual installation |
+| `kingfisher-auto-files` | Downloads and caches the binary for your platform | Bash, curl, tar (or unzip on Windows) |
+| `kingfisher-docker-files` | Runs the published Kingfisher image | Docker and a Kingfisher image at version 2.20.0 or later |
+| `kingfisher-files` | Uses the locally installed binary | Kingfisher 2.20.0 or later on `PATH` |
 
-The `kingfisher-auto` hook is recommended for most users as it:
+The auto-download hook stores its binary in the `pre-commit-files` subdirectory
+of the Kingfisher cache. If you pin the download with the `KINGFISHER_VERSION`
+environment variable, use v2.20.0 or later. The `rev` in the hook configuration
+pins the hook definition. On Windows, the auto-download hook uses Bash, which
+comes with [Git for Windows](https://gitforwindows.org/).
 
-- Automatically downloads the correct binary for your OS and architecture
-- Caches the binary in `~/.cache/kingfisher` (Linux/macOS) or `%LOCALAPPDATA%\kingfisher` (Windows)
-- Works across Linux, macOS, and Windows (via Git Bash which comes with Git for Windows)
-- Requires no Docker or manual installation
+If Docker has an older cached image, refresh it with
+`docker pull ghcr.io/mongodb/kingfisher:latest`.
 
-**Windows users:** The `kingfisher-auto` hook uses a bash script that runs via Git Bash (included with [Git for Windows](https://gitforwindows.org/)). For native PowerShell, a `kingfisher-pre-commit-auto.ps1` script is also available in the `scripts/` directory.
+Run `pre-commit install` to enable the hook for commits. The hook scans only the
+files selected by the runner, with Git history disabled. During an ordinary
+commit, pre-commit and prek temporarily hide unstaged edits. Manual
+`--all-files` and `--files` runs read the selected files as they are on disk.
+The runner's `files`, `exclude`, and file type filters apply in each case.
 
-The PowerShell auto-hook script also auto-detects Windows architecture and
-downloads the matching `windows-x64` or `windows-arm64` binary.
-
-Then install the hook via `pre-commit install`. Every hook now drives Kingfisher
-directly with the built-in `--staged` flag:
-
-```bash
-kingfisher scan . --staged --quiet --no-update-check
-```
-
-When `--staged` is set, Kingfisher snapshots the staged index into a temporary
-commit, diffs it against `HEAD` (or an empty tree if no commits exist yet), and
-scans only those staged changes.
-
-> Exit codes: Kingfisher exits `0` when no findings are present and returns
-> `205` when validated credentials are discovered (other findings use codes in
-> the `200` range). The hook surfaces those exit codes directly to `pre-commit`,
-> so no extra handling is required—the commit will fail automatically on
-> non-zero exits.
-
-To trigger a hook in CI without installing to `.git/hooks`, run (for example):
+In CI, run the hook directly to scan all eligible tracked files.
 
 ```bash
-pre-commit run kingfisher-auto --all-files
+pre-commit run kingfisher-auto-files --all-files
 ```
 
-**Pin to a specific version:**
+Use `--files` to scan specific files.
 
-To use a specific Kingfisher version with the `kingfisher-auto` hook, set the `KINGFISHER_VERSION` environment variable:
+```bash
+pre-commit run kingfisher-auto-files --files src/app.py config/settings.yml
+```
+
+If you set custom `args`, end the list with an empty string. Pre-commit replaces
+the hook's default `args` with this list and then appends the filenames. The
+last empty string marks where the filenames begin, so an option can still take
+an empty value. Selected symlinks are skipped; Kingfisher scans their targets
+only when the runner selects those files too.
 
 ```yaml
-repos:
-  - repo: https://github.com/mongodb/kingfisher
-    rev: v1.76.0
-    hooks:
-      - id: kingfisher-auto
-        # Optional: pin to a specific kingfisher binary version
-        # env:
-        #   KINGFISHER_VERSION: "1.76.0"
+- id: kingfisher-auto-files
+  args: [--no-validate, --redact, '']
+```
+
+The hook passes Kingfisher's exit codes to the runner, which fails the check on
+any nonzero code. Validated credentials use exit code `205`.
+
+The runner may split a large file list across multiple Kingfisher invocations.
+Run Kingfisher directly to produce a single combined report or update a
+baseline with `--manage-baseline`.
+
+**Staged-index hooks**
+
+The existing `kingfisher-auto`, `kingfisher-docker`, and `kingfisher` hooks
+scan staged changes by comparing the Git index with `HEAD`. Use these IDs
+for workflows that need the exact bytes in the index. On a clean checkout,
+`--all-files` and `--files` still leave these hooks with no staged changes to
+scan. The standalone Git installer and Husky hooks also use staged-index
+scans.
+
+If your CI is pinned to an older hook revision, scan the clean checkout
+directly. This uses Kingfisher's file selection rules for the checkout.
+
+```bash
+kingfisher scan . --git-history none --redact --no-update-check
 ```
 
 ### Using Husky (Node.js projects)

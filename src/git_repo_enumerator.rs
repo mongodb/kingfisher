@@ -1,5 +1,6 @@
 use std::{
     hash::BuildHasher,
+    num::NonZeroU64,
     path::{Path, PathBuf},
     sync::Arc,
     time::Instant,
@@ -16,7 +17,7 @@ use tracing::{debug, debug_span};
 
 use crate::{
     blob::{BlobAppearance, BlobAppearanceSet},
-    git_candidates::GitContentFilter,
+    git_candidates::{GitContentFilter, RetainedGitBlob},
     git_commit_metadata::{CommitMetadata, intern_git_identity},
     git_metadata_graph::{GitMetadataGraph, RepositoryIndex},
 };
@@ -29,6 +30,9 @@ pub const MIN_SCANNABLE_BLOB_SIZE: u64 = 20;
 // Small histories do not amortize an extra content pass. Keep their existing
 // eager metadata path, including its memory and I/O behavior.
 const CONTENT_PREPASS_MIN_BLOBS: usize = 1_000_000;
+// Histories with wide directories can serialize gigabytes of tree traversal
+// even with fewer blobs. The candidate prepass summarizes those trees in parallel.
+const CONTENT_PREPASS_MIN_TREE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 
 // Convert "<seconds> <offset>" -- Time; fallback to the Unix-epoch on parse error
 #[inline]
@@ -54,6 +58,8 @@ pub struct GitRepoResult {
 #[derive(Clone)]
 pub struct GitBlobMetadata {
     pub blob_oid: ObjectId,
+    pub(crate) indexed_size: Option<NonZeroU64>,
+    pub(crate) retained_data: Option<Arc<RetainedGitBlob>>,
     pub first_seen: BlobAppearanceSet,
 }
 
@@ -61,7 +67,7 @@ pub struct GitRepoWithMetadataEnumerator<'a> {
     path: &'a Path,
     repo: Repository,
     exclude_globset: Option<std::sync::Arc<globset::GlobSet>>,
-    content_filter: Option<&'a GitContentFilter>,
+    content_filter: Option<&'a GitContentFilter<'a>>,
 }
 
 impl<'a> GitRepoWithMetadataEnumerator<'a> {
@@ -73,7 +79,7 @@ impl<'a> GitRepoWithMetadataEnumerator<'a> {
         Self { path, repo, exclude_globset, content_filter: None }
     }
 
-    pub(crate) fn with_content_filter(mut self, filter: &'a GitContentFilter) -> Self {
+    pub(crate) fn with_content_filter(mut self, filter: &'a GitContentFilter<'a>) -> Self {
         self.content_filter = Some(filter);
         self
     }
@@ -105,10 +111,12 @@ impl<'a> GitRepoWithMetadataEnumerator<'a> {
             object_index.num_commits(),
         );
 
-        if let Some(filter) = self.content_filter
-            && object_index.num_blobs() >= minimum_blobs
+        let retained = if let Some(filter) = self.content_filter
+            && (object_index.num_blobs() >= minimum_blobs
+                || object_index.tree_bytes() >= CONTENT_PREPASS_MIN_TREE_BYTES)
         {
-            object_index.retain_content_candidates(&repo_sync, filter, deadline, self.path)?;
+            let retained =
+                object_index.retain_content_candidates(&repo_sync, filter, deadline, self.path)?;
             if object_index.num_blobs() == 0 {
                 return Ok(GitRepoResult {
                     repository: self.repo,
@@ -117,7 +125,10 @@ impl<'a> GitRepoWithMetadataEnumerator<'a> {
                 });
             }
             object_index.prepare_candidate_trees(&repo_sync, deadline, self.path)?;
-        }
+            retained
+        } else {
+            Vec::new()
+        };
 
         let mut metadata_graph = GitMetadataGraph::with_capacity(object_index.num_commits());
         let mut scratch = Vec::with_capacity(4 * 1024 * 1024);
@@ -163,11 +174,20 @@ impl<'a> GitRepoWithMetadataEnumerator<'a> {
         // Reuse the dense object index rather than building an appearances hash map
         // alongside a second final blob collection. Pack order remains unchanged.
         check_deadline(deadline, "git blob metadata assembly", self.path)?;
-        let (all_blobs, blob_index) = object_index.into_blob_parts();
+        let (all_blobs, blob_sizes, blob_index) = object_index.into_blob_parts();
+        // Candidate compaction and cached bytes both preserve pack order.
+        let mut retained = retained.into_iter().peekable();
         let mut blobs: Vec<_> = all_blobs
             .into_iter()
-            .map(|blob_oid| GitBlobMetadata { blob_oid, first_seen: Default::default() })
+            .zip(blob_sizes)
+            .map(|(blob_oid, size)| GitBlobMetadata {
+                blob_oid,
+                indexed_size: NonZeroU64::new(size),
+                retained_data: retained.next_if(|(oid, _)| *oid == blob_oid).map(|(_, data)| data),
+                first_seen: Default::default(),
+            })
             .collect();
+        debug_assert!(retained.next().is_none());
         check_deadline(deadline, "git blob metadata assembly", self.path)?;
         match meta_result {
             Err(e) => {
@@ -413,7 +433,7 @@ mod tests {
         Ok(())
     }
 
-    fn content_filter() -> Result<GitContentFilter> {
+    fn content_filter() -> Result<GitContentFilter<'static>> {
         Ok(GitContentFilter::new(
             Arc::new(ScannerPool::new(Arc::new(BlockDatabase::new(vec![Pattern::new(
                 b"candidate_secret_[a-z0-9]{16}".to_vec(),
@@ -452,15 +472,23 @@ mod tests {
 
         for limit in [Some(secret.len() as u64), None] {
             let filter = content_filter()?.with_max_blob_size(limit);
-            let result = appearances(
-                GitRepoWithMetadataEnumerator::new(
-                    temp.path(),
-                    gix::open_opts(temp.path(), gix::open::Options::isolated())?,
-                    None,
-                )
-                .with_content_filter(&filter)
-                .run_with_minimum_blobs(None, 0)?,
-            );
+            let result = GitRepoWithMetadataEnumerator::new(
+                temp.path(),
+                gix::open_opts(temp.path(), gix::open::Options::isolated())?,
+                None,
+            )
+            .with_content_filter(&filter)
+            .run_with_minimum_blobs(None, 0)?;
+            let GitBlobSource::Precomputed(blobs) = &result.blobs else {
+                bail!("expected precomputed metadata");
+            };
+            for blob in blobs {
+                assert_eq!(
+                    blob.retained_data.as_ref().map(|blob| blob.len() as u64),
+                    blob.indexed_size.map(std::num::NonZeroU64::get)
+                );
+            }
+            let result = appearances(result);
             assert!(result.contains_key(&small.to_string()));
             assert_eq!(result.contains_key(&large.to_string()), limit.is_none());
             assert!(!result.contains_key(&clean.to_string()));

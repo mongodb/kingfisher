@@ -20,7 +20,7 @@ use liquid::{ParserBuilder, model::Value, object};
 use regex::Regex;
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
-use tracing::debug;
+use tracing::{debug, warn};
 use xxhash_rust::xxh3::xxh3_64;
 
 use crate::liquid_filters;
@@ -690,21 +690,15 @@ impl PatternRequirements {
             let actual =
                 match render_pattern_requirement_template(&checksum.actual.template, &globals) {
                     Ok(rendered) => rendered,
-                    Err(err) => {
-                        debug!(
-                            "Failed to render checksum actual template '{}': {}",
-                            checksum.actual.template, err
-                        );
+                    Err(error) => {
+                        debug!(field = "actual", "{error}");
                         return PatternValidationResult::Failed;
                     }
                 };
             let expected = match render_pattern_requirement_template(&checksum.expected, &globals) {
                 Ok(rendered) => rendered,
-                Err(err) => {
-                    debug!(
-                        "Failed to render checksum expected template '{}': {}",
-                        checksum.expected, err
-                    );
+                Err(error) => {
+                    debug!(field = "expected", "{error}");
                     return PatternValidationResult::Failed;
                 }
             };
@@ -724,10 +718,14 @@ fn render_pattern_requirement_template(
     template: &str,
     globals: &liquid::Object,
 ) -> Result<String, String> {
+    // Liquid adds source expressions and evaluated filter inputs to its errors. These
+    // can contain matched credentials or private keys, so never expose the engine error.
     PATTERN_REQUIREMENTS_TEMPLATE_PARSER
         .parse(template)
-        .map_err(|e| e.to_string())
-        .and_then(|parsed| parsed.render(globals).map_err(|e| e.to_string()))
+        .map_err(|_| "Failed to parse checksum template".to_string())
+        .and_then(|parsed| {
+            parsed.render(globals).map_err(|_| "Failed to render checksum template".to_string())
+        })
 }
 
 /// Result of validating [`PatternRequirements`] against a potential match.
@@ -1269,12 +1267,31 @@ pub static RULE_COMMENTS_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static PATTERN_REQUIREMENTS_TEMPLATE_PARSER: LazyLock<liquid::Parser> = LazyLock::new(|| {
-    liquid_filters::register_all(ParserBuilder::with_stdlib())
+    // Checksums run per match on the scan hot path.
+    liquid_filters::register_checksum_filters(ParserBuilder::with_stdlib())
         .build()
         .expect("pattern requirement template parser should compile")
 });
 
 impl RuleSyntax {
+    pub(crate) fn warn_if_invalid_checksum_templates(&self) {
+        if let Some(checksum) = self
+            .pattern_requirements
+            .as_ref()
+            .and_then(|requirements| requirements.checksum.as_ref())
+        {
+            for (field, source) in [
+                ("checksum.actual.template", &checksum.actual.template),
+                ("checksum.expected", &checksum.expected),
+            ] {
+                // Parser errors may quote rule literals, including sensitive inputs.
+                if PATTERN_REQUIREMENTS_TEMPLATE_PARSER.parse(source).is_err() {
+                    warn!("Invalid {field} for rule {}", self.id);
+                }
+            }
+        }
+    }
+
     /// Inspection copy with literal OAuth2 operator credentials redacted in every environment.
     pub fn redacted_for_inspection(&self) -> Self {
         let mut inspected = self.clone();
@@ -1592,10 +1609,14 @@ impl RuleSyntax {
             anyhow!("Failed to parse YAML from {}{}: {}", path.display(), context, e)
         })?;
 
-        Ok(match parsed {
+        let rules = match parsed {
             RuleSyntaxDocument::Sequence(rules) => rules,
             RuleSyntaxDocument::Mapped { rules } => rules,
-        })
+        };
+        for rule in &rules {
+            rule.warn_if_invalid_checksum_templates();
+        }
+        Ok(rules)
     }
 }
 
@@ -1606,6 +1627,8 @@ pub struct Rule {
     finding_sha1_fingerprint: String,
     min_entropy: f32,
     visible: bool,
+    #[serde(skip)]
+    allow_internal_ips: bool,
     #[serde(skip, default = "default_runtime_minimum_confidence")]
     runtime_minimum_confidence: Confidence,
     #[serde(skip)]
@@ -1625,6 +1648,7 @@ impl PartialEq for Rule {
             && self.finding_sha1_fingerprint == other.finding_sha1_fingerprint
             && self.min_entropy == other.min_entropy
             && self.visible == other.visible
+            && self.allow_internal_ips == other.allow_internal_ips
             && self.runtime_minimum_confidence == other.runtime_minimum_confidence
             && self.runtime_dependency_helper == other.runtime_dependency_helper
             && self.runtime_helper_visibility == other.runtime_helper_visibility
@@ -1642,6 +1666,7 @@ impl Rule {
             finding_sha1_fingerprint: syntax.finding_sha1_fingerprint(),
             min_entropy: syntax.min_entropy,
             visible: syntax.visible,
+            allow_internal_ips: false,
             runtime_minimum_confidence: Confidence::Low,
             runtime_dependency_helper: false,
             runtime_helper_visibility: None,
@@ -1654,6 +1679,18 @@ impl Rule {
     /// Returns a reference to the rule's syntax.
     pub fn syntax(&self) -> &RuleSyntax {
         &self.syntax
+    }
+
+    /// Whether the loaded Kingfisher YAML requests internal IP access for validation.
+    ///
+    /// The caller must authorize the request before using it to permit internal destinations.
+    pub fn allow_internal_ips(&self) -> bool {
+        self.allow_internal_ips
+    }
+
+    pub(crate) fn with_allow_internal_ips(mut self, allow: bool) -> Self {
+        self.allow_internal_ips = allow;
+        self
     }
 
     /// Return whether this source fragment meets the rule's optional keyword gate.
@@ -2442,6 +2479,112 @@ content:
 
         let legacy = b"ghp_legacy_token";
         assert!(matches!(reqs.validate(legacy, None, true), PatternValidationResult::Passed));
+    }
+
+    #[test]
+    fn invalid_checksum_templates_do_not_prevent_other_rules_from_loading() {
+        use crate::{Rules, RulesDatabase};
+
+        let source = r#"
+rules:
+  - id: custom.checksum
+    name: Checksum fixture
+    pattern: '(test)'
+    pattern_requirements:
+      checksum:
+        actual:
+          template: '{{ MATCH | sha384 | sha512 }}'
+        expected: '{{ MATCH | hmac_sha512: "test" }}'
+  - id: custom.other
+    name: Other fixture
+    pattern: '(other)'
+"#;
+        let load = |source: &str| {
+            Rules::from_paths_and_contents(
+                [(Path::new("checksum.yml"), source.as_bytes())],
+                Confidence::Low,
+            )
+        };
+        let rules = load(source).unwrap();
+        let check = rules.rules["custom.checksum"]
+            .pattern_requirements
+            .as_ref()
+            .unwrap()
+            .checksum
+            .as_ref()
+            .unwrap();
+        let globals = object!({"MATCH": "test"});
+        for template in [&check.actual.template, &check.expected] {
+            assert!(!render_pattern_requirement_template(template, &globals).unwrap().is_empty());
+        }
+        assert!(RulesDatabase::from_rule_collection(rules).is_ok());
+
+        for filter in ["sha384", "hmac_sha512"] {
+            let invalid = source.replace(filter, "unknown_filter");
+            let rules = load(&invalid).unwrap();
+            assert!(rules.rules.contains_key("custom.other"));
+            assert!(rules.rules.contains_key("custom.checksum"));
+            assert!(RulesDatabase::from_rule_collection(rules).is_ok());
+        }
+    }
+
+    #[test]
+    fn pattern_requirement_templates_reject_crypto_filters_without_leaking_inputs() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+
+        let marker = "checksum-private-key-marker";
+        let encoded = STANDARD.encode(marker);
+        let globals = object!({"MATCH": encoded.clone(), "PRIVATE": marker});
+        // Checksums run per match during scanning; expensive or nondeterministic crypto
+        // filters are not registered for them at all.
+        for source in [
+            "{{ MATCH | ed25519_public_key }}".to_string(),
+            "{{ '' | ed25519_sign: PRIVATE }}".to_string(),
+            format!("{{{{ '' | ecdsa_sign: '{encoded}', 'P-256' }}}}"),
+            "{{ '' | random_bytes: 16 }}".to_string(),
+            "{{ MATCH | pbkdf2_sha256: '', 1000000, 1 }}".to_string(),
+        ] {
+            let error = render_pattern_requirement_template(&source, &globals).unwrap_err();
+            assert_eq!(error, "Failed to parse checksum template");
+            assert!(!error.contains(marker));
+            assert!(!error.contains(&encoded));
+        }
+        let source = format!("{{{{ '{marker}' | nonexistent_filter }}}}");
+        let error = render_pattern_requirement_template(&source, &globals).unwrap_err();
+        assert_eq!(error, "Failed to parse checksum template");
+        assert!(!error.contains(marker));
+
+        let regex = BytesRegex::new(r"(.+)").unwrap();
+        let token = encoded.as_bytes();
+        let captures = regex.captures(token).unwrap();
+        let invalid = "{{ MATCH | ed25519_public_key }}";
+        for (actual, expected) in [(invalid, ""), ("", invalid)] {
+            let reqs = PatternRequirements {
+                min_digits: None,
+                min_uppercase: None,
+                min_lowercase: None,
+                min_special_chars: None,
+                special_chars: None,
+                ignore_if_contains: None,
+                checksum: Some(ChecksumRequirement {
+                    actual: ChecksumActual { template: actual.into(), requires_capture: None },
+                    expected: expected.into(),
+                    skip_if_missing: false,
+                }),
+            };
+            assert_eq!(
+                reqs.validate(
+                    token,
+                    Some(PatternRequirementContext {
+                        regex: &regex,
+                        captures: &captures,
+                        full_match: token
+                    }),
+                    true,
+                ),
+                PatternValidationResult::Failed,
+            );
+        }
     }
 
     #[test]

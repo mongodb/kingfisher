@@ -48,7 +48,7 @@ const CONTEXT_VERIFIER_MAX_LIMIT: usize = 2 * 1024 * 1024; // verify code contex
 const CONTEXT_VERIFIER_MIN_LIMIT: usize = 0; // allow context verification starting at 0 bytes
 
 #[inline]
-pub(crate) fn should_attempt_context_verification(blob_len: usize) -> bool {
+fn should_attempt_context_verification(blob_len: usize) -> bool {
     (CONTEXT_VERIFIER_MIN_LIMIT..=CONTEXT_VERIFIER_MAX_LIMIT).contains(&blob_len)
 }
 
@@ -162,6 +162,11 @@ impl<'a> Drop for Matcher<'a> {
             global_stats.update(&self.local_stats);
         }
     }
+}
+
+pub(crate) enum NativeScan {
+    Required,
+    PrepassNegative,
 }
 
 pub enum ScanResult<'a> {
@@ -505,6 +510,31 @@ impl<'a> Matcher<'a> {
     where
         'a: 'b,
     {
+        self.scan_blob_with_language_hint(
+            blob,
+            origin,
+            || lang,
+            redact,
+            no_dedup,
+            no_base64,
+            NativeScan::Required,
+        )
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    pub(crate) fn scan_blob_with_language_hint<'b>(
+        &mut self,
+        blob: &'b Blob,
+        origin: &OriginSet,
+        language_hint: impl FnOnce() -> Option<String>,
+        redact: bool,
+        no_dedup: bool,
+        no_base64: bool,
+        native_scan: NativeScan,
+    ) -> Result<ScanResult<'b>>
+    where
+        'a: 'b,
+    {
         let inline_ignore_index = std::sync::OnceLock::new();
         // Update local stats
         self.local_stats.blobs_seen += 1;
@@ -513,49 +543,48 @@ impl<'a> Matcher<'a> {
         // Preserve the complete source path for path expressions and filters. A deduplicated blob
         // may have several origins; Betterleaks candidates survive when any path survives its
         // global source prefilter, while rules from other sources are never governed by it.
-        let mut filename = None;
-        let mut source_attributes = None;
-        let mut saw_path = false;
+        let mut source = None;
         let mut betterleaks_path_prefiltered = true;
         for item in origin.iter() {
             let Some(candidate) = item.blob_path() else {
                 continue;
             };
-            saw_path = true;
-            let candidate = candidate.to_string_lossy().into_owned();
+            let candidate = candidate.to_string_lossy();
             let attributes =
                 filter::source_attributes(item, &candidate, &self.source_attribute_keys);
-            if filename.is_none() {
-                filename = Some(candidate.clone());
-                source_attributes = Some(attributes.clone());
-            }
             if !self.rules_db.is_source_prefiltered(&candidate, &attributes)? {
-                filename = Some(candidate);
-                source_attributes = Some(attributes);
+                source = Some((candidate, attributes));
                 betterleaks_path_prefiltered = false;
                 break;
             }
+            if source.is_none() {
+                source = Some((candidate, attributes));
+            }
         }
-        let filename = filename.unwrap_or_else(|| "unknown_file".to_string());
-        let source_attributes = source_attributes.unwrap_or_else(|| {
-            filter::source_attributes(origin.first(), &filename, &self.source_attribute_keys)
-        });
-        if !saw_path {
-            betterleaks_path_prefiltered =
-                self.rules_db.is_source_prefiltered(&filename, &source_attributes)?;
-        }
+        let (filename, source_attributes) = match source {
+            Some(source) => source,
+            None => {
+                let filename = "unknown_file";
+                let attributes = filter::source_attributes(
+                    origin.first(),
+                    filename,
+                    &self.source_attribute_keys,
+                );
+                betterleaks_path_prefiltered =
+                    self.rules_db.is_source_prefiltered(filename, &attributes)?;
+                (filename.into(), attributes)
+            }
+        };
         if betterleaks_path_prefiltered && !self.rules_db.has_non_betterleaks_rules() {
             return Ok(ScanResult::New(Vec::new()));
         }
         self.local_stats.blobs_scanned += 1;
         self.local_stats.bytes_scanned += blob.bytes().len() as u64;
         crate::scan_progress::scanned(blob.bytes().len() as u64);
-        let lang_hint = lang.as_deref();
         let mut seen_matches = FxHashSet::default();
         let mut previous_matches: FxHashMap<usize, MatchSpans> = FxHashMap::default();
         let mut match_rule_indices: Vec<usize> = Vec::new();
 
-        let blob_len = blob.len();
         let mut matches = Vec::new();
         for (rule_index, rule) in self.rules_db.path_only_rules_for_source(
             &filename,
@@ -589,19 +618,21 @@ impl<'a> Matcher<'a> {
             });
             match_rule_indices.push(rule_index);
         }
-        self.scan_and_process_raw_matches(
-            blob,
-            origin,
-            &filename,
-            &source_attributes,
-            redact,
-            &mut matches,
-            &mut previous_matches,
-            &mut seen_matches,
-            &mut match_rule_indices,
-            betterleaks_path_prefiltered,
-            &inline_ignore_index,
-        )?;
+        if matches!(native_scan, NativeScan::Required) {
+            self.scan_and_process_raw_matches(
+                blob,
+                origin,
+                &filename,
+                &source_attributes,
+                redact,
+                &mut matches,
+                &mut previous_matches,
+                &mut seen_matches,
+                &mut match_rule_indices,
+                betterleaks_path_prefiltered,
+                &inline_ignore_index,
+            )?;
+        }
 
         // Collect decoded buffers only after raw confirmation and filtering finish.
         // The raw stage's local caches have been dropped when that call returns.
@@ -696,8 +727,7 @@ impl<'a> Matcher<'a> {
         maybe_apply_markup_context_gate(
             self.rules_db,
             blob,
-            lang_hint,
-            blob_len,
+            language_hint,
             &mut matches,
             &match_rule_indices,
         );
@@ -1175,21 +1205,20 @@ fn associate_betterleaks_components<'a>(
 fn maybe_apply_markup_context_gate<'a>(
     rules_db: &RulesDatabase,
     blob: &'a Blob,
-    lang_hint: Option<&str>,
-    blob_len: usize,
+    language_hint: impl FnOnce() -> Option<String>,
     matches: &mut Vec<BlobMatch<'a>>,
     match_rule_indices: &[usize],
 ) {
     if matches.is_empty() {
         return;
     }
-    if !should_attempt_context_verification(blob_len) {
+    if !should_attempt_context_verification(blob.len()) {
         return;
     }
-    let Some(hint) = lang_hint else {
+    let Some(hint) = language_hint() else {
         return;
     };
-    let language = match Language::from_hint(hint) {
+    let language = match Language::from_hint(&hint) {
         Some(lang @ (Language::Html | Language::Css)) => lang,
         _ => return,
     };
@@ -2700,6 +2729,8 @@ yaml_Q7mZ2pL9xR4vN8kT\nveles_Q7mZ2pL9xR4vN8kT"
     fn deferred_base64_preserves_raw_first_order_and_decode_policy() -> Result<()> {
         use base64::{Engine, engine::general_purpose::STANDARD};
 
+        use crate::git_candidates::{GitContentCandidate, GitContentFilter};
+
         let rule = compatibility_rule(
             "acme.deferred-base64",
             r"(DEFER_[A-Z0-9]{16})",
@@ -2711,6 +2742,8 @@ yaml_Q7mZ2pL9xR4vN8kT\nveles_Q7mZ2pL9xR4vN8kT"
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
         let seen = BlobIdMap::new();
         let scanner_pool = Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
+        let prepass =
+            GitContentFilter::new(Arc::clone(&scanner_pool), 1, true, false, Default::default());
         let mut matcher =
             Matcher::new(&rules_db, scanner_pool, &seen, None, false, None, &[], false, true)?;
         let origin = OriginSet::from(Origin::from_file(PathBuf::from("deferred-base64.txt")));
@@ -2744,6 +2777,25 @@ yaml_Q7mZ2pL9xR4vN8kT\nveles_Q7mZ2pL9xR4vN8kT"
                 .map(|finding| (finding.captures.captures[0].raw_value(), finding.is_base64))
                 .collect();
             assert_eq!(actual, expected, "no_base64={no_base64}, input={:?}", blob.bytes());
+            if !no_base64 && prepass.classify(blob.bytes())? == GitContentCandidate::Base64Only {
+                let ScanResult::New(reused) = matcher.scan_blob_with_language_hint(
+                    &blob,
+                    &origin,
+                    || None,
+                    false,
+                    true,
+                    no_base64,
+                    NativeScan::PrepassNegative,
+                )?
+                else {
+                    panic!("deduplication is disabled");
+                };
+                let actual: Vec<_> = reused
+                    .iter()
+                    .map(|finding| (finding.captures.captures[0].raw_value(), finding.is_base64))
+                    .collect();
+                assert_eq!(actual, expected, "input={:?}", blob.bytes());
+            }
         }
         Ok(())
     }

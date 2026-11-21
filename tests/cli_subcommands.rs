@@ -22,29 +22,11 @@ mod github {
             .args(["scan", "github", "--help"])
             .assert()
             .success()
-            .stdout(contains("Enumerate and scan GitHub repositories"));
-    }
-
-    #[test]
-    fn scan_github_list_only_help() {
-        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
-            .args(["scan", "github", "--help"])
-            .assert()
-            .success()
             .stdout(
-                contains("--list-only")
-                    .and(contains("List matching repositories without scanning")),
-            );
-    }
-
-    #[test]
-    fn scan_github_public_events_help() {
-        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
-            .args(["scan", "github", "--help"])
-            .assert()
-            .success()
-            .stdout(
-                contains("--public-events")
+                contains("Enumerate and scan GitHub repositories")
+                    .and(contains("--list-only"))
+                    .and(contains("List matching repositories without scanning"))
+                    .and(contains("--public-events"))
                     .and(contains("--event-lookback-hours"))
                     .and(contains("--user-file")),
             );
@@ -342,16 +324,7 @@ mod gitlab {
             .args(["scan", "gitlab", "--help"])
             .assert()
             .success()
-            .stdout(contains("Enumerate and scan GitLab"));
-    }
-
-    #[test]
-    fn scan_gitlab_list_only_flag() {
-        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
-            .args(["scan", "gitlab", "--help"])
-            .assert()
-            .success()
-            .stdout(contains("--list-only"));
+            .stdout(contains("Enumerate and scan GitLab").and(contains("--list-only")));
     }
 
     #[test]
@@ -497,16 +470,11 @@ mod azure {
             .args(["scan", "azure", "--help"])
             .assert()
             .success()
-            .stdout(contains("Enumerate and scan Azure").or(contains("Azure DevOps")));
-    }
-
-    #[test]
-    fn scan_azure_list_only_flag() {
-        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
-            .args(["scan", "azure", "--help"])
-            .assert()
-            .success()
-            .stdout(contains("--list-only"));
+            .stdout(
+                contains("Enumerate and scan Azure")
+                    .or(contains("Azure DevOps"))
+                    .and(contains("--list-only")),
+            );
     }
 
     #[test]
@@ -611,16 +579,12 @@ mod bitbucket {
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
             .args(["scan", "bitbucket", "--help"])
             .assert()
-            .stdout(is_match(r"kingfisher(\.exe)? scan bitbucket \[OPTIONS\]").unwrap());
-    }
-
-    #[test]
-    fn scan_bitbucket_list_only_flag() {
-        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
-            .args(["scan", "bitbucket", "--help"])
-            .assert()
             .success()
-            .stdout(contains("--list-only"));
+            .stdout(
+                is_match(r"kingfisher(\.exe)? scan bitbucket \[OPTIONS\]")
+                    .unwrap()
+                    .and(contains("--list-only")),
+            );
     }
 
     #[test]
@@ -1003,26 +967,6 @@ mod cross_platform {
     use super::*;
 
     #[test]
-    fn all_platforms_support_list_only() {
-        let platforms = vec![
-            vec!["scan", "github", "--user", "test"],
-            vec!["scan", "gitlab", "--user", "test"],
-            vec!["scan", "azure", "--organization", "test"],
-            vec!["scan", "bitbucket", "--workspace", "test"],
-            vec!["scan", "gitea", "--user", "test"],
-            vec!["scan", "huggingface", "--huggingface-user", "test"],
-        ];
-
-        for mut platform_args in platforms {
-            platform_args.extend_from_slice(&["--list-only", "--no-update-check"]);
-            Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
-                .args(&platform_args)
-                .assert()
-                .code(predicates::function::function(|code: &i32| *code == 0 || *code == 1));
-        }
-    }
-
-    #[test]
     fn scan_requires_subcommand_or_path() {
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
             .args(["scan", "--no-update-check"])
@@ -1038,55 +982,5 @@ mod cross_platform {
             .assert()
             .failure()
             .stderr(contains("unrecognized").or(contains("unexpected")));
-    }
-
-    #[test]
-    fn scan_github_without_scanning_no_paths() {
-        // list-only should work without providing actual scan paths
-        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
-            .args(["scan", "github", "--user", "testuser", "--list-only", "--no-update-check"])
-            .assert()
-            .code(predicates::function::function(|code: &i32| *code == 0 || *code == 1));
-    }
-}
-
-// =============================================================================
-// Legacy vs New Syntax Coexistence Tests
-// =============================================================================
-
-mod legacy_compatibility {
-    use super::*;
-    use std::path::PathBuf;
-
-    #[test]
-    fn scan_path_still_works() {
-        // The old syntax of scanning a local path should still work
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
-        let test_file = root.join("testdata").join("generic_secrets.py");
-        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
-            .args([
-                "scan",
-                test_file.to_str().expect("REASON"),
-                "--no-validate",
-                "--no-update-check",
-            ])
-            .assert()
-            .code(predicates::function::function(|code: &i32| {
-                // May succeed or fail depending on rules, but shouldn't error on syntax
-                *code == 0 || *code == 1 || *code == 200
-            }));
-    }
-
-    #[test]
-    fn new_subcommand_syntax_coexists() {
-        // Verify both old and new work (even if they fail due to network/auth)
-        // This just validates the CLI parsing works
-
-        // New syntax
-        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
-            .args(["scan", "github", "--user", "test", "--list-only", "--no-update-check"])
-            .assert()
-            .code(predicates::function::function(|code: &i32| *code == 0 || *code == 1));
     }
 }

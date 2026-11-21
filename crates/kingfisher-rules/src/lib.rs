@@ -7,6 +7,8 @@ pub mod betterleaks_filter;
 #[allow(dead_code)]
 #[path = "../build_support/builtin_docs.rs"]
 mod builtin_docs;
+#[doc(hidden)]
+pub mod crypto;
 pub mod defaults;
 #[cfg(test)]
 #[allow(dead_code)]

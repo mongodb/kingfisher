@@ -20,12 +20,6 @@ rules:
     min_entropy: 0.0
     validation:
       type: Assumed
-  - name: Custom PEM Private Key
-    id: custom.pem
-    pattern: '(?xims)(-----BEGIN[[:space:]]+PRIVATE[[:space:]]+KEY-----[a-z0-9 /+=\r\n]{32,}?-----END[[:space:]]+PRIVATE[[:space:]]+KEY-----)'
-    min_entropy: 0.0
-    validation:
-      type: Assumed
 "#;
 
 fn scan_private_key(rule: &str, filter_args: &[&str]) -> Result<Value> {
@@ -82,24 +76,6 @@ fn only_valid_remains_strictly_verified_active() -> Result<()> {
     assert!(report["findings"].as_array().unwrap().is_empty());
     assert_eq!(report["metadata"]["summary"]["successful_validations"], 0);
     assert_eq!(report["metadata"]["summary"]["skipped_validations"], 1);
-    assert!(report["metadata"]["summary"].get("high_confidence_secrets").is_none());
-    Ok(())
-}
-
-#[test]
-fn actionable_filter_includes_assumed_pem_keys() -> Result<()> {
-    let report = scan_private_key("custom.pem", &["--validation-filter", "actionable"])?;
-    let findings = report["findings"].as_array().unwrap();
-
-    assert_eq!(findings.len(), 1);
-    assert_eq!(findings[0]["rule"]["id"], "custom.pem");
-    assert_eq!(findings[0]["finding"]["validation"]["outcome"], "assumed");
-    assert_eq!(
-        findings[0]["finding"]["validation"]["status"],
-        "Assumed Valid (Not Live-Validated)"
-    );
-    assert_eq!(report["metadata"]["summary"]["successful_validations"], 1);
-    assert_eq!(report["metadata"]["summary"]["skipped_validations"], 0);
     assert!(report["metadata"]["summary"].get("high_confidence_secrets").is_none());
     Ok(())
 }

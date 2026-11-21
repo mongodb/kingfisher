@@ -9,6 +9,10 @@ cloud storage, container images, and developer platforms with a bundled rule cat
 `kingfisher-bin` installs the **`kingfisher` command**, including a precompiled binary for
 your platform. You do not need Rust or a separate Kingfisher installation.
 
+**No Git executable required.** The CLI reads local Git history and staged changes
+and clones repositories over HTTPS using native Rust libraries. SSH remotes require
+an SSH client.
+
 **Looking for a Python API?** Install
 [`kingfisher-secret-scanner`](https://pypi.org/project/kingfisher-secret-scanner/)
 and import `kingfisher_sdk` for native, in-process scanning. The CLI and SDK can be

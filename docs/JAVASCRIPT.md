@@ -398,6 +398,14 @@ use encrypted or memory-backed storage when needed.
 
 ## Validate and revoke explicitly
 
+Custom rules use the same [cryptographic authentication helpers](RULES.md#cryptographic-authentication)
+as the CLI and Rust/Python validators: ECDH/ECDSA, AES-GCM, HKDF/PBKDF2 and
+Ed25519 in Liquid or Betterleaks expressions, not a separate JavaScript crypto
+API. Load the [complete scaffold](../crates/kingfisher-scanner/examples/rules/cryptographic-auth.yml)
+through `Rules`, retain its invisible client-ID finding and validate explicitly.
+Its `.invalid` destination and published test keys are nonproduction placeholders;
+review and adapt the provider protocol before authorizing requests.
+
 ```typescript
 import { Validator, Revoker } from "kingfisher-secret-scanner";
 

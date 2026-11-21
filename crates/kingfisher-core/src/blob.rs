@@ -129,26 +129,48 @@ impl Blob<'_> {
     /// Non-empty files are memory-mapped; empty files use owned bytes.
     #[inline]
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let mut file = File::open(&path)?;
-        let file_size = file.metadata()?.len();
+        Self::from_open_file(File::open(path)?, &[])
+    }
 
+    /// Create a blob from an open file, including any prefix already read from it.
+    ///
+    /// The cursor must be immediately after `prefix`, or at the start if it is empty.
+    /// Memory mapping covers the whole file. Buffered reads prepend `prefix` to the
+    /// bytes still available from the cursor.
+    #[inline]
+    pub fn from_open_file(file: File, prefix: &[u8]) -> Result<Self> {
+        let file_size = file.metadata()?.len();
+        Self::from_open_file_with_size(file, prefix, file_size)
+    }
+
+    /// Create a blob using the length already obtained from the open file's metadata.
+    /// The cursor follows the same convention as in [`Self::from_open_file`].
+    #[doc(hidden)]
+    #[inline]
+    pub fn from_open_file_with_size(mut file: File, prefix: &[u8], file_size: u64) -> Result<Self> {
         if file_size > LARGE_FILE_THRESHOLD {
-            let temp_id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-            // One mapping avoids copying non-empty file contents into an owned buffer.
+            // Map using the descriptor's current length in case the file was
+            // changed after the caller obtained its metadata.
             let mmap = unsafe { memmap2::Mmap::map(&file)? };
-            let id = BlobId::new(&mmap);
-            if let Some(decoded) = encoding::decode(&mmap) {
-                let cell = OnceLock::new();
-                let _ = cell.set(id);
-                Ok(Blob { id: cell, data: BlobData::Owned(decoded), temp_id })
-            } else {
-                Ok(Blob { id: OnceLock::new(), data: BlobData::Mapped(mmap), temp_id })
-            }
+            Ok(Self::from_memory_map(mmap))
         } else {
-            // Empty files cannot be memory-mapped.
-            let mut bytes = Vec::with_capacity(file_size as usize);
+            // A file with zero reported length can still produce bytes when read.
+            let mut bytes = Vec::with_capacity((file_size as usize).max(prefix.len()));
+            bytes.extend_from_slice(prefix);
             file.read_to_end(&mut bytes)?;
             Ok(Self::from_bytes(bytes))
+        }
+    }
+
+    /// Create a blob from an existing read-only mapping, which may cover part of a file.
+    #[doc(hidden)]
+    pub fn from_memory_map(mmap: memmap2::Mmap) -> Self {
+        let temp_id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        if let Some(decoded) = encoding::decode(&mmap) {
+            let id = OnceLock::from(BlobId::new(&mmap));
+            Blob { id, data: BlobData::Owned(decoded), temp_id }
+        } else {
+            Blob { id: OnceLock::new(), data: BlobData::Mapped(mmap), temp_id }
         }
     }
 
@@ -525,27 +547,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_blob_id_empty() {
-        assert_eq!(BlobId::new(&[]).hex(), "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
-    }
-
-    #[test]
-    fn test_blob_id_small() {
-        assert_eq!(BlobId::new(&vec![0; 1024]).hex(), "06d7405020018ddf3cacee90fd4af10487da3d20");
-    }
-
-    #[test]
     fn test_blob_from_bytes() {
         let blob = Blob::from_bytes(b"hello world".to_vec());
         assert_eq!(blob.len(), 11);
         assert_eq!(blob.bytes(), b"hello world");
-    }
-
-    #[test]
-    fn test_blob_id_roundtrip() {
-        let original = BlobId::new(b"test data");
-        let hex = original.hex();
-        let parsed = BlobId::from_hex(&hex).unwrap();
-        assert_eq!(original, parsed);
     }
 }

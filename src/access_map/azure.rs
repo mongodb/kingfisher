@@ -1,18 +1,20 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD as b64, URL_SAFE, URL_SAFE_NO_PAD},
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use hmac::{Hmac, KeyInit, Mac};
 use quick_xml::{Reader, events::Event};
 use reqwest::{Client, Url, header::HeaderValue};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use sha2::Sha256;
-use tracing::warn;
+use tracing::{debug, warn};
+use uuid::Uuid;
 
 use crate::{cli::commands::access_map::AccessMapArgs, validation::GLOBAL_USER_AGENT};
 
@@ -31,6 +33,11 @@ const MAX_ARM_PAGES: usize = 10;
 const MAX_SUBSCRIPTIONS: usize = 25;
 const MAX_RBAC_PRINCIPALS: usize = 10;
 const MAX_ROLE_DEFINITIONS: usize = 100;
+const CREDENTIAL_ACTIVITY_PATH: &str = "beta/reports/appCredentialSignInActivities";
+const CREDENTIAL_ACTIVITY_SOURCE: &str = "Microsoft Entra application credential sign-in activity";
+const CREDENTIAL_ACTIVITY_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_CREDENTIAL_ACTIVITY_PAGES: usize = 3;
+const MAX_CREDENTIAL_ACTIVITY_BYTES: usize = 128 * 1024;
 
 #[derive(Clone, Copy)]
 enum StorageService {
@@ -65,29 +72,29 @@ impl StorageService {
     }
 }
 
-pub async fn map_access(args: &AccessMapArgs) -> Result<AccessMapResult> {
+pub(super) async fn map_access(
+    args: &AccessMapArgs,
+    activity_before: DateTime<Utc>,
+) -> Result<AccessMapResult> {
     let path = args
         .credential_path
         .as_deref()
         .ok_or_else(|| anyhow!("Azure access-map requires a credential JSON path"))?;
     let data = std::fs::read_to_string(path).context("Failed to read credential file")?;
-    map_access_from_json(&data).await
+    map_access_from_json_before(&data, None, activity_before).await
 }
 
-pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
-    map_access_from_json_with_hints(data, None).await
-}
-
-pub async fn map_access_from_json_with_hints(
+pub(super) async fn map_access_from_json_before(
     data: &str,
     containers_hint: Option<&[String]>,
+    activity_before: DateTime<Utc>,
 ) -> Result<AccessMapResult> {
     let credential = parse_azure_credentials(data)?;
     match credential {
         AzureCredential::Storage { storage_account, storage_key } => {
             map_storage_access(storage_account, storage_key, containers_hint).await
         }
-        AzureCredential::Enterprise(config) => map_enterprise_access(config).await,
+        AzureCredential::Enterprise(config) => map_enterprise_access(config, activity_before).await,
     }
 }
 
@@ -200,7 +207,9 @@ struct EnterpriseCredential {
     tenant_id: Option<String>,
     client_id: Option<String>,
     client_secret: Option<String>,
+    client_secret_id: Option<Uuid>,
     graph_access_token: Option<String>,
+    graph_activity_access_token: Option<String>,
     management_access_token: Option<String>,
     authority_host: String,
     graph_base_url: String,
@@ -475,12 +484,23 @@ fn parse_azure_credentials(data: &str) -> Result<AzureCredential> {
              tenant_id/client_id/client_secret, or an Azure access token"
         );
     }
+    let client_secret_id = if has_client_credentials {
+        find_value(&values, &["client_secret_id", "clientSecretId", "AZURE_CLIENT_SECRET_ID"])
+            .and_then(|id| Uuid::parse_str(&id).ok())
+    } else {
+        None
+    };
 
     Ok(AzureCredential::Enterprise(EnterpriseCredential {
         tenant_id,
         client_id,
         client_secret,
+        client_secret_id,
         graph_access_token,
+        graph_activity_access_token: find_value(
+            &values,
+            &["graph_activity_access_token", "graphActivityAccessToken"],
+        ),
         management_access_token,
         authority_host: find_value(
             &values,
@@ -539,14 +559,36 @@ fn find_value(values: &BTreeMap<String, String>, keys: &[&str]) -> Option<String
     })
 }
 
-async fn map_enterprise_access(config: EnterpriseCredential) -> Result<AccessMapResult> {
+async fn map_enterprise_access(
+    config: EnterpriseCredential,
+    activity_before: DateTime<Utc>,
+) -> Result<AccessMapResult> {
     let client = Client::builder()
         .user_agent(GLOBAL_USER_AGENT.as_str())
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(20))
+        .timeout(Duration::from_secs(20))
         .build()
         .context("Failed to build Azure access-map HTTP client")?;
     let mut risk_notes = Vec::new();
+    let activity_ids = config
+        .client_secret_id
+        .zip(config.client_id.as_deref().and_then(|app_id| Uuid::parse_str(app_id).ok()));
+    // A separate observer can read the report before this mapper authenticates with the secret.
+    let mut last_used_at = if let (Some((key_id, app_id)), Some(observer)) =
+        (activity_ids, config.graph_activity_access_token.as_deref())
+    {
+        fetch_client_secret_last_used(
+            &client,
+            &config.graph_base_url,
+            observer,
+            app_id,
+            key_id,
+            activity_before,
+        )
+        .await
+    } else {
+        None
+    };
     let tokens = acquire_enterprise_tokens(&client, &config, &mut risk_notes).await?;
 
     let graph_claims = tokens.graph.as_deref().map(decode_token_claims).unwrap_or_default();
@@ -564,6 +606,26 @@ async fn map_enterprise_access(config: EnterpriseCredential) -> Result<AccessMap
     if claims.token_type.is_none() && config.client_secret.is_some() {
         claims.token_type = Some("app".into());
     }
+    if let Some((key_id, app_id)) = activity_ids {
+        let mapped_app_id = claims.client_id.as_deref().and_then(|id| Uuid::parse_str(id).ok());
+        if mapped_app_id != Some(app_id) {
+            last_used_at = None;
+        } else if config.graph_activity_access_token.is_none()
+            && let Some(graph_token) = tokens.graph.as_deref()
+        {
+            last_used_at = fetch_client_secret_last_used(
+                &client,
+                &config.graph_base_url,
+                graph_token,
+                app_id,
+                key_id,
+                activity_before,
+            )
+            .await;
+        }
+    }
+    let credential_last_used_source =
+        last_used_at.as_ref().map(|_| CREDENTIAL_ACTIVITY_SOURCE.into());
 
     let mut graph = GraphMapping::default();
     if let Some(graph_token) = tokens.graph.as_deref() {
@@ -828,18 +890,20 @@ async fn map_enterprise_access(config: EnterpriseCredential) -> Result<AccessMap
                 "oauth2_access_token".into()
             }),
             expires_at: claims.expires_at.and_then(format_timestamp),
+            last_used_at,
             user_id: claims.object_id.clone(),
             scopes: graph_permissions,
             ..AccessTokenDetails::default()
         }),
         provider_metadata: Some(ProviderMetadata {
-            betterleaks_analysis: None,
             version: claims.version,
+            credential_last_used_source,
             enterprise: claims
                 .tenant_id
                 .as_deref()
                 .map(|tenant_id| tenant_id != MICROSOFT_ACCOUNT_TENANT_ID),
             authorization_evidence: Some(evidence),
+            ..ProviderMetadata::default()
         }),
         fingerprint: None,
     })
@@ -908,6 +972,115 @@ async fn acquire_enterprise_tokens(
         bail!("Azure client credentials could not acquire a Microsoft Graph or management token");
     }
     Ok(tokens)
+}
+
+async fn fetch_client_secret_last_used(
+    client: &Client,
+    graph_base_url: &str,
+    access_token: &str,
+    app_id: Uuid,
+    key_id: Uuid,
+    activity_before: DateTime<Utc>,
+) -> Option<String> {
+    match tokio::time::timeout(
+        CREDENTIAL_ACTIVITY_TIMEOUT,
+        read_client_secret_activity(
+            client,
+            graph_base_url,
+            access_token,
+            app_id,
+            key_id,
+            activity_before,
+        ),
+    )
+    .await
+    {
+        Ok(Ok(last_used_at)) => last_used_at,
+        Ok(Err(err)) => {
+            debug!("Azure access-map: client secret activity unavailable: {err}");
+            None
+        }
+        Err(_) => {
+            debug!("Azure access-map: client secret activity lookup timed out");
+            None
+        }
+    }
+}
+
+async fn read_client_secret_activity(
+    client: &Client,
+    graph_base_url: &str,
+    access_token: &str,
+    app_id: Uuid,
+    key_id: Uuid,
+    activity_before: DateTime<Utc>,
+) -> Result<Option<String>> {
+    let endpoint = append_url(graph_base_url, CREDENTIAL_ACTIVITY_PATH)
+        .context("Invalid Microsoft Graph credential activity endpoint")?;
+    let mut url = endpoint.clone();
+    // Graph documents filtering by key ID. Check both IDs against the returned records as well.
+    url.query_pairs_mut().append_pair("$filter", &format!("keyId eq '{key_id}'"));
+
+    let mut last_used_at = None;
+    for page_number in 1..=MAX_CREDENTIAL_ACTIVITY_PAGES {
+        let mut response = client
+            .get(url)
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .context("Microsoft Graph credential activity request failed")?;
+        let status = response.status();
+        ensure!(status.is_success(), "Microsoft Graph credential activity returned HTTP {status}");
+
+        let mut bytes = Vec::new();
+        while let Some(chunk) =
+            response.chunk().await.context("Could not read credential activity")?
+        {
+            ensure!(
+                chunk.len() <= MAX_CREDENTIAL_ACTIVITY_BYTES.saturating_sub(bytes.len()),
+                "Microsoft Graph credential activity response exceeded its size limit"
+            );
+            bytes.extend_from_slice(&chunk);
+        }
+        let page: JsonValue = serde_json::from_slice(&bytes)
+            .context("Invalid Microsoft Graph credential activity JSON")?;
+        // The documented filtered result can be a single object or an OData collection.
+        let records = page["value"].as_array().map_or(std::slice::from_ref(&page), Vec::as_slice);
+        let matches_guid = |value: &JsonValue, expected| {
+            value.as_str().and_then(|value| Uuid::parse_str(value).ok()) == Some(expected)
+        };
+        let page_last_used = records
+            .iter()
+            .filter(|record| {
+                matches_guid(&record["appId"], app_id)
+                    && matches_guid(&record["keyId"], key_id)
+                    && matches!(record["keyType"].as_str(), Some("clientSecret" | "secret"))
+            })
+            .filter_map(|record| record["signInActivity"]["lastSignInDateTime"].as_str())
+            .filter_map(|date| DateTime::parse_from_rfc3339(date).ok())
+            .filter(|date| date.timestamp() < activity_before.timestamp())
+            .max();
+        last_used_at = last_used_at.max(page_last_used);
+
+        let Some(next_link) = page["@odata.nextLink"].as_str() else {
+            break;
+        };
+        if page_number == MAX_CREDENTIAL_ACTIVITY_PAGES {
+            debug!("Microsoft Graph credential activity reached its page limit");
+            break;
+        }
+        url = endpoint
+            .join(next_link)
+            .context("Invalid Microsoft Graph credential activity page URL")?;
+        ensure_same_origin(&endpoint, &url, "Microsoft Graph credential activity")?;
+        ensure!(
+            url.path() == endpoint.path() && url.username().is_empty() && url.password().is_none(),
+            "Microsoft Graph credential activity page URL left the reports endpoint"
+        );
+    }
+
+    Ok(last_used_at
+        .map(|date| date.with_timezone(&Utc).to_rfc3339_opts(SecondsFormat::AutoSi, true)))
 }
 
 async fn request_client_token(
@@ -1947,7 +2120,7 @@ mod tests {
     use serde_json::json;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
-        matchers::{body_string_contains, method, path, query_param},
+        matchers::{body_string_contains, header, method, path, query_param},
     };
 
     use super::*;
@@ -2118,7 +2291,8 @@ mod tests {
             r#"{
                 "appId": "12345678-90ab-4cde-8f01-234567890abc",
                 "password": "secret-value",
-                "tenant": "11111111-2222-4333-8444-555555555555"
+                "tenant": "11111111-2222-4333-8444-555555555555",
+                "clientSecretId": "83F45296-FB8F-4AAA-A399-AC51084E02B7"
             }"#,
         )
         .unwrap();
@@ -2129,6 +2303,10 @@ mod tests {
         assert_eq!(config.client_id.as_deref(), Some("12345678-90ab-4cde-8f01-234567890abc"));
         assert_eq!(config.client_secret.as_deref(), Some("secret-value"));
         assert_eq!(config.tenant_id.as_deref(), Some("11111111-2222-4333-8444-555555555555"));
+        assert_eq!(
+            config.client_secret_id,
+            Some(Uuid::parse_str("83f45296-fb8f-4aaa-a399-ac51084e02b7").unwrap())
+        );
     }
 
     #[test]
@@ -2146,6 +2324,126 @@ mod tests {
         };
         assert!(config.graph_access_token.is_none());
         assert!(config.management_access_token.is_some());
+    }
+
+    #[tokio::test]
+    async fn activity_page_cap_preserves_latest_matching_prior_use() {
+        let server = MockServer::start().await;
+        let app_id = Uuid::from_u128(1);
+        let key_id = Uuid::from_u128(2);
+        let route = format!("/{CREDENTIAL_ACTIVITY_PATH}");
+        let cutoff = DateTime::parse_from_rfc3339("2026-01-02T08:00:00.500Z").unwrap().to_utc();
+        let record = |date: &str| {
+            json!({
+                "appId": app_id,
+                "keyId": key_id,
+                "keyType": "clientSecret",
+                "signInActivity": { "lastSignInDateTime": date },
+            })
+        };
+        for (page, date) in
+            [(1, "2026-01-01T08:00:00Z"), (2, "2026-01-02T07:00:00Z"), (3, "2026-01-02T08:00:00Z")]
+        {
+            let request = Mock::given(method("GET")).and(path(&route));
+            let request = if page == 1 {
+                request.and(query_param("$filter", format!("keyId eq '{key_id}'")))
+            } else {
+                request.and(query_param("page", page.to_string()))
+            };
+            request
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "value": [record(date)],
+                    "@odata.nextLink": format!("{}{route}?page={}", server.uri(), page + 1),
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let date = read_client_secret_activity(
+            &Client::new(),
+            &server.uri(),
+            "test-token",
+            app_id,
+            key_id,
+            cutoff,
+        )
+        .await
+        .unwrap();
+        assert_eq!(date.as_deref(), Some("2026-01-02T07:00:00Z"));
+        assert_eq!(server.received_requests().await.unwrap().len(), MAX_CREDENTIAL_ACTIVITY_PAGES);
+    }
+
+    #[tokio::test]
+    async fn activity_observer_uses_configured_graph_without_mapping_with_observer_token() {
+        let server = MockServer::start().await;
+        let tenant_id = "11111111-2222-4333-8444-555555555555";
+        let client_id = "12345678-90ab-4cde-8f01-234567890abc";
+        let key_id = "83f45296-fb8f-4aaa-a399-ac51084e02b7";
+        let observer_path = "/graph/beta/reports/appCredentialSignInActivities";
+        let graph_base_url = format!("{}/graph", server.uri());
+        let token_path = format!("/{tenant_id}/oauth2/v2.0/token");
+        let graph_token = fake_jwt(json!({"appid": client_id, "idtyp": "app"}));
+        Mock::given(method("GET"))
+            .and(path(observer_path))
+            .and(header("authorization", "Bearer observer-token"))
+            .and(query_param("$filter", format!("keyId eq '{key_id}'")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "appId": client_id,
+                "keyId": key_id,
+                "keyType": "clientSecret",
+                "signInActivity": {"lastSignInDateTime": "2026-01-01T03:04:05Z"},
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(&token_path))
+            .and(body_string_contains("client_secret=secret-value"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": graph_token
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(403))
+            .with_priority(10)
+            .mount(&server)
+            .await;
+
+        let AzureCredential::Enterprise(config) = parse_azure_credentials(
+            &json!({
+                "tenant_id": tenant_id,
+                "client_id": client_id,
+                "client_secret": "secret-value",
+                "client_secret_id": key_id,
+                "graph_activity_access_token": "observer-token",
+                "authority_host": server.uri(),
+                "graph_base_url": graph_base_url,
+                "management_access_token": "management-token",
+                "management_base_url": server.uri(),
+            })
+            .to_string(),
+        )
+        .unwrap() else {
+            panic!("expected enterprise credential");
+        };
+        let result = map_enterprise_access(config, Utc::now()).await.unwrap();
+        assert_eq!(result.identity.account_id.as_deref(), Some(client_id));
+        assert_eq!(
+            result.token_details.unwrap().last_used_at.as_deref(),
+            Some("2026-01-01T03:04:05Z")
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests[0].url.path(), observer_path);
+        assert_eq!(requests[1].url.path(), token_path);
+        assert!(!requests.iter().skip(1).any(|request| {
+            request
+                .headers
+                .get("authorization")
+                .is_some_and(|value| value == "Bearer observer-token")
+        }));
+        assert!(!requests.iter().skip(1).any(|request| request.url.path() == observer_path));
     }
 
     #[test]
@@ -2181,6 +2479,7 @@ mod tests {
         let server = MockServer::start().await;
         let tenant_id = "11111111-2222-4333-8444-555555555555";
         let client_id = "12345678-90ab-4cde-8f01-234567890abc";
+        let key_id = "83f45296-fb8f-4aaa-a399-ac51084e02b7";
         let principal_id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
         let graph_base_url = format!("{}/graph", server.uri());
         let management_base_url = format!("{}/management", server.uri());
@@ -2208,8 +2507,41 @@ mod tests {
             .and(path(format!("/{tenant_id}/oauth2/v2.0/token")))
             .and(body_string_contains("graph%2F.default"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "access_token": graph_token
+                "access_token": &graph_token
             })))
+            .mount(&server)
+            .await;
+        let activity_path = "/graph/beta/reports/appCredentialSignInActivities";
+        let activity = |app: &str, key: &str, kind: &str, date: &str| {
+            json!({"appId": app, "keyId": key, "keyType": kind,
+                   "signInActivity": {"lastSignInDateTime": date}})
+        };
+        Mock::given(method("GET"))
+            .and(path(activity_path))
+            .and(header("Authorization", format!("Bearer {graph_token}")))
+            .and(query_param("$filter", format!("keyId eq '{key_id}'")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "value": [
+                    activity(client_id, key_id, "clientSecret", "2024-05-01T01:02:03Z"),
+                    activity(principal_id, key_id, "clientSecret", "2024-06-01T01:02:03Z"),
+                    activity(client_id, principal_id, "clientSecret", "2024-06-01T01:02:03Z"),
+                    activity(client_id, key_id, "certificate", "2024-06-01T01:02:03Z"),
+                ],
+                "@odata.nextLink": format!("{}{activity_path}?$skiptoken=test", server.uri()),
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(activity_path))
+            .and(query_param("$skiptoken", "test"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(activity(
+                client_id,
+                &key_id.to_uppercase(),
+                "secret",
+                "2024-05-02T01:02:03-01:00",
+            )))
+            .expect(1)
             .mount(&server)
             .await;
         Mock::given(method("POST"))
@@ -2337,15 +2669,25 @@ mod tests {
             "tenant_id": tenant_id,
             "client_id": client_id,
             "client_secret": "client-secret-value",
+            "client_secret_id": key_id,
             "authority_host": server.uri(),
             "graph_base_url": graph_base_url,
             "management_base_url": management_base_url
         });
-        let result = map_access_from_json(&credential.to_string()).await.unwrap();
+        let result =
+            map_access_from_json_before(&credential.to_string(), None, Utc::now()).await.unwrap();
 
         assert_eq!(result.identity.id, "Kingfisher Enterprise App");
         assert_eq!(result.identity.tenant.as_deref(), Some(tenant_id));
         assert_eq!(result.identity.project.as_deref(), Some("sub-123"));
+        assert_eq!(
+            result.token_details.as_ref().unwrap().last_used_at.as_deref(),
+            Some("2024-05-02T02:02:03Z")
+        );
+        assert_eq!(
+            result.provider_metadata.as_ref().unwrap().credential_last_used_source.as_deref(),
+            Some(CREDENTIAL_ACTIVITY_SOURCE)
+        );
         assert!(
             result
                 .permissions

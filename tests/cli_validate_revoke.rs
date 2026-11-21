@@ -44,26 +44,15 @@ mod validate {
     use super::*;
 
     #[test]
-    fn validate_help() {
-        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
-            .args(["validate", "--help"])
-            .assert()
-            .success()
-            .stdout(
-                contains("Directly validate a known secret")
-                    .and(contains("--rule"))
-                    .and(contains("SECRET")),
-            );
-    }
-
-    #[test]
     fn validate_help_shows_all_options() {
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
             .args(["validate", "--help"])
             .assert()
             .success()
             .stdout(
-                contains("--rule")
+                contains("Directly validate a known secret")
+                    .and(contains("SECRET"))
+                    .and(contains("--rule"))
                     .and(contains("--arg"))
                     .and(contains("--var"))
                     .and(contains("--timeout"))
@@ -129,20 +118,6 @@ mod validate {
                 *code == 0 || *code == 1
             }))
             .stdout(contains("GitHub").or(contains("github")));
-    }
-
-    #[test]
-    fn validate_accepts_full_rule_id() {
-        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
-            .args([
-                "validate",
-                "--rule",
-                "betterleaks.github-pat",
-                "fake-api-key-12345",
-                "--no-update-check",
-            ])
-            .assert()
-            .code(predicates::function::function(|code: &i32| *code == 0 || *code == 1));
     }
 
     #[test]
@@ -823,26 +798,15 @@ mod revoke {
     }
 
     #[test]
-    fn revoke_help() {
-        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
-            .args(["revoke", "--help"])
-            .assert()
-            .success()
-            .stdout(
-                contains("Directly revoke a known secret")
-                    .and(contains("--rule"))
-                    .and(contains("SECRET")),
-            );
-    }
-
-    #[test]
     fn revoke_help_shows_all_options() {
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
             .args(["revoke", "--help"])
             .assert()
             .success()
             .stdout(
-                contains("--rule")
+                contains("Directly revoke a known secret")
+                    .and(contains("SECRET"))
+                    .and(contains("--rule"))
                     .and(contains("--arg"))
                     .and(contains("--var"))
                     .and(contains("--timeout"))
@@ -910,23 +874,6 @@ mod revoke {
             .assert()
             .code(predicates::function::function(|code: &i32| *code == 0 || *code == 1))
             .stdout(contains("Slack").or(contains("slack")));
-    }
-
-    #[test]
-    fn revoke_accepts_full_rule_id() {
-        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
-            .args([
-                "revoke",
-                "--rule",
-                "slack.custom",
-                "xoxb-fake-token",
-                "--rules-path",
-                LEGACY_REVOCATION_RULES,
-                "--no-builtins",
-                "--no-update-check",
-            ])
-            .assert()
-            .code(predicates::function::function(|code: &i32| *code == 0 || *code == 1));
     }
 
     #[test]
@@ -1444,25 +1391,6 @@ mod shared {
             .assert()
             .success()
             .stdout(contains("validate").and(contains("revoke")));
-    }
-
-    #[test]
-    fn validate_accepts_stdin_marker() {
-        // Test that '-' is accepted as stdin marker (the actual read will fail in test)
-        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
-            .args(["validate", "--help"])
-            .assert()
-            .success()
-            .stdout(contains("stdin").or(contains("-")));
-    }
-
-    #[test]
-    fn revoke_accepts_stdin_marker() {
-        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
-            .args(["revoke", "--help"])
-            .assert()
-            .success()
-            .stdout(contains("stdin").or(contains("-")));
     }
 
     #[test]

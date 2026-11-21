@@ -3,38 +3,19 @@ use std::path::Path;
 use crate::decompress::{ZIP_BASED_FORMATS, looks_like_zip};
 
 pub fn is_compressed_file(path: &Path) -> bool {
-    // Get the full filename
-    let filename = match path.file_name().and_then(|s| s.to_str()) {
-        Some(name) => name.to_lowercase(),
-        None => return false,
-    };
-    // Check for compound extensions first
-    if filename.ends_with(".tar.gz")
-        || filename.ends_with(".tar.gzip")
-        || filename.ends_with(".tar.bz2")
-        || filename.ends_with(".tar.bzip2")
-        || filename.ends_with(".tar.xz")
-    {
-        return true;
+    let Some(ext) = path.extension().and_then(|s| s.to_str()) else { return false };
+    if path.file_name().and_then(|s| s.to_str()).is_none() {
+        return false;
     }
-    // Then check single extensions
-    if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-        let ext_lower = ext.to_lowercase();
-        ext_lower == "gz"
-            || ext_lower == "gzip"
-            || ext_lower == "tgz"
-            || ext_lower == "bz2"
-            || ext_lower == "bzip2"
-            || ext_lower == "xz"
-            || ext_lower == "tar"
-            || ext_lower == "zlib"
-            || ext_lower == "asar"
-            || ext_lower == "hwp"
-            || ext_lower == "egg"
-            || ZIP_BASED_FORMATS.iter().any(|z| *z == ext_lower)
-    } else {
-        false
-    }
+    // The final extension also covers compound names such as .tar.gz.
+    // Preserve Unicode lowercasing (for example, a Kelvin sign in .apK)
+    // without allocating in the common ASCII case.
+    let folded = (!ext.is_ascii()).then(|| ext.to_lowercase());
+    let ext = folded.as_deref().unwrap_or(ext);
+    ["gz", "gzip", "tgz", "bz2", "bzip2", "xz", "tar", "zlib", "asar", "hwp", "egg"]
+        .into_iter()
+        .chain(ZIP_BASED_FORMATS.iter().copied())
+        .any(|supported| ext.eq_ignore_ascii_case(supported))
 }
 
 /// Like [`is_compressed_file`], but also recognizes ZIP containers by their
@@ -90,6 +71,10 @@ mod tests {
     fn recognizes_tar_wrapped_long_compression_extensions() {
         assert!(is_compressed_file(Path::new("archive.tar.gzip")));
         assert!(is_compressed_file(Path::new("archive.tar.bzip2")));
+        assert!(is_compressed_file(Path::new(".TAR.GZIP")));
+        assert!(is_compressed_file(Path::new("source.JAR")));
+        assert!(is_compressed_file(Path::new("archive.apK")));
+        assert!(!is_compressed_file(Path::new(".gz")));
     }
 
     #[test]

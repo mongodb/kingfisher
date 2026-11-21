@@ -1,13 +1,19 @@
 //! Rule collection and loading utilities.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use ignore::{WalkBuilder, types::TypesBuilder};
 use serde::Deserialize;
 use thiserror::Error;
 use tracing::{debug, debug_span, error};
 
-use std::{collections::BTreeMap, fs::File, io::BufReader, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::File,
+    io::{BufReader, Read},
+    path::Path,
+};
 
+use crate::rule::Rule;
 pub use crate::rule::{BetterleaksExpr, Confidence, Revocation, RuleSyntax, Validation};
 use serde::de::DeserializeOwned;
 
@@ -48,6 +54,17 @@ struct RawRules {
     rules: Vec<RuleSyntax>,
 }
 
+#[derive(Deserialize)]
+struct RawRulePolicies {
+    rules: Vec<RawRulePolicy>,
+}
+
+#[derive(Deserialize)]
+struct RawRulePolicy {
+    #[serde(default)]
+    allow_internal_ips: bool,
+}
+
 impl Rules {
     pub fn new() -> Self {
         Self { rules: BTreeMap::new(), betterleaks_prefilter: None }
@@ -79,6 +96,7 @@ impl Rules {
                         betterleaks_prefilter: rs.betterleaks_prefilter,
                     });
                     for rule_syntax in rs.rules {
+                        rule_syntax.warn_if_invalid_checksum_templates();
                         rule_syntax.check_http_fallbacks().with_context(|| {
                             format!("Invalid HTTP fallbacks for rule {}", rule_syntax.id)
                         })?;
@@ -144,15 +162,42 @@ impl Rules {
         paths: I,
         confidence: Confidence,
     ) -> Result<Self> {
+        Self::from_paths_impl(paths, confidence, None)
+    }
+
+    /// Load custom rules with their runtime validation policy and source prefilter.
+    ///
+    /// Only pass trusted rule paths. Kingfisher YAML can request internal IP access for validation.
+    /// The caller authorizes the request. Betterleaks TOML makes no such request. Later definitions
+    /// of the same ID replace both the earlier rule and its policy.
+    pub fn load_runtime_rules<P: AsRef<Path>, I: IntoIterator<Item = P>>(
+        paths: I,
+        confidence: Confidence,
+    ) -> Result<(Vec<Rule>, Option<BetterleaksExpr>)> {
+        let mut opt_ins = BTreeSet::new();
+        let Self { rules, betterleaks_prefilter } =
+            Self::from_paths_impl(paths, confidence, Some(&mut opt_ins))?;
+        let rules = rules
+            .into_iter()
+            .map(|(id, syntax)| Rule::new(syntax).with_allow_internal_ips(opt_ins.contains(&id)))
+            .collect();
+        Ok((rules, betterleaks_prefilter))
+    }
+
+    fn from_paths_impl<P: AsRef<Path>, I: IntoIterator<Item = P>>(
+        paths: I,
+        confidence: Confidence,
+        mut opt_ins: Option<&mut BTreeSet<String>>,
+    ) -> Result<Self> {
         let mut num_paths = 0;
         let mut rules = Rules::new();
         for input in paths {
             num_paths += 1;
             let input = input.as_ref();
             if input.is_file() {
-                rules.update(Rules::from_file(input, confidence)?);
+                rules.update(Self::from_file(input, confidence, opt_ins.as_deref_mut())?);
             } else if input.is_dir() {
-                rules.update(Rules::from_directory(input, confidence)?);
+                rules.update(Self::from_directory_impl(input, confidence, opt_ins.as_deref_mut())?);
             } else {
                 error!("Invalid input type: {} is neither a file nor a directory", input.display());
                 bail!(RulesError::InvalidInputError(input.display().to_string()));
@@ -163,13 +208,21 @@ impl Rules {
     }
 
     pub fn from_yaml_file<P: AsRef<Path>>(path: P, confidence: Confidence) -> Result<Self> {
-        let path = path.as_ref();
+        Self::from_yaml_file_impl(path.as_ref(), confidence, None)
+    }
+
+    fn from_yaml_file_impl(
+        path: &Path,
+        confidence: Confidence,
+        mut opt_ins: Option<&mut BTreeSet<String>>,
+    ) -> Result<Self> {
         let _span = debug_span!("Rules::from_yaml_file", "{}", path.display()).entered();
-        match load_yaml_file::<RawRules, _>(path) {
-            Ok(rs) => {
+        match load_yaml_rule_file(path, opt_ins.is_some()) {
+            Ok((rs, policies)) => {
                 let mut rules = Rules::new();
                 rules.betterleaks_prefilter = rs.betterleaks_prefilter;
-                for rule_syntax in rs.rules {
+                for (index, rule_syntax) in rs.rules.into_iter().enumerate() {
+                    rule_syntax.warn_if_invalid_checksum_templates();
                     rule_syntax.check_http_fallbacks().with_context(|| {
                         format!("Invalid HTTP fallbacks for rule {}", rule_syntax.id)
                     })?;
@@ -195,6 +248,17 @@ impl Rules {
                             path: path.display().to_string(),
                             rule_id: rule_syntax.id.clone(),
                         });
+                    }
+                    if let Some(opt_ins) = opt_ins.as_deref_mut() {
+                        if policies
+                            .as_ref()
+                            .and_then(|policies| policies.rules.get(index))
+                            .is_some_and(|policy| policy.allow_internal_ips)
+                        {
+                            opt_ins.insert(rule_syntax.id.clone());
+                        } else {
+                            opt_ins.remove(&rule_syntax.id);
+                        }
                     }
                     rules.rules.insert(rule_syntax.id.clone(), rule_syntax);
                 }
@@ -223,12 +287,21 @@ impl Rules {
         Self::from_paths_and_contents([(path, yaml.as_bytes())], confidence)
     }
 
-    fn from_file<P: AsRef<Path>>(path: P, confidence: Confidence) -> Result<Self> {
-        let path = path.as_ref();
-        match path.extension().and_then(|extension| extension.to_str()) {
-            Some("toml") => Self::from_toml_file(path, confidence),
-            _ => Self::from_yaml_file(path, confidence),
+    fn from_file(
+        path: &Path,
+        confidence: Confidence,
+        opt_ins: Option<&mut BTreeSet<String>>,
+    ) -> Result<Self> {
+        if path.extension().and_then(|extension| extension.to_str()) != Some("toml") {
+            return Self::from_yaml_file_impl(path, confidence, opt_ins);
         }
+        let rules = Self::from_toml_file(path, confidence)?;
+        if let Some(opt_ins) = opt_ins {
+            for id in rules.rules.keys() {
+                opt_ins.remove(id);
+            }
+        }
+        Ok(rules)
     }
 
     pub fn from_yaml_files<P: AsRef<Path>, I: IntoIterator<Item = P>>(
@@ -246,7 +319,14 @@ impl Rules {
     }
 
     pub fn from_directory<P: AsRef<Path>>(path: P, confidence: Confidence) -> Result<Self> {
-        let path = path.as_ref();
+        Self::from_directory_impl(path.as_ref(), confidence, None)
+    }
+
+    fn from_directory_impl(
+        path: &Path,
+        confidence: Confidence,
+        mut opt_ins: Option<&mut BTreeSet<String>>,
+    ) -> Result<Self> {
         let _span = debug_span!("Rules::from_directory", "{}", path.display()).entered();
         let mut file_types = TypesBuilder::new();
         file_types.add_defaults();
@@ -287,7 +367,7 @@ impl Rules {
         debug!("Found {} rule files in {}", rule_files.len(), path.display());
         let mut rules = Self::new();
         for rule_file in rule_files {
-            rules.update(Self::from_file(rule_file, confidence)?);
+            rules.update(Self::from_file(&rule_file, confidence, opt_ins.as_deref_mut())?);
         }
         Ok(rules)
     }
@@ -326,13 +406,45 @@ impl IntoIterator for Rules {
 }
 
 pub fn load_yaml_file<T: DeserializeOwned, P: AsRef<Path>>(path: P) -> Result<T> {
-    let path = path.as_ref();
+    load_yaml_file_with(path.as_ref(), |reader| Ok(yaml_serde::from_reader(reader)?))
+}
+
+fn load_yaml_rule_file(
+    path: &Path,
+    load_policy: bool,
+) -> Result<(RawRules, Option<RawRulePolicies>)> {
+    if !load_policy {
+        return load_yaml_file(path).map(|rules| (rules, None));
+    }
+    load_yaml_file_with(path, |mut reader| {
+        let mut contents = Vec::new();
+        reader.read_to_end(&mut contents)?;
+        let rules: RawRules = yaml_serde::from_slice(&contents)?;
+        // Most rule files never request internal IPs. Skip the second parse unless the key
+        // appears anywhere in the bytes.
+        const POLICY_KEY: &[u8] = b"allow_internal_ips";
+        if !contents.windows(POLICY_KEY.len()).any(|window| window == POLICY_KEY) {
+            return Ok((rules, None));
+        }
+        // Parse a second view of the same bytes to retain the legacy RuleSyntax decoder and its
+        // diagnostics. The policy follows the rule at the same position in the document.
+        let policies: RawRulePolicies = yaml_serde::from_slice(&contents)?;
+        ensure!(
+            policies.rules.len() == rules.rules.len(),
+            "Rule policy entries do not line up with rule definitions"
+        );
+        Ok((rules, Some(policies)))
+    })
+}
+
+fn load_yaml_file_with<T>(
+    path: &Path,
+    parse: impl FnOnce(BufReader<File>) -> Result<T>,
+) -> Result<T> {
     let file = File::open(path)
         .with_context(|| format!("Failed to open YAML file: {}", path.display()))?;
-    let reader = BufReader::new(file);
-    let data = yaml_serde::from_reader(reader)
-        .with_context(|| format!("Failed to parse YAML from file: {}", path.display()))?;
-    Ok(data)
+    parse(BufReader::new(file))
+        .with_context(|| format!("Failed to parse YAML from file: {}", path.display()))
 }
 
 #[cfg(test)]

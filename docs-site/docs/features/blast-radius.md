@@ -55,6 +55,35 @@ uses [synthetic data](../viewer/investigation-demo.json).*
 
 > Blast-radius mapping runs additional network requests. Only use it when you are authorized to inspect the target account/workspace.
 
+### Credential activity coverage
+
+HTML reports show **Last used** and its source beside the credential identity. **Unavailable**
+means the report has no usable history. Kingfisher reports activity that predates the start of
+the scan or standalone mapping. If a provider replaces an older timestamp during authentication,
+the prior history may become unavailable. Provider activity records can also lag.
+
+Kingfisher can look up AWS IAM and Alibaba Cloud RAM access keys, Google Cloud service-account keys
+(day precision), Fastly user tokens, HCP Terraform tokens, Zendesk OAuth tokens, and JFrog Access
+tokens on known Artifactory or Xray instances with tracking enabled. IBM Cloud IAM activity is
+available in standalone mapping and scan-time blast-radius reports.
+
+- **Buildkite** requires GraphQL inventory access to report token activity.
+- **GitHub** reports the latest matching web event before the scan or mapping began, within the
+  organizations it can audit. [GitHub audit log coverage](https://docs.github.com/en/enterprise-cloud@latest/admin/monitoring-activity-in-your-enterprise/reviewing-audit-logs-for-your-enterprise/identifying-audit-log-events-performed-by-an-access-token)
+
+For standalone lookups that need additional inputs, use the exact credential IDs in the provider's
+inventory and include these fields in the JSON credential file.
+
+| Provider | JSON fields for activity lookup |
+| --- | --- |
+| GitHub | `token` and `activity` with a separate `audit_token` and one to four `organizations` (slugs). Set `api_endpoint` for a trusted HTTPS Enterprise endpoint. |
+| GitLab Self-Managed | `token`, HTTPS `api_endpoint`, and a separate instance administrator `audit_token` for lookup before token authentication. |
+| Gitea | `token`, HTTPS `api_endpoint`, and `activity` with `username`, numeric `token_id`, `audit_username`, and `audit_password` for authorized inventory access. |
+| OpenAI | `token`, `key_id`, and a separate organization Admin API key as `audit_token`. Include `project_id` only for project and service-account keys. |
+| Anthropic | `token`, `key_id`, and a separate Admin API key as `audit_token`. Kingfisher checks the token against the key's redacted hint. Reports show the start and precision of the latest usage bucket with requests in the 30-day window. |
+| Microsoft Entra | Add `client_secret_id` (Secret ID) to the client credentials. Use a Microsoft Graph token with access to the application credential sign-in report, optionally supplied as `graph_activity_access_token`. Microsoft lists this report as available in the global cloud. |
+| Jira Cloud | `token`, `base_url`, and `activity` with `account_id`, `token_id`, and a separate Atlassian admin `audit_token`. `account_id` must match the mapped account. |
+
 ## How Blast Radius Works
 
 ### Standalone Flow
@@ -541,7 +570,8 @@ Microsoft access-token formats are not guaranteed to remain readable JWTs.
 
 Credential documents may set `authority_host`, `graph_base_url`, and
 `management_base_url` for Microsoft national clouds or authorized test/private
-endpoints. Keep all three values aligned with the target cloud.
+endpoints. Keep all three values aligned with the target cloud. Kingfisher sends
+the optional `graph_activity_access_token` to the configured Graph endpoint.
 
 During scanning, validated Entra client secrets detected with their tenant and
 client IDs, plus Azure-context OAuth2 JWTs, can automatically feed

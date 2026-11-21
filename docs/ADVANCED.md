@@ -670,6 +670,11 @@ is preserved in either mode. Candidate sets, tree summaries and Git object cache
 exist only in memory for the current scan; no scan contents or classifications
 are persisted for reuse by later runs.
 
+The prepass retains a bounded set of decompressed Git blobs. The final matcher
+reuses completed negative raw scans for those exact bytes and still scans eligible
+Base64 content. Kingfisher streams TAR members directly from Git blobs and nested
+archive bytes. Larger members share a temporary spill file.
+
 The pre-existing compiled-rule database cache is independent of scan data. To
 disable that disk cache as well, use `--no-rule-cache`:
 

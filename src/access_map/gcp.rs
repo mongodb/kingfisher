@@ -3,11 +3,12 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
+use chrono::DateTime;
 use futures::{StreamExt, stream};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::{Client, StatusCode};
 use serde_json::Value;
-use tracing::warn;
+use tracing::{debug, warn};
 
 macro_rules! verbose_warn {
     ($($arg:tt)*) => {
@@ -38,6 +39,9 @@ const MAX_PROJECT_SCOPES: usize = 8;
 const MAX_INVENTORY_PAGES: usize = 8;
 const MAX_INVENTORY_PAGE_BYTES: usize = 2 * 1024 * 1024;
 const INVENTORY_PAGE_TIMEOUT: Duration = Duration::from_secs(10);
+const KEY_USAGE_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
+const POLICY_ANALYZER_ENDPOINT: &str = "https://policyanalyzer.googleapis.com";
+const SERVICE_ACCOUNT_KEY_ACTIVITY: &str = "serviceAccountKeyLastAuthentication";
 
 #[derive(Debug, Clone)]
 struct GcpIamBinding {
@@ -105,6 +109,24 @@ pub async fn map_access_from_json_with_options(
                 verbose_warn!("GCP access-map: failed to fetch service account metadata: {err}");
                 ServiceAccountMetadata::default()
             }
+        };
+
+    let last_used_at =
+        match (project_id.as_deref(), credential.get("private_key_id").and_then(Value::as_str)) {
+            (Some(project), Some(key_id))
+                if sa_metadata.project_id.as_deref().is_none_or(|owner| owner == project) =>
+            {
+                fetch_service_account_key_last_used(
+                    &http_client,
+                    &access_token,
+                    POLICY_ANALYZER_ENDPOINT,
+                    project,
+                    &client_email,
+                    key_id,
+                )
+                .await
+            }
+            _ => None,
         };
 
     if project_id.is_none() {
@@ -466,11 +488,14 @@ pub async fn map_access_from_json_with_options(
 
     let recommendations = build_recommendations(severity);
 
+    let credential_last_used_source =
+        last_used_at.as_ref().map(|_| "Google Cloud Policy Analyzer (day precision)".into());
     let token_details = Some(AccessTokenDetails {
         name: sa_metadata.display_name,
         username: Some(client_email),
         account_type: Some("service_account".into()),
         token_type: Some("service_account_key".into()),
+        last_used_at,
         user_id: sa_metadata.unique_id,
         ..Default::default()
     });
@@ -486,13 +511,63 @@ pub async fn map_access_from_json_with_options(
         risk_notes,
         token_details,
         provider_metadata: Some(ProviderMetadata {
-            betterleaks_analysis: None,
-            version: None,
-            enterprise: None,
+            credential_last_used_source,
             authorization_evidence: Some(authorization_evidence),
+            ..ProviderMetadata::default()
         }),
         fingerprint: None,
     })
+}
+
+async fn fetch_service_account_key_last_used(
+    client: &Client,
+    token: &str,
+    endpoint: &str,
+    project: &str,
+    client_email: &str,
+    key_id: &str,
+) -> Option<String> {
+    // The filter contains exactly one key from the credential, with no filter operators in its ID.
+    if matches!(project, "." | "..")
+        || key_id.is_empty()
+        || key_id.len() > 128
+        || !key_id.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        || !client_email.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'@' | b'.' | b'-' | b'_' | b'+')
+        })
+    {
+        return None;
+    }
+    let url = format!(
+        "{endpoint}/v1/projects/{project}/locations/global/activityTypes/{SERVICE_ACCOUNT_KEY_ACTIVITY}/activities:query"
+    );
+    let resource = format!(
+        "//iam.googleapis.com/projects/{project}/serviceAccounts/{client_email}/keys/{key_id}"
+    );
+    let filter = format!("activities.full_resource_name=\"{resource}\"");
+    let response = client
+        .get(url)
+        .bearer_auth(token)
+        .query(&[("filter", filter.as_str()), ("pageSize", "1")])
+        .timeout(KEY_USAGE_LOOKUP_TIMEOUT)
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .inspect_err(|error| {
+            debug!(status = ?error.status(), "GCP access-map: service account key usage lookup failed");
+        })
+        .ok()?;
+    let body: Value = response.json().await.ok()?;
+    let activity = body["activities"].as_array()?.iter().find(|activity| {
+        activity["activityType"].as_str() == Some(SERVICE_ACCOUNT_KEY_ACTIVITY)
+            && activity["fullResourceName"].as_str() == Some(resource.as_str())
+            && activity["activity"]["serviceAccountKey"]["fullResourceName"]
+                .as_str()
+                .is_none_or(|name| name == resource)
+    })?;
+    let timestamp = activity["activity"]["lastAuthenticatedTime"].as_str()?;
+    // Google's timestamp has day precision. Its clock time is always 07:00:00Z.
+    DateTime::parse_from_rfc3339(timestamp).ok().map(|time| time.date_naive().to_string())
 }
 
 async fn fetch_project_policy(
@@ -2799,8 +2874,80 @@ mod tests {
     use super::*;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
-        matchers::{method, path, query_param},
+        matchers::{header, method, path, query_param},
     };
+
+    #[tokio::test]
+    async fn policy_analyzer_reports_only_the_requested_key_at_day_precision() {
+        const PROJECT: &str = "my-project";
+        const EMAIL: &str = "my-account@my-project.iam.gserviceaccount.com";
+        const KEY_ID: &str = "0f561cc41650ff521899de2fd653bd3de08e2da4";
+        let resource = format!(
+            "//iam.googleapis.com/projects/{PROJECT}/serviceAccounts/{EMAIL}/keys/{KEY_ID}"
+        );
+        let other_key = format!("{resource}0");
+        let activity = |name: &str, inner_name: &str, timestamp: Option<&str>| {
+            serde_json::json!({
+                "fullResourceName": name,
+                "activityType": SERVICE_ACCOUNT_KEY_ACTIVITY,
+                "activity": {
+                    "serviceAccountKey": {"fullResourceName": inner_name},
+                    "lastAuthenticatedTime": timestamp,
+                },
+            })
+        };
+        let response = |activities| {
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"activities": activities}))
+        };
+        let server = MockServer::start().await;
+        let client = Client::new();
+        let endpoint = server.uri();
+        for (result, expected) in [
+            (
+                response(vec![
+                    activity(&other_key, &other_key, Some("2026-04-04T07:00:00Z")),
+                    activity(&resource, &resource, Some("2026-03-03T07:00:00Z")),
+                ]),
+                Some("2026-03-03"),
+            ),
+            (response(vec![activity(&resource, &resource, None)]), None),
+            (response(vec![activity(&resource, &other_key, Some("2026-04-04T07:00:00Z"))]), None),
+            (ResponseTemplate::new(403), None),
+        ] {
+            let _mock = Mock::given(method("GET"))
+                .and(path(format!(
+                    "/v1/projects/{PROJECT}/locations/global/activityTypes/{SERVICE_ACCOUNT_KEY_ACTIVITY}/activities:query"
+                )))
+                .and(query_param("filter", format!("activities.full_resource_name=\"{resource}\"")))
+                .and(query_param("pageSize", "1"))
+                .and(header("authorization", "Bearer test-token"))
+                .respond_with(result)
+                .expect(1)
+                .mount_as_scoped(&server)
+                .await;
+            let date = fetch_service_account_key_last_used(
+                &client,
+                "test-token",
+                &endpoint,
+                PROJECT,
+                EMAIL,
+                KEY_ID,
+            )
+            .await;
+            assert_eq!(date.as_deref(), expected);
+        }
+        let date = fetch_service_account_key_last_used(
+            &client,
+            "test-token",
+            &endpoint,
+            PROJECT,
+            EMAIL,
+            "malformed\"",
+        )
+        .await;
+        assert_eq!(date, None);
+        assert_eq!(server.received_requests().await.unwrap().len(), 4);
+    }
 
     #[tokio::test]
     async fn inventory_pages_follow_opaque_tokens_and_preserve_query_scope() {

@@ -305,6 +305,10 @@ pub(crate) fn build_config_yaml(
     if user_set(sub_matches, "allow_internal_ips") {
         g.allow_internal_ips = Some(global_args.allow_internal_ips);
     }
+    if user_set(sub_matches, "enable_rule_internal_ips") {
+        g.enable_rule_internal_ips = Some(global_args.enable_rule_internal_ips);
+    }
+    g.enable_internal_ips_for = global_args.enable_internal_ips_for.clone();
     if user_set(sub_matches, "no_update_check") {
         g.no_update_check = Some(global_args.no_update_check);
     }

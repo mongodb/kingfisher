@@ -5,7 +5,10 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use aws_config::{BehaviorVersion, SdkConfig};
-use aws_credential_types::Credentials;
+use aws_credential_types::{
+    Credentials,
+    provider::{ProvideCredentials, SharedCredentialsProvider},
+};
 use aws_sdk_bedrock::Client as BedrockClient;
 use aws_sdk_dynamodb::Client as DynamoClient;
 use aws_sdk_ec2::Client as Ec2Client;
@@ -24,10 +27,10 @@ use aws_sdk_sns::Client as SnsClient;
 use aws_sdk_sqs::Client as SqsClient;
 use aws_sdk_ssm::Client as SsmClient;
 use aws_sdk_sts::Client as StsClient;
-use aws_smithy_types::retry::RetryConfig;
+use aws_smithy_types::{date_time::Format, retry::RetryConfig};
 use percent_encoding::percent_decode_str;
 use serde_json::Value;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::cli::commands::access_map::{AccessMapArgs, BlastRadiusOptions};
 
@@ -53,6 +56,7 @@ const MAX_BEDROCK_AVAILABILITY_CHECKS: usize = 8;
 const BEDROCK_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_REGION_SCOPES: usize = 8;
 const MAX_INVENTORY_PAGES: usize = 8;
+const KEY_USAGE_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub async fn map_access(args: &AccessMapArgs) -> Result<AccessMapResult> {
     let config = load_config_from_path(args.credential_path.as_deref()).await?;
@@ -142,10 +146,26 @@ async fn map_access_with_config_and_options(
     config: SdkConfig,
     options: &BlastRadiusOptions,
 ) -> Result<AccessMapResult> {
-    let regional = regional_configs(&config, &options.aws_regions)?;
+    let mut regional = regional_configs(&config, &options.aws_regions)?;
+    let credentials = long_lived_credentials(&config).await;
+    if let Some(credentials) = &credentials {
+        // Use the same long-lived key for the usage lookup and all mapping requests.
+        let provider = SharedCredentialsProvider::new(credentials.clone());
+        for config in &mut regional {
+            *config = config.to_builder().credentials_provider(provider.clone()).build();
+        }
+    }
     let config = regional.first().expect("region selection is nonempty").clone();
     let sts = StsClient::new(&config);
     let iam = IamClient::new(&config);
+
+    // Read the timestamp before the mapper's other authenticated requests can affect it.
+    let last_used_at = match &credentials {
+        Some(credentials) => get_access_key_last_used(&iam, credentials.access_key_id()).await,
+        None => None,
+    };
+    let credential_last_used_source =
+        last_used_at.as_ref().map(|_| "AWS IAM access key activity".into());
 
     let caller =
         sts.get_caller_identity().send().await.context("Failed to call sts:GetCallerIdentity")?;
@@ -321,12 +341,13 @@ async fn map_access_with_config_and_options(
             url: None,
             token_type: Some("access_key".into()),
             created_at: None,
-            last_used_at: None,
+            last_used_at,
             expires_at: None,
             user_id: Some(principal.authorization_arn().to_string()),
             scopes: Vec::new(),
         }),
         provider_metadata: Some(ProviderMetadata {
+            credential_last_used_source,
             betterleaks_analysis: None,
             version: None,
             enterprise: None,
@@ -334,6 +355,41 @@ async fn map_access_with_config_and_options(
         }),
         fingerprint: None,
     })
+}
+
+async fn long_lived_credentials(config: &SdkConfig) -> Option<Credentials> {
+    let provider = config.credentials_provider()?;
+    match tokio::time::timeout(KEY_USAGE_LOOKUP_TIMEOUT, provider.provide_credentials()).await {
+        // Temporary STS credentials do not have IAM access-key usage history.
+        Ok(Ok(credentials))
+            if credentials.session_token().is_none() && credentials.expiry().is_none() =>
+        {
+            Some(credentials)
+        }
+        Ok(Ok(_)) => None,
+        _ => {
+            debug!("AWS access-map: could not resolve credentials for the key usage lookup");
+            None
+        }
+    }
+}
+
+async fn get_access_key_last_used(iam: &IamClient, access_key_id: &str) -> Option<String> {
+    let request = iam.get_access_key_last_used().access_key_id(access_key_id).send();
+    match tokio::time::timeout(KEY_USAGE_LOOKUP_TIMEOUT, request).await {
+        Ok(Ok(output)) => {
+            output.access_key_last_used()?.last_used_date()?.fmt(Format::DateTime).ok()
+        }
+        Ok(Err(error)) => {
+            let code = error.as_service_error().and_then(ProvideErrorMetadata::code);
+            debug!(?code, "AWS access-map: IAM access-key usage lookup failed");
+            None
+        }
+        Err(_) => {
+            debug!("AWS access-map: IAM access-key usage lookup timed out");
+            None
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -4232,6 +4288,83 @@ mod tests {
         assert!(resources.is_empty());
         assert!(evidence.probes.is_empty());
         assert!(evidence.limitations.iter().any(|note| note.contains("no AWS region")));
+    }
+
+    #[tokio::test]
+    async fn key_usage_is_looked_up_before_mapping_and_is_best_effort() {
+        const KEY_ID: &str = "AKIAIOSFODNN7EXAMPLE";
+        const ARN: &str = "arn:aws:iam::123456789012:user/example";
+        let denied = ResponseTemplate::new(403).insert_header("content-type", "text/xml").set_body_string(
+            "<ErrorResponse><Error><Code>AccessDenied</Code><Message>denied</Message></Error></ErrorResponse>",
+        );
+
+        for (status, last_used_at, session_token) in [
+            (200, Some("2024-04-04T01:02:03Z"), None),
+            (200, None, None),
+            (403, None, None),
+            (403, None, Some("test-session")),
+        ] {
+            let server = MockServer::start().await;
+            let date_element = last_used_at
+                .map(|date| format!("<LastUsedDate>{date}</LastUsedDate>"))
+                .unwrap_or_default();
+            let key_usage_response = if status == 200 {
+                ResponseTemplate::new(200).insert_header("content-type", "text/xml").set_body_string(format!(
+                    "<GetAccessKeyLastUsedResponse xmlns=\"https://iam.amazonaws.com/doc/2010-05-08/\"><GetAccessKeyLastUsedResult><AccessKeyLastUsed><Region>N/A</Region>{date_element}<ServiceName>N/A</ServiceName></AccessKeyLastUsed><UserName>example</UserName></GetAccessKeyLastUsedResult></GetAccessKeyLastUsedResponse>"
+                ))
+            } else {
+                denied.clone()
+            };
+            Mock::given(method("POST"))
+                .and(body_string_contains("Action=GetAccessKeyLastUsed"))
+                .and(body_string_contains(format!("AccessKeyId={KEY_ID}")))
+                .respond_with(key_usage_response)
+                .expect(u64::from(session_token.is_none()))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(body_string_contains("Action=GetCallerIdentity"))
+                .respond_with(ResponseTemplate::new(200).insert_header("content-type", "text/xml").set_body_string(format!(
+                    "<GetCallerIdentityResponse xmlns=\"https://sts.amazonaws.com/doc/2011-06-15/\"><GetCallerIdentityResult><Arn>{ARN}</Arn><Account>123456789012</Account><UserId>AIDAEXAMPLE</UserId></GetCallerIdentityResult></GetCallerIdentityResponse>"
+                )))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(|_: &wiremock::Request| true)
+                .respond_with(denied.clone())
+                .with_priority(10)
+                .mount(&server)
+                .await;
+            let credentials = Credentials::new(
+                KEY_ID,
+                "test-secret",
+                session_token.map(str::to_owned),
+                None,
+                "test",
+            );
+            let config = SdkConfig::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .region(aws_config::Region::new("us-west-2"))
+                .credentials_provider(SharedCredentialsProvider::new(credentials))
+                .endpoint_url(server.uri())
+                .retry_config(RetryConfig::disabled())
+                .build();
+
+            let mapped = map_access_with_config(config).await.unwrap();
+            assert_eq!(mapped.identity.id, ARN);
+            assert_eq!(mapped.token_details.unwrap().last_used_at.as_deref(), last_used_at);
+            assert_eq!(
+                mapped.provider_metadata.unwrap().credential_last_used_source.as_deref(),
+                last_used_at.map(|_| "AWS IAM access key activity"),
+            );
+            let requests = server.received_requests().await.unwrap();
+            let first_action = if session_token.is_none() {
+                "Action=GetAccessKeyLastUsed"
+            } else {
+                "Action=GetCallerIdentity"
+            };
+            assert!(String::from_utf8_lossy(&requests[0].body).contains(first_action));
+        }
     }
 
     #[tokio::test]

@@ -1,15 +1,31 @@
+use std::time::Duration;
+
 use anyhow::{Context, Result, anyhow};
+use chrono::{DateTime, SecondsFormat};
 use reqwest::{Client, header};
 use serde::Deserialize;
 use serde_json::Value;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::{cli::commands::access_map::AccessMapArgs, validation::GLOBAL_USER_AGENT};
 
 use super::{
-    AccessMapResult, AccessSummary, AccessTokenDetails, PermissionSummary, ResourceExposure,
-    RoleBinding, Severity, build_recommendations,
+    AccessMapResult, AccessSummary, AccessTokenDetails, PermissionSummary, ProviderMetadata,
+    ResourceExposure, RoleBinding, Severity, build_recommendations,
 };
+
+const KEY_USAGE_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
+const KEY_USAGE_SOURCE: &str = "Zendesk current OAuth token";
+
+#[derive(Deserialize)]
+struct ZendeskTokenResponse {
+    token: ZendeskTokenUsage,
+}
+
+#[derive(Deserialize)]
+struct ZendeskTokenUsage {
+    used_at: Option<String>,
+}
 
 #[derive(Deserialize)]
 struct ZendeskUserResponse {
@@ -65,21 +81,41 @@ pub async fn map_access_from_token_and_subdomain(
     subdomain: &str,
 ) -> Result<AccessMapResult> {
     let subdomain = subdomain.trim().trim_matches('/').to_ascii_lowercase();
-    if subdomain.is_empty() {
-        return Err(anyhow!("Zendesk access-map requires a non-empty subdomain"));
+    if !(1..=63).contains(&subdomain.len())
+        || subdomain.starts_with('-')
+        || subdomain.ends_with('-')
+        || !subdomain.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err(anyhow!("Zendesk access-map requires a valid Zendesk subdomain"));
     }
 
     let base_url = format!("https://{subdomain}.zendesk.com");
+    map_access_from_token_at(token, &subdomain, &base_url).await
+}
+
+async fn map_access_from_token_at(
+    token: &str,
+    subdomain: &str,
+    base_url: &str,
+) -> Result<AccessMapResult> {
     let client = Client::builder()
         .user_agent(GLOBAL_USER_AGENT.as_str())
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .context("Failed to build Zendesk HTTP client")?;
 
     let mut risk_notes = Vec::new();
     let mut permissions = PermissionSummary::default();
 
+    // Query the supplied OAuth token's own activity before the other authenticated probes.
+    let last_used_at = fetch_token_last_used(&client, token, base_url).await;
+    let provider_metadata = last_used_at.as_ref().map(|_| ProviderMetadata {
+        credential_last_used_source: Some(KEY_USAGE_SOURCE.into()),
+        ..ProviderMetadata::default()
+    });
+
     // Fetch current user info
-    let user = fetch_current_user(&client, token, &base_url).await?;
+    let user = fetch_current_user(&client, token, base_url).await?;
 
     let user_id = user.id.map(|id| id.to_string()).unwrap_or_default();
     let user_email = user.email.clone();
@@ -121,7 +157,7 @@ pub async fn map_access_from_token_and_subdomain(
     };
 
     // Probe ticket count
-    let ticket_count = fetch_ticket_count(&client, token, &base_url).await;
+    let ticket_count = fetch_ticket_count(&client, token, base_url).await;
     match ticket_count {
         Ok(Some(count)) => {
             permissions.read_only.push("tickets:count".to_string());
@@ -134,7 +170,7 @@ pub async fn map_access_from_token_and_subdomain(
     }
 
     // Probe groups
-    let groups = fetch_groups(&client, token, &base_url).await.unwrap_or_else(|err| {
+    let groups = fetch_groups(&client, token, base_url).await.unwrap_or_else(|err| {
         warn!("Zendesk access-map: groups probe failed: {err}");
         Vec::new()
     });
@@ -164,7 +200,7 @@ pub async fn map_access_from_token_and_subdomain(
 
     let mut resources = vec![ResourceExposure {
         resource_type: "zendesk_instance".into(),
-        name: subdomain.clone(),
+        name: subdomain.to_owned(),
         permissions: vec![format!("role:{role}")],
         risk: severity_to_str(severity).to_string(),
         reason: "Zendesk instance accessible with this token".to_string(),
@@ -192,7 +228,7 @@ pub async fn map_access_from_token_and_subdomain(
         identity: AccessSummary {
             id: identity_id,
             access_type: role.clone(),
-            project: Some(subdomain.clone()),
+            project: Some(subdomain.to_owned()),
             tenant: None,
             account_id: Some(user_id.clone()),
         },
@@ -209,17 +245,45 @@ pub async fn map_access_from_token_and_subdomain(
             company: None,
             location: None,
             email: user_email,
-            url: Some(base_url),
+            url: Some(base_url.to_owned()),
             token_type: Some("bearer_token".into()),
             created_at: None,
-            last_used_at: None,
+            last_used_at,
             expires_at: None,
             user_id: Some(user_id),
             scopes: Vec::new(),
         }),
-        provider_metadata: None,
+        provider_metadata,
         fingerprint: None,
     })
+}
+
+async fn fetch_token_last_used(client: &Client, token: &str, base_url: &str) -> Option<String> {
+    let response = client
+        .get(format!("{base_url}/api/v2/oauth/tokens/current"))
+        .bearer_auth(token)
+        .header(header::ACCEPT, "application/json")
+        .timeout(KEY_USAGE_LOOKUP_TIMEOUT)
+        .send()
+        .await;
+    let response = match response {
+        Ok(response) if response.status().is_success() => response,
+        Ok(response) => {
+            debug!(status = %response.status(), "Zendesk access-map: current OAuth token usage unavailable");
+            return None;
+        }
+        Err(_) => {
+            debug!("Zendesk access-map: current OAuth token usage request failed");
+            return None;
+        }
+    };
+    let usage: ZendeskTokenResponse = response
+        .json()
+        .await
+        .inspect_err(|_| debug!("Zendesk access-map: invalid current OAuth token usage response"))
+        .ok()?;
+    let date = DateTime::parse_from_rfc3339(usage.token.used_at.as_deref()?).ok()?;
+    Some(date.to_utc().to_rfc3339_opts(SecondsFormat::AutoSi, true))
 }
 
 fn parse_zendesk_credentials(raw: &str) -> Result<(String, String)> {
@@ -319,5 +383,79 @@ fn severity_to_str(severity: Severity) -> &'static str {
         Severity::Medium => "medium",
         Severity::High => "high",
         Severity::Critical => "critical",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{header, method, path},
+    };
+
+    use super::*;
+
+    #[tokio::test]
+    async fn current_oauth_token_usage_is_looked_up_first_and_is_optional() {
+        const TOKEN: &str = "test-zendesk-token";
+        const TOKEN_PATH: &str = "/api/v2/oauth/tokens/current";
+        const UNUSED_RESPONSE_SECRET: &str = "test-refresh-token-not-for-reporting";
+        let other = MockServer::start().await;
+        Mock::given(path("/redirected"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&other)
+            .await;
+        for (response, expected) in [
+            (
+                ResponseTemplate::new(200).set_body_json(json!({"token": {
+                    "used_at": "2025-01-02T03:04:05+01:00",
+                    "refresh_token": UNUSED_RESPONSE_SECRET,
+                }})),
+                Some("2025-01-02T02:04:05Z"),
+            ),
+            (ResponseTemplate::new(200).set_body_json(json!({"token":{"used_at":null}})), None),
+            (ResponseTemplate::new(403), None),
+            (
+                ResponseTemplate::new(302)
+                    .insert_header("location", format!("{}/redirected", other.uri())),
+                None,
+            ),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path(TOKEN_PATH))
+                .and(header("authorization", format!("Bearer {TOKEN}")))
+                .respond_with(response)
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(path("/api/v2/users/me.json"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"user": {
+                    "id": 123, "name": "Zendesk user", "role": "agent", "active": true,
+                }})))
+                .mount(&server)
+                .await;
+
+            let mapped = map_access_from_token_at(TOKEN, "example", &server.uri()).await.unwrap();
+            assert_eq!(mapped.identity.id, "Zendesk user");
+            assert!(!serde_json::to_string(&mapped).unwrap().contains(UNUSED_RESPONSE_SECRET));
+            assert_eq!(mapped.token_details.unwrap().last_used_at.as_deref(), expected);
+            assert_eq!(
+                mapped.provider_metadata.and_then(|metadata| metadata.credential_last_used_source),
+                expected.map(|_| KEY_USAGE_SOURCE.to_owned()),
+            );
+            assert_eq!(server.received_requests().await.unwrap()[0].url.path(), TOKEN_PATH);
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_subdomains_that_could_send_tokens_to_another_host() {
+        for subdomain in ["", "example.test/path", "example.test#", "example.test?", "user@"] {
+            let error =
+                map_access_from_token_and_subdomain("test-token", subdomain).await.unwrap_err();
+            assert!(error.to_string().contains("valid Zendesk subdomain"));
+        }
     }
 }

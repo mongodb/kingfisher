@@ -567,6 +567,11 @@ fn config_init_round_trips_supplied_flags_only() {
         "https://hooks.slack.com/services/T0/B0/AAA",
         "--tls-mode",
         "lax",
+        "--enable-rule-internal-ips",
+        "--enable-internal-ips-for",
+        "custom.vault-*",
+        "--enable-internal-ips-for",
+        "acme.internal",
     ];
     let matches = CommandLineArgs::command().try_get_matches_from(argv).unwrap();
     let parsed = CommandLineArgs::from_arg_matches(&matches).unwrap();
@@ -607,6 +612,8 @@ fn config_init_round_trips_supplied_flags_only() {
     assert_eq!(cfg.alerts.webhooks[0].url, "https://hooks.slack.com/services/T0/B0/AAA");
 
     assert!(matches!(cfg.global.tls_mode, Some(kingfisher::cli::config::ConfigTlsMode::Lax)));
+    assert_eq!(cfg.global.enable_rule_internal_ips, Some(true));
+    assert_eq!(cfg.global.enable_internal_ips_for, ["custom.vault-*", "acme.internal"]);
 }
 
 #[test]
@@ -755,16 +762,21 @@ fn global_section_updates_global_args_when_cli_default() {
 global:
   tls_mode: lax
   allow_internal_ips: true
+  enable_rule_internal_ips: true
+  enable_internal_ips_for: ["custom.vault-*"]
   endpoints:
     - github=https://ghe.example.com/api/v3/
 "#;
     let cfg = parse_str(yaml).unwrap();
-    let (args, matches) = parse(&["kingfisher", "scan", "."]);
+    let (args, matches) =
+        parse(&["kingfisher", "scan", ".", "--enable-internal-ips-for", "acme.internal"]);
     let mut global_args = args.global_args.clone();
     let mut scan_args = into_scan(args);
     super::apply_config(&mut scan_args, &mut global_args, &cfg, matches.subcommand_matches("scan"));
     assert_eq!(global_args.tls_mode, kingfisher::cli::global::TlsMode::Lax);
     assert!(global_args.allow_internal_ips);
+    assert!(global_args.enable_rule_internal_ips);
+    assert_eq!(global_args.enable_internal_ips_for, ["acme.internal", "custom.vault-*"]);
     assert_eq!(global_args.endpoint.len(), 1);
 }
 

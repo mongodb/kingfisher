@@ -86,6 +86,35 @@ fn mismatched_or_unrenderable_checksums_discard_findings() {
 }
 
 #[test]
+fn legacy_hash_and_hmac_helpers_remain_available_in_offline_checksums() {
+    for (template, expected) in [
+        (
+            "{{ MATCH | sha256 }}",
+            "1efdb41ceb836c393507da3e86167ada43d7670d7da0ab8f12b5b244d9597db0",
+        ),
+        ("{{ MATCH | hmac_sha1: 'key' }}", "3Po1eXMh4Gm0UwUZ5DWYyNemN9M="),
+        ("{{ MATCH | hmac_sha256: 'key' }}", "6o8TSQIpN6HZmCDkZQ63MJmfSpCyOMVa9JDEwxGOiro="),
+        (
+            "{{ MATCH | hmac_sha384: 'key' }}",
+            "YVHrcsLvBYRIvLfqlbJywu6+Okvwa6bgVEvjXS2aCp7faqBb1ccZtqZYOWSZHus0",
+        ),
+    ] {
+        let mut requirements = json!({"checksum": {
+            "actual": {"template": template},
+            "expected": expected
+        }});
+        assert_requirement(
+            r"(demo_[a-z0-9]{16})",
+            requirements.clone(),
+            "demo_abcdefgh12345678 demo_abcdefgh12345679",
+            &["demo_abcdefgh12345678"],
+        );
+        requirements["checksum"]["expected"] = json!("incorrect checksum");
+        assert_requirement(r"(demo_[a-z0-9]{16})", requirements, "demo_abcdefgh12345678", &[]);
+    }
+}
+
+#[test]
 fn luhn_and_iban_filters_work_in_offline_checksum_templates() {
     assert_requirement(
         r"card ([0-9][0-9 -]{11,25}[0-9])",

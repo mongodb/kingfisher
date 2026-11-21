@@ -4,9 +4,11 @@ Shared content, location, provenance, entropy, and validation-outcome types for
 embedding Kingfisher in Rust 1.99+ applications. The `2.x` public Rust API follows
 semantic versioning; breaking changes require a new major version.
 
+**No Git executable required.** Git object IDs and commit metadata use native Rust types.
+
 ```toml
 [dependencies]
-kingfisher-core = "2.0.0"
+kingfisher-core = "2.1.0"
 ```
 
 ```rust

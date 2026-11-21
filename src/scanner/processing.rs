@@ -8,10 +8,7 @@ use crate::{
     blob::{Blob, BlobMetadata},
     content_type::ContentInspector,
     location::LocationMapping,
-    matcher::{
-        Match, Matcher, OwnedBlobMatch, ScanResult, SerializableCaptures,
-        should_attempt_context_verification,
-    },
+    matcher::{Match, Matcher, NativeScan, OwnedBlobMatch, ScanResult, SerializableCaptures},
     origin::{Origin, OriginSet},
     scanner::repos::DatastoreMessage,
 };
@@ -64,18 +61,48 @@ impl<'a> BlobProcessor<'a> {
         no_base64: bool,
         fast_mode: bool,
     ) -> Result<Option<ProcessedBlob>> {
+        self.run_with_native_prepass(
+            origin,
+            blob,
+            no_dedup,
+            redact,
+            no_base64,
+            fast_mode,
+            NativeScan::Required,
+        )
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    pub(crate) fn run_with_native_prepass(
+        &mut self,
+        origin: OriginSet,
+        blob: Blob,
+        no_dedup: bool,
+        redact: bool,
+        no_base64: bool,
+        fast_mode: bool,
+        native_scan: NativeScan,
+    ) -> Result<Option<ProcessedBlob>> {
         let _span = debug_span!("matcher", temp_id = blob.temp_id()).entered();
         let t1 = Instant::now();
-        let language_hint = if fast_mode || !should_attempt_context_verification(blob.len()) {
-            None
-        } else {
+        let language_hint = || {
+            if fast_mode {
+                return None;
+            }
             origin
                 .iter()
                 .find_map(|p| p.blob_path())
                 .and_then(|path| ContentInspector::default().guess_language(path, blob.bytes()))
         };
-        let res =
-            self.matcher.scan_blob(&blob, &origin, language_hint, redact, no_dedup, no_base64)?;
+        let res = self.matcher.scan_blob_with_language_hint(
+            &blob,
+            &origin,
+            language_hint,
+            redact,
+            no_dedup,
+            no_base64,
+            native_scan,
+        )?;
         let scan_us = t1.elapsed().as_micros();
         let matches = match res {
             // blob already seen, but with no matches; nothing to do!

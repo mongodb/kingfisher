@@ -9,14 +9,6 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 
-/// Test that `--tls-mode` is recognized as a valid global option.
-#[test]
-fn tls_mode_flag_is_recognized() {
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"));
-    cmd.arg("--tls-mode=strict").arg("--help");
-    cmd.assert().success();
-}
-
 /// Test that all TLS mode values are accepted.
 #[test]
 fn tls_mode_accepts_all_values() {

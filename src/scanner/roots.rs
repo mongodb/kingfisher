@@ -7,6 +7,7 @@ use std::{
 };
 
 use anyhow::Result;
+use rayon::prelude::*;
 use tracing::debug;
 
 /// Expands directory inputs into scan roots and discovered repositories.
@@ -25,6 +26,7 @@ pub(super) fn expand_repo_roots(
 ) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
     let mut scan_roots = Vec::new();
     let mut repo_roots = Vec::new();
+    let parallel = rayon::current_num_threads() > 1;
 
     for root in input_roots {
         if is_symlink(root) {
@@ -41,11 +43,14 @@ pub(super) fn expand_repo_roots(
             continue;
         }
 
-        let (mut found, non_repo_content) = find_repo_roots_in_dir(root, exclude_globset)?;
+        let mut found = Vec::new();
+        let non_repo_content =
+            find_repo_roots_in_dir(root, exclude_globset, false, parallel, &mut found);
         if found.is_empty() {
             scan_roots.push(root.clone());
             continue;
         }
+        found.sort();
         repo_roots.extend(found.iter().cloned());
         scan_roots.append(&mut found);
         if non_repo_content {
@@ -70,62 +75,107 @@ fn deduplicate_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 /// with `follow_links(false)` and would not traverse them either; a link is
 /// reported as non-repository content so the grouped root covers it).
 ///
-/// Returns the repository roots plus whether any non-repository content was
-/// seen, so the caller can decide whether a grouped root is needed.
+/// Appends repository roots to `repos` and returns whether any non-repository
+/// content was seen, so the caller can decide whether a grouped root is needed.
 fn find_repo_roots_in_dir(
     dir: &Path,
     exclude_globset: Option<&std::sync::Arc<globset::GlobSet>>,
-) -> Result<(Vec<PathBuf>, bool)> {
-    let mut repos = Vec::new();
-    // Mirror the filesystem walker, which logs and skips unreadable entries
-    // instead of failing the scan: this pre-scan also runs before --exclude
-    // filtering, so an unreadable — and possibly excluded — descendant must
-    // not abort an otherwise valid scan.
+    check_for_repo: bool,
+    parallel: bool,
+    repos: &mut Vec<PathBuf>,
+) -> bool {
+    // Children are deferred until we know whether their parent is a repository.
+    // Recheck their directory type in case a path changed in the meantime.
+    if check_for_repo && fs::symlink_metadata(dir).is_ok_and(|md| !md.is_dir()) {
+        return true;
+    }
+
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(error) => {
+            // A searchable directory can allow marker lookups when listing fails.
+            if check_for_repo && is_git_repository_root(dir) {
+                repos.push(dir.to_owned());
+                return false;
+            }
             debug!(
                 "Skipping unreadable directory while expanding repo roots: {}: {error}",
                 dir.display()
             );
-            return Ok((repos, true));
+            return true;
         }
     };
+    let mut child_dirs = Vec::new();
     let mut non_repo_content = false;
+    let mut probe_markers = false;
+    let mut has_head = false;
+    let mut has_objects = false;
     for entry in entries {
         let entry = match entry {
             Ok(entry) => entry,
             Err(error) => {
                 debug!("Skipping entry while expanding repo roots: {error}");
+                probe_markers = true;
                 continue;
             }
         };
+        // Marker names gate path probes, which still decide whether this is a
+        // repository under the filesystem's name and symlink semantics. Check
+        // marker names before exclusions, which apply to traversed paths. A
+        // non-ASCII name may also match a marker on a case-folding filesystem.
+        if check_for_repo && !probe_markers {
+            let name = entry.file_name();
+            let name = name.as_encoded_bytes();
+            probe_markers = name.eq_ignore_ascii_case(b".git") || !name.is_ascii();
+            has_head |= name.eq_ignore_ascii_case(b"HEAD");
+            has_objects |= name.eq_ignore_ascii_case(b"objects");
+        }
         let child_path = entry.path();
         if exclude_globset.as_ref().is_some_and(|globset| globset.is_match(&child_path)) {
             debug!("Skipping {} due to --exclude while expanding repo roots", child_path.display());
             continue;
         }
-        if is_symlink(&child_path) {
-            // Never classify a symlink as a repository root: the walker does
-            // not descend into symlinked directories, so the link target
-            // would be scanned (and audited) even though it is not part of
-            // the tree. The grouped root still covers the link entry itself.
+        // Directory entries can usually identify files and symlinks without
+        // probing the path or looking up Git markers beneath it.
+        if entry.file_type().is_ok_and(|kind| !kind.is_dir()) {
             non_repo_content = true;
-            continue;
-        }
-        if is_git_repository_root(&child_path) {
-            repos.push(child_path);
-        } else if child_path.is_dir() {
-            let (mut child_repos, child_content) =
-                find_repo_roots_in_dir(&child_path, exclude_globset)?;
-            repos.append(&mut child_repos);
-            non_repo_content |= child_content;
         } else {
-            non_repo_content = true;
+            child_dirs.push(child_path);
         }
     }
-    repos.sort();
-    Ok((repos, non_repo_content))
+    if check_for_repo && (probe_markers || has_head && has_objects) && is_git_repository_root(dir) {
+        repos.push(dir.to_owned());
+        return false;
+    }
+    if parallel && child_dirs.len() > 1 {
+        // Split at the first sibling directories. Each worker keeps a local
+        // result and traverses its assigned subtrees serially.
+        let (mut discovered, has_loose_content) = child_dirs
+            .into_par_iter()
+            .fold(
+                || (Vec::new(), false),
+                |(mut found, mut loose), child| {
+                    loose |=
+                        find_repo_roots_in_dir(&child, exclude_globset, true, false, &mut found);
+                    (found, loose)
+                },
+            )
+            .reduce(
+                || (Vec::new(), false),
+                |(mut found, loose), (mut others, other_loose)| {
+                    found.append(&mut others);
+                    (found, loose || other_loose)
+                },
+            );
+        repos.append(&mut discovered);
+        non_repo_content |= has_loose_content;
+    } else {
+        for child in child_dirs {
+            non_repo_content |=
+                find_repo_roots_in_dir(&child, exclude_globset, true, parallel, repos);
+        }
+    }
+    non_repo_content
 }
 
 pub(super) fn is_git_repository_root(root: &Path) -> bool {
@@ -141,6 +191,26 @@ fn is_symlink(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parallel_discovery_keeps_sorted_roots_through_a_single_directory() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().to_owned();
+        let workspace = root.join("workspace");
+        let first = workspace.join("a");
+        let last = workspace.join("z");
+        fs::create_dir_all(last.join(".git"))?;
+        fs::create_dir_all(first.join(".git"))?;
+        fs::write(workspace.join("loose.txt"), b"content")?;
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(2).build()?;
+
+        let (scan_roots, repo_roots) =
+            pool.install(|| expand_repo_roots(std::slice::from_ref(&root), None))?;
+
+        assert_eq!(scan_roots, [first.clone(), last.clone(), root]);
+        assert_eq!(repo_roots, [first, last]);
+        Ok(())
+    }
 
     #[test]
     fn expand_repo_roots_discovers_nested_repositories() {
@@ -186,6 +256,24 @@ mod tests {
     }
 
     #[test]
+    fn expand_repo_roots_keeps_bare_and_gitfile_repositories_with_loose_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path();
+        let bare = base.join("bare.git");
+        let worktree = base.join("worktree");
+        fs::create_dir_all(bare.join("objects")).unwrap();
+        fs::write(bare.join("HEAD"), b"ref: refs/heads/main\n").unwrap();
+        fs::create_dir(&worktree).unwrap();
+        fs::write(worktree.join(".git"), b"gitdir: ../bare.git\n").unwrap();
+        fs::write(base.join("notes.txt"), b"a regular file").unwrap();
+
+        let (roots, repos) = expand_repo_roots(&[base.to_path_buf()], None).unwrap();
+
+        assert_eq!(roots, [bare.clone(), worktree.clone(), base.to_path_buf()]);
+        assert_eq!(repos, [bare, worktree]);
+    }
+
+    #[test]
     fn expand_repo_roots_skips_excluded_subtrees() {
         let temp = tempfile::tempdir().unwrap();
         let base = temp.path();
@@ -206,6 +294,36 @@ mod tests {
         assert!(!roots.iter().any(|root| root.starts_with(base.join("deps"))));
         assert!(roots.contains(&base.join("src/api")));
         assert!(repos.contains(&base.join("src/api")));
+    }
+
+    #[test]
+    fn expand_repo_roots_recognizes_excluded_git_markers() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path();
+        let repo = base.join("repo");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        let exclude = crate::build_exclude_globset(&[".git".to_string()]).unwrap().unwrap();
+
+        let (roots, repos) = expand_repo_roots(&[base.to_path_buf()], Some(&exclude)).unwrap();
+        assert_eq!(roots, vec![repo.clone()]);
+        assert_eq!(repos, vec![repo]);
+    }
+
+    #[test]
+    fn expand_repo_roots_respects_filesystem_case_matching() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path();
+        let repo = base.join("repo");
+        fs::create_dir_all(repo.join(".GiT")).unwrap();
+
+        let (roots, repos) = expand_repo_roots(&[base.to_path_buf()], None).unwrap();
+        if repo.join(".git").exists() {
+            assert_eq!(roots, vec![repo.clone()]);
+            assert_eq!(repos, vec![repo]);
+        } else {
+            assert_eq!(roots, vec![base.to_path_buf()]);
+            assert!(repos.is_empty());
+        }
     }
 
     #[test]

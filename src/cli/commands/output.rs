@@ -51,7 +51,7 @@ pub enum ReportOutputFormat {
     /// TOON format optimized for LLMs and agents
     Toon,
 
-    /// SARIF format (experimental)
+    /// SARIF 2.1.0 (stable and supported)
     Sarif,
 
     /// Standalone HTML audit report
@@ -75,7 +75,6 @@ pub enum GitHubOutputFormat {
     /// BSON (binary JSON) format
     Bson,
 
-    /// SARIF format (experimental)
     Sarif,
 }
 

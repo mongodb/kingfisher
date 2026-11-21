@@ -1453,12 +1453,32 @@ fn validate_provider_expression(
                                 | "substring"
                                 | "base64.encode"
                                 | "base64.decode"
+                                | "base64url.encode"
+                                | "base64url.decode"
                                 | "hex.encode"
+                                | "hex.decode"
                                 | "crypto.sha1"
                                 | "crypto.sha256"
+                                | "crypto.sha384"
+                                | "crypto.sha512"
                                 | "crypto.md5"
                                 | "crypto.hmacSha1"
                                 | "crypto.hmacSha256"
+                                | "crypto.hmacSha384"
+                                | "crypto.hmacSha512"
+                                | "crypto.ecPublicKey"
+                                | "crypto.ecdh"
+                                | "crypto.ecdsaSign"
+                                | "crypto.ecdsaVerify"
+                                | "crypto.aesGcmEncrypt"
+                                | "crypto.aesGcmDecrypt"
+                                | "crypto.hkdfSha256"
+                                | "crypto.pbkdf2Sha256"
+                                | "crypto.ed25519PublicKey"
+                                | "crypto.ed25519Sign"
+                                | "crypto.ed25519Verify"
+                                | "crypto.randomBytes"
+                                | "crypto.constantTimeEqual"
                                 | "strings.urlQueryEscape"
                                 | "strings.splitTrim"
                                 | "strings.obfuscate"
@@ -2556,6 +2576,45 @@ regex = 'new-token'
                 .unwrap();
         assert!(yaml.contains("id: custom.generic-api-key"));
         assert!(!yaml.contains("id: custom.github-pat\n"));
+    }
+
+    #[test]
+    fn cryptographic_extensions_are_available_only_in_provider_programs() {
+        let calls = [
+            "hex.decode(\"ff00\")",
+            "base64url.encode(bytes(\"payload\"))",
+            "base64url.decode(\"_wA\")",
+            "crypto.sha384(\"message\")",
+            "crypto.sha512(\"message\")",
+            "crypto.hmacSha384(\"key\", \"message\")",
+            "crypto.hmacSha512(\"key\", \"message\")",
+            "crypto.ecPublicKey(\"P-256\", finding.secret)",
+            "crypto.ecdh(\"X25519\", finding.secret, bytes(\"peer\"))",
+            "crypto.ecdsaSign(\"P-256\", finding.secret, \"message\")",
+            "crypto.ecdsaVerify(\"P-384\", \"public\", \"message\", \"signature\", \"der\")",
+            "crypto.aesGcmEncrypt(\"key\", \"nonce\", \"message\")",
+            "crypto.aesGcmDecrypt(\"key\", \"nonce\", \"sealed\", \"aad\")",
+            "crypto.hkdfSha256(\"ikm\", \"salt\", \"info\", 32)",
+            "crypto.pbkdf2Sha256(\"password\", \"salt\", 4096, 32)",
+            "crypto.ed25519PublicKey(finding.secret)",
+            "crypto.ed25519Sign(finding.secret, \"message\")",
+            "crypto.ed25519Verify(\"public\", \"message\", \"signature\")",
+            "crypto.randomBytes(12)",
+            "crypto.constantTimeEqual(\"a\", \"b\")",
+        ];
+        for source in calls {
+            let ast = parse_expression(source).unwrap();
+            validate_validation_expression(&ast).unwrap();
+            validate_revocation_expression(&ast).unwrap();
+            validate_analysis_expression(&ast).unwrap();
+            assert!(validate_filter_expression(&ast).is_err(), "{source}");
+            let toml = format!(
+                "[[rules]]\nid='cryptographic-example'\nregex='(acme_[a-z0-9]{{32}})'\nvalidate='''let output = {source}; {{result: \"unknown\"}}'''\n"
+            );
+            assert!(import_custom_config(&toml, "crypto-extension").is_ok(), "{source}");
+        }
+        let unknown = parse_expression("crypto.ecdsaTypo(\"key\")").unwrap();
+        assert!(validate_validation_expression(&unknown).is_err());
     }
 
     #[test]

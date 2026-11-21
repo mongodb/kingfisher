@@ -1,5 +1,9 @@
 //! Collection of small Liquid filters that make HTTP validations & API-signing templates easy
 
+mod crypto;
+
+pub use crypto::{TemplateWorkBudget, template_uses_crypto_filters};
+
 use base64::{Engine, engine::general_purpose};
 use bip39::{Language, Mnemonic};
 use crc32fast::Hasher;
@@ -1290,7 +1294,14 @@ static_filter!(
     |_input: &dyn ValueView| -> String { Uuid::new_v4().to_string() }
 );
 
+/// Register every Kingfisher filter, including the cryptographic adapters used by
+/// validation and revocation templates.
 pub fn register_all(builder: liquid::ParserBuilder) -> liquid::ParserBuilder {
+    crypto::register_all(register_checksum_filters(builder))
+}
+
+/// Preserve legacy checksum filters and add the inexpensive SHA-2 and HMAC helpers.
+pub(crate) fn register_checksum_filters(builder: liquid::ParserBuilder) -> liquid::ParserBuilder {
     builder
         // zero-arg helpers
         .filter(Replace)
@@ -1330,6 +1341,9 @@ pub fn register_all(builder: liquid::ParserBuilder) -> liquid::ParserBuilder {
         .filter(HmacSha1)
         .filter(HmacSha384)
         .filter(HmacSha384Hex)
+        .filter(crypto::Sha384Hex)
+        .filter(crypto::Sha512Hex)
+        .filter(crypto::HmacSha512)
 }
 
 #[cfg(test)]

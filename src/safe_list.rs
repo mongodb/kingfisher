@@ -142,9 +142,12 @@ static USER_SAFE_SKIPWORDS: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| Mute
 /// If the pattern fails to compile, the error is returned so the caller can
 /// surface it.
 pub fn add_user_regex(pattern: &str) -> std::result::Result<(), regex::Error> {
-    let re = Regex::new(pattern)?;
-    USER_SAFE_REGEXES.lock().unwrap().push(re);
+    register_user_regex(Regex::new(pattern)?);
     Ok(())
+}
+
+pub(crate) fn register_user_regex(regex: Regex) {
+    USER_SAFE_REGEXES.lock().unwrap().push(regex);
 }
 
 /// Register an allow-list skipword provided by the user. Comparisons are
