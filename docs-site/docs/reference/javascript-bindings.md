@@ -1,6 +1,6 @@
 ---
 title: "JavaScript and TypeScript SDK"
-description: "Explore the prepared Kingfisher Node SDK 1.1.0 with native Node-API detection, validation, revocation, and VS Code workspace extensions."
+description: "Explore Kingfisher's upcoming stable Node SDK (1.1.0) with native Node-API detection, validation, revocation, and VS Code workspace extensions."
 ---
 
 # Kingfisher for JavaScript and TypeScript
