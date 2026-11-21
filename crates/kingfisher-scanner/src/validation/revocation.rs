@@ -1,13 +1,18 @@
 //! Shared HTTP revocation execution used by the CLI and language bindings.
 //! Callers must explicitly authorize revocation and configure transport policy.
-use super::{build_request_builder, validate_response};
+use super::{
+    SSRF_BLOCKED_MESSAGE, SsrfBlockedError, check_url_resolvable,
+    http_validation::build_request_builder_with_budget, validate_response,
+};
 use anyhow::{Context, Result, anyhow, bail};
 use kingfisher_rules::{
     HttpMultiStepRevocation, HttpRequest, HttpValidation, ResponseExtractor, RevocationStep,
+    liquid_filters::{TemplateWorkBudget, template_uses_crypto_filters},
 };
 use liquid::{Object, model::Value};
+use liquid_core::ValueView;
 use regex::Regex;
-use reqwest::{Client, RequestBuilder, Response, StatusCode};
+use reqwest::{Client, RequestBuilder, Response, StatusCode, Url};
 use serde::Serialize;
 use std::time::Duration;
 use tracing::debug;
@@ -36,7 +41,6 @@ fn selected_url<'a>(request: &'a HttpRequest, globals: &Object) -> Result<&'a st
     if request.fallback_urls.is_empty() {
         return Ok(&request.url);
     }
-    use liquid_core::ValueView;
     let index = globals
         .get("VALIDATION_ENDPOINT_INDEX")
         .and_then(|value| value.to_kstr().parse::<usize>().ok())
@@ -50,11 +54,14 @@ async fn send_revocation_request(
     request: RequestBuilder,
     retries: u32,
     may_mutate: bool,
+    timeout: Duration,
+    allow_internal_ips: bool,
 ) -> Result<Response> {
     // Resolve deferred builder errors before any request can be submitted.
     let (client, request) = request.build_split();
     let request = request.context("Cannot build revocation request")?;
     for attempt in 0..=retries {
+        check_revocation_target(request.url(), timeout, allow_internal_ips).await?;
         let response = client
             .execute(request.try_clone().context("Cannot clone revocation request")?)
             .await
@@ -84,6 +91,30 @@ async fn send_revocation_request(
     unreachable!("bounded HTTP retry loop always returns")
 }
 
+async fn check_revocation_target(
+    url: &Url,
+    timeout: Duration,
+    allow_internal_ips: bool,
+) -> Result<()> {
+    if allow_internal_ips {
+        return Ok(());
+    }
+    anyhow::ensure!(
+        matches!(url.scheme(), "http" | "https")
+            && url.username().is_empty()
+            && url.password().is_none(),
+        "Revocation requires an HTTP(S) URL without user information"
+    );
+    match super::limits::timeout(timeout, check_url_resolvable(url, false)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) if error.is::<SsrfBlockedError>() => {
+            Err(SsrfBlockedError(SSRF_BLOCKED_MESSAGE.into()).into())
+        }
+        Ok(Err(_)) => bail!("Could not resolve revocation target"),
+        Err(_) => bail!("Timed out resolving revocation target"),
+    }
+}
+
 /// Result of a direct revocation attempt.
 #[derive(Debug, Clone, Serialize)]
 pub struct DirectRevocationResult {
@@ -100,44 +131,81 @@ pub struct DirectRevocationResult {
 }
 
 /// Render the revocation URL using Liquid templates.
-async fn render_and_parse_url(
+fn render_and_parse_url(
     parser: &liquid::Parser,
     globals: &Object,
     url_template: &str,
-) -> Result<reqwest::Url> {
+    budget: &mut TemplateWorkBudget,
+) -> Result<Url> {
     let template =
-        parser.parse(url_template).map_err(|e| anyhow!("Failed to parse URL template: {}", e))?;
+        parser.parse(url_template).map_err(|_| anyhow!("Failed to parse URL template"))?;
 
     let rendered =
-        template.render(globals).map_err(|e| anyhow!("Failed to render URL template: {}", e))?;
+        budget.render(&template, globals).map_err(|_| anyhow!("Failed to render URL template"))?;
 
-    reqwest::Url::parse(&rendered).map_err(|e| anyhow!("Invalid URL '{}': {}", rendered, e))
+    Url::parse(&rendered).map_err(|_| anyhow!("Invalid rendered URL"))
 }
 
-async fn revocation_url(
+fn revocation_url(
     parser: &liquid::Parser,
     globals: &Object,
     request: &HttpRequest,
-) -> Result<reqwest::Url> {
-    use liquid_core::ValueView;
-    let url = render_and_parse_url(parser, globals, selected_url(request, globals)?).await?;
+    budget: &mut TemplateWorkBudget,
+) -> Result<Url> {
+    let url = render_and_parse_url(parser, globals, selected_url(request, globals)?, budget)?;
+    if requires_accepted_origin(request, globals) {
+        ensure_accepted_origin(&url, globals)?;
+    }
+    Ok(url)
+}
+
+fn requires_accepted_origin(request: &HttpRequest, globals: &Object) -> bool {
     let fallback_validation = globals
         .get("VALIDATION_ENDPOINT_COUNT")
         .is_some_and(|value| value.to_kstr().parse::<usize>().is_ok_and(|count| count > 1))
         && globals.get("VALIDATION_ENDPOINT_INDEX").is_none_or(|value| value.to_kstr() != "0");
-    if fallback_validation
+    fallback_validation
         || globals.contains_key("VALIDATION_FALLBACK_ID")
         || !request.fallback_urls.is_empty()
+}
+
+fn ensure_accepted_origin(url: &Url, globals: &Object) -> Result<()> {
+    let accepted_origin = globals
+        .get("VALIDATION_ORIGIN")
+        .context("Fallback revocation requires VALIDATION_ORIGIN from successful validation")?;
+    anyhow::ensure!(
+        accepted_origin.to_kstr() == url.origin().ascii_serialization(),
+        "Revocation must use the origin that accepted the credential; use VALIDATION_ORIGIN or a matching URL list"
+    );
+    Ok(())
+}
+
+/// Read only the origin when the rest of a template depends on a provider response.
+fn fixed_template_origin(template: &str, globals: &Object) -> Option<Url> {
+    let template = template.trim_start();
+    if let Some((expression, tail)) =
+        template.strip_prefix("{{").and_then(|rest| rest.split_once("}}"))
     {
-        let accepted_origin = globals
-            .get("VALIDATION_ORIGIN")
-            .context("Fallback revocation requires VALIDATION_ORIGIN from successful validation")?;
-        anyhow::ensure!(
-            accepted_origin.to_kstr() == url.origin().ascii_serialization(),
-            "Revocation must use the origin that accepted the credential; use VALIDATION_ORIGIN or a matching URL list"
-        );
+        let name = expression.trim().trim_matches('-').trim();
+        if matches!(name, "VALIDATION_ORIGIN" | "VALIDATION_URL")
+            && (tail.is_empty() || tail.starts_with(['/', '?', '#']))
+        {
+            return Url::parse(&globals.get(name)?.to_kstr()).ok();
+        }
+        return None;
     }
-    Ok(url)
+    let (scheme, rest) = template.split_once("://")?;
+    if !scheme.eq_ignore_ascii_case("https") && !scheme.eq_ignore_ascii_case("http") {
+        return None;
+    }
+    let boundary = rest.find(['/', '?', '#']).map(|index| scheme.len() + 3 + index);
+    let authority_end = boundary.unwrap_or(template.len());
+    if template[..authority_end].contains(['{', '}', '\\']) {
+        return None;
+    }
+    // Keep the delimiter so URL parsing sees any spaces before it inside the authority.
+    let prefix_end = boundary.map_or(authority_end, |index| index + 1);
+    Url::parse(&template[..prefix_end]).ok()
 }
 
 /// Render Liquid templates within an extractor's string fields.
@@ -148,15 +216,19 @@ fn render_extractor(
     extractor: &ResponseExtractor,
     parser: &liquid::Parser,
     globals: &Object,
+    budget: &mut TemplateWorkBudget,
 ) -> Result<ResponseExtractor> {
-    let render = |template_str: &str| -> Result<String> {
+    let mut render = |template_str: &str| -> Result<String> {
         if !template_str.contains("{{") && !template_str.contains("{%") {
             return Ok(template_str.to_string());
         }
         let template = parser
             .parse(template_str)
-            .map_err(|e| anyhow!("Failed to parse extractor template: {}", e))?;
-        template.render(globals).map_err(|e| anyhow!("Failed to render extractor template: {}", e))
+            .map_err(|_| anyhow!("Failed to parse extractor template"))?;
+        // Do not expose Liquid's runtime input/source-expression error contexts.
+        budget
+            .render(&template, globals)
+            .map_err(|_| anyhow!("Failed to render extractor template"))
     };
 
     match extractor {
@@ -251,6 +323,29 @@ pub async fn execute_http_revocation(
     timeout: Duration,
     retries: u32,
 ) -> Result<DirectRevocationResult> {
+    execute_http_revocation_with_policy(
+        http_revocation,
+        globals,
+        client,
+        parser,
+        timeout,
+        retries,
+        true,
+    )
+    .await
+}
+
+/// Execute HTTP revocation with the caller's target address policy.
+#[doc(hidden)]
+pub async fn execute_http_revocation_with_policy(
+    http_revocation: &HttpValidation,
+    globals: &Object,
+    client: &Client,
+    parser: &liquid::Parser,
+    timeout: Duration,
+    retries: u32,
+    allow_internal_ips: bool,
+) -> Result<DirectRevocationResult> {
     anyhow::ensure!(http_revocation.auth.is_none(), "OAuth2 auth is supported for validation only");
     let matchers = http_revocation
         .request
@@ -258,11 +353,12 @@ pub async fn execute_http_revocation(
         .as_deref()
         .filter(|matchers| !matchers.is_empty())
         .context("Revocation response_matcher is required")?;
-    let url = revocation_url(parser, globals, &http_revocation.request).await?;
+    let mut budget = TemplateWorkBudget::default();
+    let url = revocation_url(parser, globals, &http_revocation.request, &mut budget)?;
 
     debug!("Submitting HTTP revocation");
 
-    let request_builder = build_request_builder(
+    let request_builder = build_request_builder_with_budget(
         client,
         &http_revocation.request.method,
         &url,
@@ -271,11 +367,14 @@ pub async fn execute_http_revocation(
         timeout,
         parser,
         globals,
+        &mut budget,
     )
     .map_err(|e| anyhow!("Failed to build request: {e}"))?;
 
     let response =
-        send_revocation_request(request_builder, retries, true).await.context("Request failed")?;
+        send_revocation_request(request_builder, retries, true, timeout, allow_internal_ips)
+            .await
+            .context("Request failed")?;
 
     let status = response.status();
     let headers = response.headers().clone();
@@ -314,15 +413,24 @@ async fn execute_revocation_step(
     retries: u32,
     step_number: usize,
     is_final_step: bool,
+    prepared_url: Option<(Url, TemplateWorkBudget)>,
+    allow_internal_ips: bool,
 ) -> Result<(reqwest::StatusCode, reqwest::header::HeaderMap, String)> {
     let default_step_name = format!("step_{}", step_number);
     let step_name = step.name.as_deref().unwrap_or(&default_step_name);
 
     debug!("Executing revocation step {}: {}", step_number, step_name);
 
-    let url = revocation_url(parser, globals, &step.request).await?;
+    let (url, mut budget) = match prepared_url {
+        Some(prepared) => prepared,
+        None => {
+            let mut budget = TemplateWorkBudget::default();
+            let url = revocation_url(parser, globals, &step.request, &mut budget)?;
+            (url, budget)
+        }
+    };
 
-    let request_builder = build_request_builder(
+    let request_builder = build_request_builder_with_budget(
         client,
         &step.request.method,
         &url,
@@ -331,14 +439,16 @@ async fn execute_revocation_step(
         timeout,
         parser,
         globals,
+        &mut budget,
     )
     .map_err(|e| anyhow!("Failed to build request for {step_name}: {e}"))?;
 
     // The final step is the revocation action, even for a custom GET endpoint.
     let may_mutate = is_final_step || is_mutating_method(&step.request.method);
-    let response = send_revocation_request(request_builder, retries, may_mutate)
-        .await
-        .with_context(|| format!("Request failed for {step_name}"))?;
+    let response =
+        send_revocation_request(request_builder, retries, may_mutate, timeout, allow_internal_ips)
+            .await
+            .with_context(|| format!("Request failed for {step_name}"))?;
 
     let status = response.status();
     let headers = response.headers().clone();
@@ -360,7 +470,7 @@ async fn execute_revocation_step(
 
         for (var_name, extractor) in extractors {
             // Render any Liquid templates in the extractor (e.g., {{ TOKEN | prefix: 8 }})
-            let rendered_extractor = render_extractor(extractor, parser, globals)
+            let rendered_extractor = render_extractor(extractor, parser, globals, &mut budget)
                 .with_context(|| {
                     format!(
                         "Failed to render extractor template for '{}' in step {}",
@@ -407,6 +517,23 @@ pub async fn execute_multi_step_revocation(
     timeout: Duration,
     retries: u32,
 ) -> Result<DirectRevocationResult> {
+    execute_multi_step_revocation_with_policy(
+        multi_step, globals, client, parser, timeout, retries, true,
+    )
+    .await
+}
+
+/// Execute multi-step HTTP revocation with the caller's target address policy.
+#[doc(hidden)]
+pub async fn execute_multi_step_revocation_with_policy(
+    multi_step: &HttpMultiStepRevocation,
+    globals: &mut Object,
+    client: &Client,
+    parser: &liquid::Parser,
+    timeout: Duration,
+    retries: u32,
+    allow_internal_ips: bool,
+) -> Result<DirectRevocationResult> {
     if multi_step.steps.is_empty() {
         bail!("Multi-step revocation must have at least one step");
     }
@@ -428,6 +555,9 @@ pub async fn execute_multi_step_revocation(
     }
     // Resolve every endpoint selection before any step may mutate provider state.
     let mut endpoint_globals = globals.clone();
+    let mut prepared_urls = Vec::with_capacity(multi_step.steps.len());
+    let mut earlier_extracts = false;
+    let mut earlier_mutation = false;
     for step in &multi_step.steps {
         anyhow::ensure!(
             !step.extract.iter().flat_map(|extract| extract.keys()).any(|name| {
@@ -435,24 +565,59 @@ pub async fn execute_multi_step_revocation(
             }),
             "Revocation response extractors cannot replace validated endpoint variables"
         );
-        selected_url(&step.request, globals)?;
-        if globals.contains_key("VALIDATION_ENDPOINT_COUNT")
-            || globals.contains_key("VALIDATION_FALLBACK_ID")
-            || !step.request.fallback_urls.is_empty()
-        {
-            revocation_url(parser, &endpoint_globals, &step.request).await?;
+        let source = selected_url(&step.request, globals)?;
+        let restrict_origin = requires_accepted_origin(&step.request, globals);
+        let check_selection = restrict_origin || globals.contains_key("VALIDATION_ENDPOINT_COUNT");
+        let check_target_early = !allow_internal_ips && earlier_mutation;
+        let mut prepared = None;
+        if !earlier_extracts && (check_selection || check_target_early) {
+            // Keep the rendered URL and its spent budget for the actual request.
+            let mut budget = TemplateWorkBudget::default();
+            let url = revocation_url(parser, globals, &step.request, &mut budget)?;
+            if check_target_early {
+                check_revocation_target(&url, timeout, allow_internal_ips).await?;
+            }
+            prepared = Some((url, budget));
+        } else if earlier_extracts && (check_selection || check_target_early) {
+            let origin = fixed_template_origin(source, globals);
+            if check_selection && template_uses_crypto_filters(source) {
+                // A response value can supply binary data for crypto filters.
+                // Check syntax and any fixed origin without rendering the path.
+                parser.parse(source).map_err(|_| anyhow!("Failed to parse URL template"))?;
+                if restrict_origin && let Some(origin) = &origin {
+                    ensure_accepted_origin(origin, globals)?;
+                } else if restrict_origin && earlier_mutation {
+                    bail!(
+                        "Revocation URL after a mutating step must start with VALIDATION_ORIGIN or a fixed origin matching validation"
+                    );
+                }
+            } else if check_selection {
+                // Retain legacy preflight for templates that render with placeholder text.
+                revocation_url(
+                    parser,
+                    &endpoint_globals,
+                    &step.request,
+                    &mut TemplateWorkBudget::default(),
+                )?;
+            }
+            if check_target_early && let Some(origin) = &origin {
+                check_revocation_target(origin, timeout, allow_internal_ips).await?;
+            }
         }
+        prepared_urls.push(prepared);
         for name in step.extract.iter().flat_map(|extract| extract.keys()) {
             endpoint_globals
                 .insert(name.to_uppercase().into(), Value::scalar("prepared-response-value"));
+            earlier_extracts = true;
         }
+        earlier_mutation |= is_mutating_method(&step.request.method);
     }
     let num_steps = multi_step.steps.len();
     debug!("Executing {}-step revocation", num_steps);
 
     // Preserve ambiguity if a later configuration failure follows a mutating step.
     let mut mutation_completed = false;
-    for (i, step) in multi_step.steps.iter().enumerate() {
+    for (i, (step, prepared_url)) in multi_step.steps.iter().zip(prepared_urls).enumerate() {
         let step_number = i + 1;
         let is_final_step = step_number == num_steps;
 
@@ -465,6 +630,8 @@ pub async fn execute_multi_step_revocation(
             retries,
             step_number,
             is_final_step,
+            prepared_url,
+            allow_internal_ips,
         )
         .await
         {
@@ -510,6 +677,84 @@ mod tests {
     use reqwest::StatusCode;
     use reqwest::header::{HeaderMap, HeaderValue};
 
+    #[test]
+    fn fixed_template_origin_accepts_literal_and_validated_origins() {
+        const ORIGIN: &str = "https://provider.invalid:8443";
+        let globals = liquid::object!({
+            "VALIDATION_ORIGIN": ORIGIN,
+            "VALIDATION_URL": "https://provider.invalid:8443/validated?source=scan",
+        });
+        for (source, expected) in [
+            ("HTTPS://PROVIDER.INVALID:8443/v1/{{ ID }}", ORIGIN),
+            ("https://provider.invalid:8443?token={{ TOKEN }}", ORIGIN),
+            ("https://provider.invalid:8443#{{ FRAGMENT }}", ORIGIN),
+            ("http://[::1]:8080/{{ ID }}", "http://[::1]:8080"),
+            ("{{ VALIDATION_ORIGIN }}", ORIGIN),
+            ("{{- VALIDATION_ORIGIN -}}/{{ ID }}", ORIGIN),
+            ("{{ VALIDATION_URL }}?token={{ TOKEN }}", ORIGIN),
+        ] {
+            let url = fixed_template_origin(source, &globals).unwrap_or_else(|| panic!("{source}"));
+            assert_eq!(url.origin().ascii_serialization(), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn fixed_template_origin_rejects_ambiguous_and_malformed_authorities() {
+        let globals = liquid::object!({"VALIDATION_ORIGIN": "https://provider.invalid"});
+        for source in [
+            "{{ HOST }}/path",
+            "{{ VALIDATION_URL }}/path",
+            "{{ VALIDATION_ORIGIN }}{{ SUFFIX }}/path",
+            "{{ VALIDATION_ORIGIN }}{% if USE_OTHER %}{{ SUFFIX }}{% endif %}/path",
+            "{{ VALIDATION_ORIGIN | downcase }}/path",
+            "https://{{ HOST }}/path",
+            "https://provider.invalid:{{ PORT }}/path",
+            "https://user@provider.invalid{% if USE_OTHER %}{{ SUFFIX }}{% endif %}/path",
+            r"https://provider.invalid\{{ SUFFIX }}/path",
+            "https://provider.invalid /{{ ID }}",
+            "https:///{{ HOST }}",
+            "//provider.invalid/{{ ID }}",
+            "ftp://provider.invalid/{{ ID }}",
+        ] {
+            assert!(fixed_template_origin(source, &globals).is_none(), "{source}");
+        }
+    }
+
+    #[test]
+    fn crypto_revocation_templates_do_not_expose_liquid_inputs() {
+        let parser =
+            kingfisher_rules::register_liquid_filters(liquid::ParserBuilder::with_stdlib())
+                .build()
+                .unwrap();
+        let globals = liquid::object!({"TOKEN": "SENSITIVE-KEY-MATERIAL"});
+        for source in [
+            "{{ TOKEN | ec_public_key: 'P-256' }}",
+            "{{ 'SENSITIVE-KEY-MATERIAL' | ec_public_key: 'P-256' }}",
+            "{{ 'SENSITIVE-KEY-MATERIAL' | unknown_crypto_filter }}",
+        ] {
+            let error =
+                render_and_parse_url(&parser, &globals, source, &mut TemplateWorkBudget::default())
+                    .unwrap_err();
+            assert!(!format!("{error:#}").contains("SENSITIVE-KEY-MATERIAL"));
+            let extractor = ResponseExtractor::JsonPath { path: source.into() };
+            let error =
+                render_extractor(&extractor, &parser, &globals, &mut TemplateWorkBudget::default())
+                    .unwrap_err();
+            assert!(!format!("{error:#}").contains("SENSITIVE-KEY-MATERIAL"));
+        }
+        assert_eq!(
+            render_and_parse_url(
+                &parser,
+                &globals,
+                "{{ TOKEN }}",
+                &mut TemplateWorkBudget::default()
+            )
+            .unwrap_err()
+            .to_string(),
+            "Invalid rendered URL"
+        );
+    }
+
     #[tokio::test]
     async fn fallback_id_alone_checks_every_origin_before_the_first_mutation() {
         use std::net::{Ipv4Addr, TcpListener};
@@ -543,6 +788,101 @@ mod tests {
         assert!(error.to_string().contains("origin that accepted"));
         assert_eq!(accepted.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
         assert_eq!(other.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+    }
+
+    #[tokio::test]
+    async fn fallback_revocation_crypto_uses_the_real_extracted_response() {
+        use axum::{
+            Router,
+            routing::{delete, post},
+        };
+
+        let app =
+            Router::new()
+                .route("/start", post(|| async { r#"{"challenge":"Y2hhbGxlbmdl"}"# }))
+                .route(
+                    "/confirm",
+                    delete(|uri: axum::http::Uri| async move {
+                        assert!(uri.query().is_some_and(
+                            |query| query.starts_with("signature=") && query.len() > 50
+                        ));
+                        StatusCode::OK
+                    }),
+                );
+        let listener =
+            tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let accepted_origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let program: HttpMultiStepRevocation = serde_json::from_value(serde_json::json!({"steps":[
+            {"request":{"method":"POST","url":"{{ VALIDATION_ORIGIN }}/start"},
+             "extract":{"CHALLENGE":{"type":"JsonPath","path":"$.challenge"}}},
+            {"request":{"method":"DELETE",
+                "url":"{{ VALIDATION_ORIGIN }}/confirm?signature={{ CHALLENGE | ecdsa_sign: TOKEN, 'P-256' | url_encode }}",
+                "response_matcher":[{"type":"StatusMatch","status":[200]}]}}
+        ]})).unwrap();
+        let mut globals = liquid::object!({
+            "VALIDATION_FALLBACK_ID": "secondary",
+            "VALIDATION_ORIGIN": accepted_origin,
+            // Synthetic test scalar, with the final byte set to 1.
+            "TOKEN": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE=",
+        });
+        let parser =
+            kingfisher_rules::register_liquid_filters(liquid::ParserBuilder::with_stdlib())
+                .build()
+                .unwrap();
+        let result = execute_multi_step_revocation(
+            &program,
+            &mut globals,
+            &Client::builder().no_proxy().build().unwrap(),
+            &parser,
+            Duration::from_secs(2),
+            0,
+        )
+        .await
+        .unwrap();
+        server.abort();
+        assert!(result.revoked);
+    }
+
+    #[tokio::test]
+    async fn response_extractors_use_the_remaining_revocation_step_budget() {
+        use axum::{Router, routing::get};
+
+        let app = Router::new().route("/start", get(|| async { r#"{"id":"42"}"# }));
+        let listener =
+            tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let accepted_origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let work = "{% for i in (1..1700) %}{% assign ignored = 'a' | sha512 %}{% endfor %}";
+        let program: HttpMultiStepRevocation = serde_json::from_value(serde_json::json!({"steps":[
+            {"request":{"method":"GET","url":format!("{{{{ VALIDATION_ORIGIN }}}}/start{work}"),
+                "headers":{"x-work":format!("proof{work}")}},
+             "extract":{"ID":{"type":"JsonPath","path":format!("$.id{work}")}}},
+            {"request":{"method":"DELETE","url":"{{ VALIDATION_ORIGIN }}/confirm/{{ ID }}",
+                "response_matcher":[{"type":"StatusMatch","status":[200]}]}}
+        ]}))
+        .unwrap();
+        let mut globals = liquid::object!({
+            "VALIDATION_FALLBACK_ID": "secondary",
+            "VALIDATION_ORIGIN": accepted_origin,
+        });
+        let parser =
+            kingfisher_rules::register_liquid_filters(liquid::ParserBuilder::with_stdlib())
+                .build()
+                .unwrap();
+        let error = execute_multi_step_revocation(
+            &program,
+            &mut globals,
+            &Client::builder().no_proxy().build().unwrap(),
+            &parser,
+            Duration::from_secs(2),
+            0,
+        )
+        .await
+        .unwrap_err();
+        server.abort();
+        assert!(format!("{error:#}").contains("Failed to render extractor template"));
+        assert!(!error.is::<RevocationSubmitted>());
     }
     // ---- extract_value_from_response: JsonPath ----
 
@@ -803,7 +1143,9 @@ mod tests {
             pattern: r#""key":"([^"]+)","token":"{{ TOKEN | prefix: 8 }}"#.to_string(),
         };
 
-        let rendered = render_extractor(&extractor, &parser, &globals).unwrap();
+        let rendered =
+            render_extractor(&extractor, &parser, &globals, &mut TemplateWorkBudget::default())
+                .unwrap();
         match rendered {
             ResponseExtractor::Regex { pattern } => {
                 assert_eq!(pattern, r#""key":"([^"]+)","token":"npm_rmll"#);
@@ -828,7 +1170,9 @@ mod tests {
                 r#""key":"([^"]+)","token":"{{ TOKEN | prefix: 8 }}\.\.\.{{ TOKEN | suffix: 4 }}""#
                     .to_string(),
         };
-        let rendered = render_extractor(&extractor, &parser, &globals).unwrap();
+        let rendered =
+            render_extractor(&extractor, &parser, &globals, &mut TemplateWorkBudget::default())
+                .unwrap();
 
         // Simulated npm API response with multiple tokens
         let body = r#"{"objects":[{"key":"e089a40c-800b-4ec0-95b1-c17a63305887","token":"npm_yJcQ...rEf1"},{"key":"43c14e2d-8b5d-4f8b-91cd-280a7afead0c","token":"npm_rmll...aQIU"},{"key":"1ced5278-29a9-4266-bf8e-03223bc9c30c","token":"npm_ahWC...2pw1"}]}"#;
@@ -850,7 +1194,9 @@ mod tests {
         let globals = Object::new();
 
         let extractor = ResponseExtractor::JsonPath { path: "$.objects[0].key".to_string() };
-        let rendered = render_extractor(&extractor, &parser, &globals).unwrap();
+        let rendered =
+            render_extractor(&extractor, &parser, &globals, &mut TemplateWorkBudget::default())
+                .unwrap();
         match rendered {
             ResponseExtractor::JsonPath { path } => {
                 assert_eq!(path, "$.objects[0].key");

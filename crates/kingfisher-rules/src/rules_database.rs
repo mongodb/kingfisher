@@ -57,6 +57,7 @@ pub struct RulesDatabase {
     pub(crate) vsdb: BlockDatabase,
     vectorscan_prefilter_flags: Vec<bool>,
     chunked_prefilter_scanners: OnceLock<Option<Arc<ScannerPool>>>,
+    path_only_rule_indices: Vec<usize>,
     betterleaks_rule_flags: Vec<bool>,
     has_non_betterleaks_rules: bool,
     betterleaks_prefilter: Option<BetterleaksPathPrefilter>,
@@ -560,6 +561,7 @@ impl RulesDatabase {
         let self_identifying_flags = Self::build_self_identifying_flags(&rules);
         let betterleaks_rule_flags = Self::build_betterleaks_rule_flags(&rules);
         let has_non_betterleaks_rules = betterleaks_rule_flags.contains(&false);
+        let path_only_rule_indices = Self::collect_path_only_rule_indices(&rules);
         debug!("Compiled {} rules: vectorscan {}s; regex {}s", rules.len(), d1, d2);
         Ok(RulesDatabase {
             endpoint_regexes: (0..rules.len()).map(|_| OnceLock::new()).collect(),
@@ -573,6 +575,7 @@ impl RulesDatabase {
             self_identifying_flags,
             vectorscan_prefilter_flags,
             chunked_prefilter_scanners: OnceLock::new(),
+            path_only_rule_indices,
             betterleaks_rule_flags,
             has_non_betterleaks_rules,
             betterleaks_prefilter,
@@ -628,6 +631,7 @@ impl RulesDatabase {
             let self_identifying_flags = Self::build_self_identifying_flags(&rules);
             let betterleaks_rule_flags = Self::build_betterleaks_rule_flags(&rules);
             let has_non_betterleaks_rules = betterleaks_rule_flags.contains(&false);
+            let path_only_rule_indices = Self::collect_path_only_rule_indices(&rules);
             let mut vectorscan_prefilter_flags = vec![false; rules.len()];
             for index in cached_header.prefilter_rule_indices {
                 let flag = vectorscan_prefilter_flags
@@ -653,6 +657,7 @@ impl RulesDatabase {
                 self_identifying_flags,
                 vectorscan_prefilter_flags,
                 chunked_prefilter_scanners: OnceLock::new(),
+                path_only_rule_indices,
                 betterleaks_rule_flags,
                 has_non_betterleaks_rules,
                 betterleaks_prefilter,
@@ -698,6 +703,20 @@ impl RulesDatabase {
         }
         let d2 = t2.elapsed().as_secs_f64();
         Ok((anchored_regexes, d2))
+    }
+
+    fn collect_path_only_rule_indices(rules: &[Arc<Rule>]) -> Vec<usize> {
+        rules
+            .iter()
+            .enumerate()
+            .filter_map(|(index, rule)| rule.syntax().betterleaks_path_only.then_some(index))
+            .collect()
+    }
+
+    /// Whether a rule can match a source without a native content candidate.
+    #[doc(hidden)]
+    pub fn has_path_only_rules(&self) -> bool {
+        !self.path_only_rule_indices.is_empty()
     }
 
     #[inline]
@@ -895,9 +914,10 @@ impl RulesDatabase {
         attributes: Option<&BTreeMap<String, String>>,
         bytes: &[u8],
     ) -> Result<Vec<(usize, Arc<Rule>)>> {
-        if attributes
-            .and_then(|attributes| attributes.get("fs.first_fragment"))
-            .is_some_and(|value| value == "false")
+        if !self.has_path_only_rules()
+            || attributes
+                .and_then(|attributes| attributes.get("fs.first_fragment"))
+                .is_some_and(|value| value == "false")
         {
             return Ok(Vec::new());
         }
@@ -906,9 +926,9 @@ impl RulesDatabase {
             .betterleaks_prefilter
             .as_ref()
             .map_or(Ok(false), |prefilter| prefilter.is_match_with_attributes(path, attributes))?;
-        for (index, rule) in self.rules.iter().enumerate() {
-            if !rule.syntax().betterleaks_path_only
-                || (!rule.visible() && !rule.is_runtime_dependency_helper())
+        for &index in &self.path_only_rule_indices {
+            let rule = &self.rules[index];
+            if (!rule.visible() && !rule.is_runtime_dependency_helper())
                 || (!rule.is_runtime_dependency_helper()
                     && !rule.confidence().is_at_least(&rule.runtime_minimum_confidence()))
                 || !rule.matches_path(path)
@@ -2086,6 +2106,7 @@ mod test_vectorscan {
             rule("custom.rejected", Confidence::High, false, true),
         ])
         .unwrap();
+        assert!(database.has_path_only_rules());
         for _ in 0..2 {
             let matches =
                 database.path_only_rules_for_source("config/credential.env", None, b"").unwrap();

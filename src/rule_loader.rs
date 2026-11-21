@@ -102,14 +102,14 @@ impl RuleLoader {
         }
 
         if !self.additional_load_paths.is_empty() {
-            let custom_rules = Rules::from_paths(&self.additional_load_paths, Confidence::Low)
-                .context(RuleLoaderError::AdditionalPathLoadError)?;
+            let (custom_rules, custom_prefilter) =
+                Rules::load_runtime_rules(&self.additional_load_paths, Confidence::Low)
+                    .context(RuleLoaderError::AdditionalPathLoadError)?;
             if betterleaks_prefilter.is_none() {
-                betterleaks_prefilter = custom_rules.betterleaks_prefilter.clone();
+                betterleaks_prefilter = custom_prefilter;
             }
-            for rule_syntax in custom_rules {
-                let id = rule_syntax.id.clone();
-                id_to_rule.insert(id, Rule::new(rule_syntax));
+            for rule in custom_rules {
+                id_to_rule.insert(rule.id().to_owned(), rule);
             }
         }
 

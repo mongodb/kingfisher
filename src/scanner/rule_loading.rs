@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use indicatif::ProgressBar;
+use kingfisher_rules::{BetterleaksExpr, Rule};
 use tracing::info;
 
 use crate::{
@@ -15,6 +16,21 @@ use crate::{
         prune_rule_cache,
     },
 };
+
+pub(super) fn resolve_scan_rules(
+    args: &scan::ScanArgs,
+) -> Result<(Vec<Rule>, Option<BetterleaksExpr>)> {
+    let loaded =
+        RuleLoader::from_rule_specifiers(&args.rules).load(args).context("Failed to load rules")?;
+    let mut rules = loaded.resolve_enabled_rules_owned().context("Failed to resolve rules")?;
+    let betterleaks_prefilter = loaded.betterleaks_prefilter_for(&rules);
+    if let Some(min_entropy) = args.min_entropy {
+        for rule in &mut rules {
+            let _ = rule.set_entropy(min_entropy);
+        }
+    }
+    Ok((rules, betterleaks_prefilter))
+}
 
 /// Load selected rules, compile their database, and record metadata in the datastore.
 ///
@@ -32,22 +48,8 @@ pub fn load_and_record_rules(
 ) -> Result<RulesDatabase> {
     let init_progress =
         if use_progress { ProgressBar::new_spinner() } else { ProgressBar::hidden() };
+    let (rules, betterleaks_prefilter) = resolve_scan_rules(args)?;
     let rules_db = {
-        let loaded = RuleLoader::from_rule_specifiers(&args.rules)
-            .load(args)
-            .context("Failed to load rules")?;
-        let resolved = loaded.resolve_enabled_rules_owned().context("Failed to resolve rules")?;
-        let betterleaks_prefilter = loaded.betterleaks_prefilter_for(&resolved);
-        // Apply min_entropy override if specified
-        let rules: Vec<_> = resolved
-            .into_iter()
-            .map(|mut rule| {
-                if let Some(min_entropy) = args.min_entropy {
-                    let _ = rule.set_entropy(min_entropy);
-                }
-                rule
-            })
-            .collect();
         if args.rule_cache.enabled() {
             let cache = RuleCacheConfig::from_dir_or_env(args.rule_cache.rule_cache_dir.clone());
             info!(cache_dir = %cache.cache_dir().display(), "Using Vectorscan rule cache");

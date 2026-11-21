@@ -20,8 +20,11 @@ fn blob_id_hashes_preserve_git_blob_identity() {
         (&b"hello\n"[..], "ce013625030ba8dba906f756967f9e9ca394464a"),
         (&b"hello world"[..], "95d09f2b10159347eece71399a7e2e907ea3df4f"),
         (&[0, 255, 128, 13, 10][..], "f21a905eaf587067e88aadfe3cda06c916e532a6"),
+        (&[0; 1024][..], "06d7405020018ddf3cacee90fd4af10487da3d20"),
     ] {
-        assert_eq!(BlobId::new(bytes).hex(), expected);
+        let id = BlobId::new(bytes);
+        assert_eq!(id.hex(), expected);
+        assert_eq!(BlobId::from_hex(expected).unwrap(), id);
         assert_eq!(BlobId::compute_from_bytes(bytes).hex(), expected);
     }
 }

@@ -78,10 +78,9 @@ Best when you want Kingfisher scanning inside a Rust, Python, or Node.js applica
 - Use `kingfisher-rules` to load or compile rules.
 - Use `kingfisher-scanner` for the embeddable scanning API.
 - Install `kingfisher-secret-scanner` and import `kingfisher_sdk` for Python.
-- For JavaScript/TypeScript, the `kingfisher-secret-scanner` npm SDK **1.0.2** is a
-  stable release, versioned independently of the CLI, Python SDK, and Rust
-  crates. It calls the same Rust crates in process through Node-API, with no Python
-  interpreter or CLI subprocess.
+- For JavaScript/TypeScript, the `kingfisher-secret-scanner` npm SDK is versioned
+  independently of the CLI, Python SDK, and Rust crates. The prepared stable
+  release is **1.1.0**. The SDK calls the same Rust crates in process through Node-API.
 - For Python services, prewarm the compiled rule cache during image construction
   with the same SDK wheel, rules and confidence used at startup. Give the runtime account ownership
   of both the directory and files; `COPY --chown` supports root builds with a

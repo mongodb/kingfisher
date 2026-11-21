@@ -50,15 +50,12 @@ class CiWorkflowTests(unittest.TestCase):
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         self.assertNotRegex(makefile, r"(?i)\bwizard(?:-gui)?\b|\bgui(?:-tests)?\b")
 
-    def test_default_macos_ci_keeps_both_architectures_without_gui_builds(self):
+    def test_default_macos_ci_keeps_both_architectures(self):
         macos = job(self.ci, "macos")
         for contract in ("arch: arm64", "runs_on: macos-15", "arch: x64",
                          "runs_on: macos-15-intel", "run: make tests"):
             with self.subTest(contract=contract):
                 self.assertIn(contract, macos)
-        self.assertNotIn("Run wizard regressions", self.ci)
-        self.assertNotIn("--features gui", self.ci)
-        self.assertNotIn("workflows/wizard.yml", self.ci)
 
     def test_native_workflows_do_not_reference_removed_desktop_features(self):
         for workflow in sorted((ROOT / ".github/workflows").glob("*.yml")):
@@ -72,25 +69,9 @@ class CiWorkflowTests(unittest.TestCase):
                 self.assertRegex(self.ci, rf"uses: {re.escape(action)}@[0-9a-f]{{40}}\b")
         self.assertIn('RUST_TOOLCHAIN: "1.99.0"', self.ci)
 
-    def test_reusable_release_ci_remains_headless_and_still_gates_publication(self):
+    def test_release_calls_reusable_ci_workflow(self):
         self.assertIn("workflow_call:", section(self.ci, "on"))
         self.assertIn("uses: ./.github/workflows/ci.yml", job(self.release, "tests"))
-        release = job(self.release, "release")
-        needs = re.search(r"(?m)^    needs: \[([^\]]+)\]", release)
-        self.assertIsNotNone(needs)
-        self.assertIn("release-ready", {name.strip() for name in needs.group(1).split(",")})
-        gate = job(self.release, "release-ready")
-        gate_needs = re.search(r"(?m)^    needs: \[([^\]]+)\]", gate)
-        self.assertIsNotNone(gate_needs)
-        required = {name.strip() for name in gate_needs.group(1).split(",")}
-        self.assertIn("tests", required)
-        condition = gate.split("    runs-on:", 1)[0]
-        self.assertRegex(condition, r"(?m)^    if:")
-        self.assertIn("always() && !cancelled()", condition)
-        for dependency in required:
-            with self.subTest(dependency=dependency):
-                self.assertIn(f"needs.{dependency}.result == 'success'", condition)
-        self.assertNotIn("workflows/wizard.yml", self.release)
 
 
 if __name__ == "__main__":

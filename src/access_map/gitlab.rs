@@ -1,15 +1,33 @@
+use std::time::Duration;
+
 use anyhow::{Context, Result, anyhow};
-use reqwest::{Client, Url};
+use chrono::{DateTime, SecondsFormat, Utc};
+use reqwest::{Client, Url, header::HeaderValue};
 use serde::Deserialize;
+use tracing::debug;
 
 use crate::{cli::commands::access_map::AccessMapArgs, validation::GLOBAL_USER_AGENT};
 
 use super::{
-    AccessMapResult, AccessSummary, AccessTokenDetails, PermissionSummary, ResourceExposure,
-    RoleBinding, Severity, build_recommendations,
+    AccessMapResult, AccessSummary, AccessTokenDetails, PermissionSummary, ProviderMetadata,
+    ResourceExposure, RoleBinding, Severity, build_recommendations,
 };
 
 const DEFAULT_GITLAB_HOST: &str = "gitlab.com";
+const ACTIVITY_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Deserialize)]
+struct GitLabCredentialFile {
+    token: String,
+    #[serde(alias = "base_url")]
+    api_endpoint: String,
+    audit_token: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GitLabTokenActivity {
+    last_used_at: Option<DateTime<Utc>>,
+}
 
 #[derive(Deserialize)]
 struct GitLabProject {
@@ -39,15 +57,34 @@ struct GitLabAccess {
 }
 
 pub async fn map_access(args: &AccessMapArgs) -> Result<AccessMapResult> {
-    let token = if let Some(path) = args.credential_path.as_deref() {
-        let raw = std::fs::read_to_string(path)
-            .with_context(|| format!("Failed to read GitLab token from {}", path.display()))?;
-        raw.trim().to_string()
-    } else {
-        return Err(anyhow!("GitLab access-map requires a validated token from scan results"));
-    };
+    let path = args
+        .credential_path
+        .as_deref()
+        .ok_or_else(|| anyhow!("GitLab access-map requires a validated token from scan results"))?;
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read GitLab token from {}", path.display()))?;
+    let raw = raw.trim();
+    if raw.starts_with('{') {
+        let credential: GitLabCredentialFile = serde_json::from_str(raw).map_err(|_| {
+            anyhow!("Invalid GitLab credential JSON; expected token and api_endpoint")
+        })?;
+        let api_url =
+            crate::provider_endpoints::access_map_api_url("gitlab", &credential.api_endpoint)?;
+        let token = credential.token.trim();
+        let audit_token = credential.audit_token.as_deref().map(str::trim);
+        if let Some(audit_token) = audit_token {
+            if api_url.scheme() != "https" || api_url.host_str() == Some(DEFAULT_GITLAB_HOST) {
+                return Err(anyhow!("GitLab audit_token requires an HTTPS self-managed instance"));
+            }
+            if audit_token.is_empty() || audit_token == token {
+                return Err(anyhow!("GitLab audit_token must be a separate administrator token"));
+            }
+        }
+        return map_access_with_client(&gitlab_client()?, &api_url, token, Utc::now(), audit_token)
+            .await;
+    }
 
-    map_access_from_token(&token).await
+    map_access_from_token(raw).await
 }
 
 pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
@@ -55,20 +92,49 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
 }
 
 pub async fn map_access_from_token_at(token: &str, api_endpoint: &str) -> Result<AccessMapResult> {
+    map_access_from_token_at_before(token, api_endpoint, Utc::now()).await
+}
+
+pub(super) async fn map_access_from_token_before(
+    token: &str,
+    activity_before: DateTime<Utc>,
+) -> Result<AccessMapResult> {
+    map_access_from_token_at_before(token, DEFAULT_GITLAB_HOST, activity_before).await
+}
+
+pub(super) async fn map_access_from_token_at_before(
+    token: &str,
+    api_endpoint: &str,
+    activity_before: DateTime<Utc>,
+) -> Result<AccessMapResult> {
     let api_url = crate::provider_endpoints::access_map_api_url("gitlab", api_endpoint)?;
-    let client = Client::builder()
+    map_access_with_client(&gitlab_client()?, &api_url, token, activity_before, None).await
+}
+
+fn gitlab_client() -> Result<Client> {
+    Client::builder()
         .user_agent(GLOBAL_USER_AGENT.as_str())
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(20))
+        .timeout(Duration::from_secs(20))
         .build()
-        .context("Failed to build GitLab access-map client")?;
+        .context("Failed to build GitLab access-map client")
+}
+
+async fn map_access_with_client(
+    client: &Client,
+    api_url: &Url,
+    token: &str,
+    activity_before: DateTime<Utc>,
+    audit_token: Option<&str>,
+) -> Result<AccessMapResult> {
+    let last_use = fetch_last_use(client, api_url, token, audit_token, activity_before).await;
 
     // GitLab REST API: current user and membership-project listings.
     // https://docs.gitlab.com/api/users/#retrieve-the-current-user
     // https://docs.gitlab.com/api/projects/#list-all-projects
     // The full authenticated project representation is intentional: simple=true omits the
     // permissions object used to report direct and inherited access.
-    let user = fetch_current_user(&client, &api_url, token).await?;
+    let user = fetch_current_user(client, api_url, token).await?;
 
     let identity = AccessSummary {
         id: user.username.clone(),
@@ -79,7 +145,7 @@ pub async fn map_access_from_token_at(token: &str, api_endpoint: &str) -> Result
     };
 
     let mut risk_notes = vec!["Project permissions describe principal membership; token scopes may further restrict effective access".into()];
-    let projects = match list_accessible_projects(&client, &api_url, token, &mut risk_notes).await {
+    let projects = match list_accessible_projects(client, api_url, token, &mut risk_notes).await {
         Ok(projects) => projects,
         Err(err) => {
             risk_notes.push(format!("Project enumeration failed: {err}"));
@@ -146,7 +212,7 @@ pub async fn map_access_from_token_at(token: &str, api_endpoint: &str) -> Result
         url: None,
         token_type: Some("gitlab_user_token".into()),
         created_at: None,
-        last_used_at: None,
+        last_used_at: last_use.map(|(date, _)| date.to_rfc3339_opts(SecondsFormat::AutoSi, true)),
         expires_at: None,
         user_id: Some(user.id.to_string()),
         scopes: Vec::new(),
@@ -162,9 +228,53 @@ pub async fn map_access_from_token_at(token: &str, api_endpoint: &str) -> Result
         recommendations: build_recommendations(severity),
         risk_notes,
         token_details,
-        provider_metadata: None,
+        provider_metadata: last_use.map(|(_, source)| ProviderMetadata {
+            credential_last_used_source: Some(source.into()),
+            ..ProviderMetadata::default()
+        }),
         fingerprint: None,
     })
+}
+
+async fn fetch_last_use(
+    client: &Client,
+    api_url: &Url,
+    token: &str,
+    audit_token: Option<&str>,
+    activity_before: DateTime<Utc>,
+) -> Option<(DateTime<Utc>, &'static str)> {
+    let (request, authorization, source) = if let Some(audit_token) = audit_token {
+        (
+            client
+                .post(api_url.join("admin/token").ok()?)
+                .json(&serde_json::json!({"token": token})),
+            audit_token,
+            "GitLab administrator token inspection",
+        )
+    } else {
+        (
+            client.get(api_url.join("personal_access_tokens/self").ok()?),
+            token,
+            "GitLab personal access token activity",
+        )
+    };
+    let mut header = HeaderValue::from_str(authorization).ok()?;
+    header.set_sensitive(true);
+    let response = request
+        .header("PRIVATE-TOKEN", header)
+        .timeout(ACTIVITY_TIMEOUT)
+        .send()
+        .await
+        .inspect_err(|err| debug!(status = ?err.status(), "GitLab token activity lookup failed"))
+        .ok()?;
+    if !response.status().is_success() {
+        debug!(status = %response.status(), "GitLab token activity lookup failed");
+        return None;
+    }
+    let timestamp = response.json::<GitLabTokenActivity>().await.ok()?.last_used_at?;
+    // A PAT-authenticated request can refresh GitLab's stored activity before the
+    // endpoint reads it. Exclude even the cutoff's second for coarse server clocks.
+    (timestamp.timestamp() < activity_before.timestamp()).then_some((timestamp, source))
 }
 
 async fn fetch_current_user(client: &Client, api_url: &Url, token: &str) -> Result<GitLabUser> {
@@ -302,6 +412,13 @@ mod tests {
         };
         let server = MockServer::start().await;
         Mock::given(method("GET"))
+            .and(path("/team/api/v4/personal_access_tokens/self"))
+            .and(header("PRIVATE-TOKEN", "test-token"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
             .and(path("/team/api/v4/user"))
             .and(header("PRIVATE-TOKEN", "test-token"))
             .respond_with(
@@ -322,7 +439,57 @@ mod tests {
                 .unwrap();
         assert_eq!(result.identity.id, "member");
         assert_eq!(result.resources[0].permissions, vec!["project:maintainer"]);
-        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+        assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn token_history_uses_the_exact_credential_and_excludes_scan_activity() {
+        use serde_json::json;
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{body_json, header, method, path},
+        };
+
+        let server = MockServer::start().await;
+        let cutoff = "2026-01-02T03:04:05.500Z".parse::<DateTime<Utc>>().unwrap();
+        let api_url = Url::parse(&format!("{}/api/v4/", server.uri())).unwrap();
+        let client = gitlab_client().unwrap();
+
+        for (timestamp, expected) in [
+            ("2026-01-02T03:04:00Z", Some("GitLab personal access token activity")),
+            ("2026-01-02T03:04:05Z", None),
+            ("2026-01-02T03:04:06Z", None),
+        ] {
+            let _mock = Mock::given(method("GET"))
+                .and(path("/api/v4/personal_access_tokens/self"))
+                .and(header("PRIVATE-TOKEN", "test-token"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(json!({"last_used_at": timestamp})),
+                )
+                .expect(1)
+                .mount_as_scoped(&server)
+                .await;
+            let activity = fetch_last_use(&client, &api_url, "test-token", None, cutoff).await;
+            assert_eq!(activity.map(|(_, source)| source), expected);
+        }
+
+        Mock::given(method("POST"))
+            .and(path("/api/v4/admin/token"))
+            .and(header("PRIVATE-TOKEN", "audit-token"))
+            .and(body_json(json!({"token": "test-token"})))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"last_used_at": "2026-01-01T01:02:03Z"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let (date, source) =
+            fetch_last_use(&client, &api_url, "test-token", Some("audit-token"), cutoff)
+                .await
+                .unwrap();
+        assert_eq!(date.to_rfc3339_opts(SecondsFormat::Secs, true), "2026-01-01T01:02:03Z");
+        assert_eq!(source, "GitLab administrator token inspection");
     }
 
     #[tokio::test]

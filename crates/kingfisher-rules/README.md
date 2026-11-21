@@ -6,9 +6,11 @@ The public Rust API follows semantic versioning and requires Rust 1.99+.
 Breaking API changes require a new major version; catalog updates may change which
 secrets are detected without changing the Rust API.
 
+**No Git executable required.** The built-in rule catalog ships with the crate and loads locally.
+
 ```toml
 [dependencies]
-kingfisher-rules = "3.2.1"
+kingfisher-rules = "3.3.0"
 anyhow = "1"
 ```
 
@@ -29,6 +31,13 @@ For custom files use `Rules::from_paths`, `Rules::from_toml_file`, or
 Construction and compilation do not run validation or contact providers.
 Compilation is fallible and relatively expensive: compile once, share with `Arc`,
 and reuse. Vectorscan is a native build dependency.
+
+Shared [cryptographic rule helpers](../../docs/RULES.md#cryptographic-authentication)
+cover ECDH/ECDSA, AES-GCM, HKDF/PBKDF2, Ed25519, random bytes and constant-time
+comparison. Liquid binary filters use standard Base64; Betterleaks expression
+functions use raw bytes. See the [complete Liquid/Expr scaffold](../kingfisher-scanner/examples/rules/cryptographic-auth.yml).
+Execute validation with `kingfisher-scanner` and its `validation` feature; loading
+rules never performs live authentication. Existing YAML/TOML needs no edits.
 
 To persist the main Vectorscan database across processes, use
 `RulesDatabase::from_rule_collection_with_cache(rules, &RuleCacheConfig::from_dir_or_env(None))`.
@@ -125,7 +134,7 @@ and Betterleaks TOML without edits. The YAML implementation is now `yaml_serde`;
 loading APIs still return `anyhow::Result`, and `RulesError` variants are unchanged.
 Callers that explicitly downcast parser causes should use `yaml_serde::Error`
 instead of `serde_yaml::Error`; concrete parser sources are implementation details.
-Use core 2.0.0 and scanner 4.0.0 when depending on their exposed types. See the
+Use core 2.0.0 and scanner 4.1.0 when depending on their exposed types. See the
 [dependency migration guide](../../docs/LIBRARY.md#dependency-modernization-migration).
 
 ## Migrating to 3.0

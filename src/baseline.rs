@@ -7,6 +7,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use bstr::ByteSlice;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use smallvec::{SmallVec, smallvec};
@@ -14,7 +15,10 @@ use tracing::debug;
 use url::Url;
 
 use crate::{
+    blob::Blob,
     findings_store::FindingsStore,
+    location::OffsetSpan,
+    matcher::Match,
     origin::{Origin, OriginSet, get_repo_url},
 };
 
@@ -211,10 +215,10 @@ impl ScopeResolver {
         self.scopes.iter().map(|scope| scope.repository_id.clone()).collect()
     }
 
-    fn contexts(&self, origins: &OriginSet) -> Vec<FindingContext> {
+    fn contexts(&self, origins: &OriginSet, worktree_root: Option<&Path>) -> Vec<FindingContext> {
         let mut by_repository = BTreeMap::<String, String>::new();
         for origin in origins.iter() {
-            if let Some(context) = self.context_for_origin(origin) {
+            if let Some(context) = self.context_for_origin(origin, worktree_root) {
                 by_repository
                     .entry(context.repository_id)
                     .and_modify(|path| {
@@ -238,7 +242,11 @@ impl ScopeResolver {
             .collect()
     }
 
-    fn context_for_origin(&self, origin: &Origin) -> Option<FindingContext> {
+    fn context_for_origin(
+        &self,
+        origin: &Origin,
+        worktree_root: Option<&Path>,
+    ) -> Option<FindingContext> {
         match origin {
             Origin::GitRepo(git) => {
                 let repository_id = repository_id_for_root(&git.repo_path, &self.repo_links);
@@ -249,7 +257,12 @@ impl ScopeResolver {
                     .unwrap_or_default();
                 Some(FindingContext { repository_id, path })
             }
-            Origin::File(file) => self.context_for_path(&file.path),
+            Origin::File(file) => match worktree_root {
+                Some(root) if file.path.is_relative() => {
+                    self.context_for_path(&root.join(file.path.as_path()))
+                }
+                _ => self.context_for_path(&file.path),
+            },
             Origin::Extended(extended) => {
                 extended.path().and_then(|path| self.context_for_path(path))
             }
@@ -348,6 +361,69 @@ fn repository_fingerprints(baseline: &BaselineFile) -> BTreeMap<&str, HashSet<u6
         .collect()
 }
 
+struct StagedBaselineFile {
+    blob: Blob<'static>,
+    line_starts: Vec<usize>,
+}
+
+impl StagedBaselineFile {
+    fn load(
+        repo: &gix::Repository,
+        index: &gix::index::File,
+        path: &Path,
+        checkout_size: usize,
+    ) -> Option<Self> {
+        use gix::index::entry::{Mode, Stage};
+
+        let path = gix::path::into_bstr(path).ok()?;
+        let path = gix::path::to_unix_separators_on_windows(path);
+        let entry = index.entry_by_path_and_stage(&path, Stage::Unconflicted)?;
+        if !matches!(entry.mode, Mode::FILE | Mode::FILE_EXECUTABLE)
+            || repo.find_header(entry.id).ok()?.size() > checkout_size as u64
+        {
+            return None;
+        }
+        let mut object = repo.find_blob(entry.id).ok()?;
+        let blob = Blob::new(entry.id.into(), std::mem::take(&mut object.data));
+        let line_starts = std::iter::once(0)
+            .chain(blob.bytes().find_iter(b"\n").map(|offset| offset + 1))
+            .collect();
+        Some(Self { blob, line_starts })
+    }
+
+    fn fingerprint(&self, finding: &Match) -> Option<u64> {
+        // Line endings can shift byte offsets while leaving the captured bytes at
+        // the same line and column. Require the exact capture in the index before
+        // using its offset, so a checkout-only finding remains visible.
+        let span = finding.location.source_span()?;
+        if span.start_line != span.end_line || finding.is_base64 {
+            return None;
+        }
+        let line = (span.start_line as usize).checked_sub(1)?;
+        let line_start = *self.line_starts.get(line)?;
+        let line_end = self.line_starts.get(line + 1).copied().unwrap_or(self.blob.len());
+        let start = line_start + span.start_column as usize;
+        let end = line_start + span.end_column as usize + 1;
+        if end > line_end
+            || self.blob.bytes().get(start..end)? != finding.fingerprint_value().as_bytes()
+        {
+            return None;
+        }
+        Some(finding.fingerprint_for_origin_at("git", OffsetSpan { start, end }))
+    }
+}
+
+fn open_baseline_index(root: &Path) -> Option<(gix::Repository, gix::index::File)> {
+    let repo = crate::input::open_git_repo_with_options(root, false).ok()??;
+    let index_path = std::env::var_os("GIT_INDEX_FILE")
+        .map(|index| root.join(index))
+        .unwrap_or_else(|| repo.index_path());
+    let index =
+        gix::index::File::at_or_default(index_path, repo.object_hash(), false, Default::default())
+            .ok()?;
+    Some((repo, index))
+}
+
 /// Applies an already-loaded baseline without writing it.
 ///
 /// Legacy v1 fingerprints are global. Version 2 findings are suppressed only
@@ -357,22 +433,64 @@ pub fn apply_loaded_baseline(
     baseline: &BaselineFile,
     roots: &[PathBuf],
 ) -> Result<()> {
+    apply_loaded_baseline_for_scan(store, baseline, roots, false)
+}
+
+pub(crate) fn apply_loaded_baseline_for_scan(
+    store: &mut FindingsStore,
+    baseline: &BaselineFile,
+    roots: &[PathBuf],
+    pre_commit_files: bool,
+) -> Result<()> {
     validate_baseline(baseline)?;
     let legacy_known = legacy_fingerprints(baseline);
     let repository_known = repository_fingerprints(baseline);
+    if legacy_known.is_empty() && repository_known.is_empty() {
+        return Ok(());
+    }
     let resolver = ScopeResolver::new(store, roots);
+    let worktree_root = if pre_commit_files { roots.first().map(PathBuf::as_path) } else { None };
+    let staged_index = std::cell::OnceCell::new();
+    let mut staged_file: Option<(Arc<PathBuf>, Option<StagedBaselineFile>)> = None;
 
     for arc_msg in store.get_matches_mut() {
-        let (origins, _blob, finding) = Arc::make_mut(arc_msg);
+        if !arc_msg.2.visible {
+            continue;
+        }
+        let (origins, blob, finding) = Arc::make_mut(arc_msg);
         let fingerprint = finding.finding_fingerprint;
-        let contexts = resolver.contexts(origins);
-        let known = legacy_known.contains(&fingerprint)
-            || (!contexts.is_empty()
-                && contexts.iter().all(|context| {
-                    repository_known
-                        .get(context.repository_id.as_str())
-                        .is_some_and(|known| known.contains(&fingerprint))
-                }));
+        // The old staged hook records Git origins. The file hook records checkout
+        // origins, while still accepting baselines created by the staged hook.
+        let git_fingerprint = (pre_commit_files && matches!(origins.first(), Origin::File(_)))
+            .then(|| finding.fingerprint_for_origin("git"));
+        let contexts = resolver.contexts(origins, worktree_root);
+        let baseline_contains = |fingerprints: &[u64]| {
+            let contains = |known: &HashSet<u64>| fingerprints.iter().any(|id| known.contains(id));
+            contains(&legacy_known)
+                || (!contexts.is_empty()
+                    && contexts.iter().all(|context| {
+                        repository_known.get(context.repository_id.as_str()).is_some_and(contains)
+                    }))
+        };
+        let mut fingerprints: SmallVec<[u64; 3]> = smallvec![fingerprint];
+        fingerprints.extend(git_fingerprint);
+        let mut known = baseline_contains(&fingerprints);
+        if !known
+            && let Some(root) = worktree_root
+            && let Origin::File(file) = origins.first()
+            && let Some((repo, index)) = staged_index.get_or_init(|| open_baseline_index(root))
+        {
+            if staged_file.as_ref().is_none_or(|(path, _)| path != &file.path) {
+                let loaded = StagedBaselineFile::load(repo, index, &file.path, blob.num_bytes);
+                staged_file = Some((Arc::clone(&file.path), loaded));
+            }
+            if let Some(id) =
+                staged_file.as_ref().and_then(|(_, staged)| staged.as_ref()?.fingerprint(finding))
+            {
+                fingerprints.push(id);
+                known = baseline_contains(&fingerprints);
+            }
+        }
         if known {
             debug!("Skipping finding due to baseline (fingerprint {fingerprint})");
             finding.visible = false;
@@ -411,7 +529,7 @@ pub fn build_managed_baseline(
 
     for message in store.get_matches() {
         let (origins, _blob, finding) = message.as_ref();
-        for context in resolver.contexts(origins) {
+        for context in resolver.contexts(origins, None) {
             scanned.insert(context.repository_id.clone());
             let key = (context.repository_id, finding.finding_fingerprint);
             let candidate = RepositoryBaselineFinding {

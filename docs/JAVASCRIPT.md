@@ -2,7 +2,8 @@
 
 [← Back to README](../README.md)
 
-The `kingfisher-secret-scanner` npm SDK **1.0.2** is a stable release.
+This guide covers the prepared stable release **1.1.0** of the
+`kingfisher-secret-scanner` npm SDK.
 It exposes Kingfisher's Rust components in-process through napi-rs and Node-API.
 Install with npm and import/require `kingfisher-secret-scanner` in JavaScript. No
 Python interpreter, CLI process, or separate Kingfisher installation is involved.
@@ -82,7 +83,7 @@ After publication, create an application directory and run:
 
 ```sh
 npm init -y
-npm install kingfisher-secret-scanner@1.0.2 --ignore-scripts
+npm install kingfisher-secret-scanner@1.1.0 --ignore-scripts
 ```
 
 Use `import { Scanner } from 'kingfisher-secret-scanner'` in a `.mjs` file,
@@ -397,6 +398,15 @@ on Unix and inherits the parent's Windows DACL. Plaintext can survive crashes;
 use encrypted or memory-backed storage when needed.
 
 ## Validate and revoke explicitly
+
+Starting in npm SDK 1.1.0, custom rules use the same
+[cryptographic authentication helpers](RULES.md#cryptographic-authentication)
+as the CLI and Rust/Python validators: ECDH/ECDSA, AES-GCM, HKDF/PBKDF2 and
+Ed25519 in Liquid or Betterleaks expressions, not a separate JavaScript crypto
+API. Load the [complete scaffold](../crates/kingfisher-scanner/examples/rules/cryptographic-auth.yml)
+through `Rules`, retain its invisible client-ID finding and validate explicitly.
+Its `.invalid` destination and published test keys are nonproduction placeholders;
+review and adapt the provider protocol before authorizing requests.
 
 ```typescript
 import { Validator, Revoker } from "kingfisher-secret-scanner";

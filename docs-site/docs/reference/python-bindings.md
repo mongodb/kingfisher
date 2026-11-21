@@ -23,7 +23,8 @@ requires CPython 3.10+ with the standard GIL build. Wheels target Linux x64/ARM6
 (glibc 2.28+), macOS x64/ARM64 (11+), and native Windows x64/ARM64. PyPy,
 free-threaded Python and musl wheels are not currently part of the release matrix.
 
-The prepared SDK release is **1.6.4**, a backward-compatible patch release.
+The prepared SDK release is **1.7.0**. It adds cryptographic helpers for custom
+rules and preserves existing Python APIs.
 
 CLI and low-level Rust validation responses can include
 [allowlisted identity metadata](../rules/overview.md#validation-response-identity-metadata)
@@ -826,6 +827,14 @@ Use a separate process when a hard wall-clock execution limit is required.
 
 ## Validate explicitly
 
+Starting in Python SDK 1.7.0, custom Liquid/Betterleaks rules can use the shared
+[cryptographic authentication helpers](../rules/overview.md#cryptographic-authentication)
+(ECDH/ECDSA, AES-GCM, HKDF/PBKDF2 and Ed25519), without a separate Python crypto
+API. Load the [complete scaffold](https://github.com/mongodb/kingfisher/blob/main/crates/kingfisher-scanner/examples/rules/cryptographic-auth.yml)
+through `Rules`, retain its invisible client-ID finding, and use `Validator`
+explicitly. Its `.invalid` endpoint and public test keys are teaching fixtures,
+not a live provider; review and adapt the protocol before enabling requests.
+
 Custom YAML HTTP rules also support [OAuth2 authentication](../rules/overview.md#oauth2-authentication-for-http-verification-services)
 for a configured verification service. Load the rule through `Rules`, set its
 credential environment variables, and reuse a `Validator` to share token refresh
@@ -1531,7 +1540,7 @@ in sync. The read-only preflight runs **before** wheel/source jobs:
 For a read-only local/orchestrator check (Python 3.11+), run:
 
 ```bash
-python3 scripts/check-sdk-release.py --require-new --expected-version 1.6.4
+python3 scripts/check-sdk-release.py --require-new --expected-version 1.7.0
 ```
 
 Omit `--expected-version` to infer the prepared manifest version. The command
@@ -1546,7 +1555,7 @@ that `HEAD` is the current upstream `main` commit, and use the exact version/SHA
 gh workflow run release.yml --repo mongodb/kingfisher --ref main \
   -f publish=true \
   -f expected_sha="$(git rev-parse HEAD)" \
-  -f expected_version=1.6.4
+  -f expected_version=1.7.0
 ```
 
 `publish` defaults to `false`. Publication requires both safety inputs: the full

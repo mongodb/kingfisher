@@ -1,16 +1,22 @@
-use anyhow::{Context, Result, anyhow};
+use std::time::Duration;
+
+use anyhow::{Context, Result, anyhow, ensure};
+use chrono::{DateTime, SecondsFormat, Utc};
 use reqwest::{Client, header};
 use serde::Deserialize;
-use tracing::warn;
+use serde_json::Value;
+use tracing::{debug, warn};
 
 use crate::{cli::commands::access_map::AccessMapArgs, validation::GLOBAL_USER_AGENT};
 
 use super::{
-    AccessMapResult, AccessSummary, AccessTokenDetails, PermissionSummary, ResourceExposure,
-    RoleBinding, Severity, build_recommendations,
+    AccessMapResult, AccessSummary, AccessTokenDetails, PermissionSummary, ProviderMetadata,
+    ResourceExposure, RoleBinding, Severity, build_recommendations,
 };
 
 const TERRAFORM_API: &str = "https://app.terraform.io";
+const AUTH_TOKEN_PATH: &str = "/api/v2/authentication-tokens/";
+const LAST_USED_SOURCE: &str = "HCP Terraform token activity";
 
 #[derive(Deserialize)]
 struct TerraformAccountResponse {
@@ -24,6 +30,8 @@ struct TerraformAccountData {
     id: Option<String>,
     #[serde(default)]
     attributes: Option<TerraformAccountAttributes>,
+    #[serde(default)]
+    links: Value,
 }
 
 #[derive(Deserialize)]
@@ -34,6 +42,23 @@ struct TerraformAccountAttributes {
     email: Option<String>,
     #[serde(default, rename = "is-service-account")]
     is_service_account: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct TerraformTokenResponse {
+    data: TerraformTokenData,
+}
+
+#[derive(Deserialize)]
+struct TerraformTokenData {
+    id: String,
+    attributes: TerraformTokenAttributes,
+}
+
+#[derive(Deserialize)]
+struct TerraformTokenAttributes {
+    #[serde(rename = "last-used-at")]
+    last_used_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -138,6 +163,22 @@ async fn map_access_with_client(
 
     let account_data = account.data.as_ref();
     let attrs = account_data.and_then(|d| d.attributes.as_ref());
+    let auth_token_id = account_data
+        .and_then(|data| data.links.get("auth-token"))
+        .and_then(Value::as_str)
+        .and_then(auth_token_id_from_link);
+    let last_used_at = if let Some(id) = auth_token_id {
+        fetch_token_last_used(client, token, api_base, id).await.unwrap_or_else(|err| {
+            debug!("Terraform access-map: token activity unavailable: {err}");
+            None
+        })
+    } else {
+        None
+    };
+    let provider_metadata = last_used_at.as_ref().map(|_| ProviderMetadata {
+        credential_last_used_source: Some(LAST_USED_SOURCE.into()),
+        ..ProviderMetadata::default()
+    });
 
     let username = attrs
         .and_then(|a| a.username.clone())
@@ -347,12 +388,12 @@ async fn map_access_with_client(
             url: None,
             token_type: None,
             created_at: None,
-            last_used_at: None,
+            last_used_at,
             expires_at: None,
             user_id: account_data.and_then(|d| d.id.clone()),
             scopes: all_scopes,
         }),
-        provider_metadata: None,
+        provider_metadata,
         fingerprint: None,
     })
 }
@@ -378,6 +419,46 @@ async fn fetch_account(
     }
 
     resp.json().await.context("Terraform access-map: invalid account JSON")
+}
+
+fn auth_token_id_from_link(link: &str) -> Option<&str> {
+    // Accept the documented relative link for the authenticating token only.
+    let id = link.strip_prefix(AUTH_TOKEN_PATH)?;
+    let suffix = id.strip_prefix("at-")?;
+    (!suffix.is_empty()
+        && suffix.len() <= 128
+        && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+    .then_some(id)
+}
+
+async fn fetch_token_last_used(
+    client: &Client,
+    token: &str,
+    api_base: &str,
+    id: &str,
+) -> Result<Option<String>> {
+    let response = client
+        .get(format!("{api_base}{AUTH_TOKEN_PATH}{id}"))
+        .bearer_auth(token)
+        .header(header::ACCEPT, "application/vnd.api+json")
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .context("Terraform token activity request failed")?;
+    let status = response.status();
+    ensure!(status.is_success(), "Terraform token activity lookup returned HTTP {status}");
+
+    let body = response
+        .json::<TerraformTokenResponse>()
+        .await
+        .context("Invalid Terraform token activity JSON")?;
+    ensure!(body.data.id == id, "Terraform returned activity for a different token");
+    Ok(body
+        .data
+        .attributes
+        .last_used_at
+        .and_then(|timestamp| DateTime::parse_from_rfc3339(&timestamp).ok())
+        .map(|date| date.with_timezone(&Utc).to_rfc3339_opts(SecondsFormat::AutoSi, true)))
 }
 
 async fn list_organizations(
@@ -499,8 +580,72 @@ mod tests {
     use serde_json::json;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
-        matchers::{method, path, query_param},
+        matchers::{header, method, path, query_param},
     };
+
+    #[tokio::test]
+    async fn usage_lookup_requires_and_matches_the_authenticating_token_id() {
+        let destination = MockServer::start().await;
+        let token_path = "/api/v2/authentication-tokens/at-actor123";
+        let activity = |id: &str, last_used_at: Option<&str>| {
+            ResponseTemplate::new(200).set_body_json(json!({
+                "data": {"id": id, "attributes": {"last-used-at": last_used_at}}
+            }))
+        };
+        let foreign_url = format!("{}{token_path}", destination.uri());
+        let date = "2024-02-12T01:23:45.123-05:00";
+        for (link, token_response, expected) in [
+            (
+                Some(token_path),
+                Some(activity("at-actor123", Some(date))),
+                Some("2024-02-12T06:23:45.123Z"),
+            ),
+            (Some(token_path), Some(activity("at-other456", Some(date))), None),
+            (Some(token_path), Some(activity("at-actor123", None)), None),
+            (Some(token_path), Some(ResponseTemplate::new(403)), None),
+            (
+                Some(token_path),
+                Some(ResponseTemplate::new(302).insert_header("Location", &foreign_url)),
+                None,
+            ),
+            (Some(foreign_url.as_str()), None, None),
+            (None, None, None),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/api/v2/account/details"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": {"attributes": {"username": "example"}, "links": {"auth-token": link}}
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v2/organizations"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": []})))
+                .mount(&server)
+                .await;
+            let expected_requests = u64::from(token_response.is_some());
+            Mock::given(method("GET"))
+                .and(path(token_path))
+                .and(header("authorization", "Bearer test-token"))
+                .respond_with(token_response.unwrap_or_else(|| ResponseTemplate::new(404)))
+                .expect(expected_requests)
+                .mount(&server)
+                .await;
+
+            let result = map_access_from_token_at("test-token", &server.uri()).await.unwrap();
+            assert_eq!(result.identity.id, "example");
+            assert_eq!(result.token_details.unwrap().last_used_at.as_deref(), expected);
+            assert_eq!(
+                result
+                    .provider_metadata
+                    .and_then(|metadata| metadata.credential_last_used_source)
+                    .as_deref(),
+                expected.map(|_| LAST_USED_SOURCE),
+            );
+        }
+        assert!(destination.received_requests().await.unwrap().is_empty());
+    }
 
     #[tokio::test]
     async fn organization_permissions_do_not_inflate_other_resource_risk() {

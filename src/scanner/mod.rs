@@ -1,11 +1,15 @@
 //! Public façade for the scanner subsystem.
 pub(crate) use docker::{save_docker_archives, save_docker_images};
 pub(crate) use enumerate::{enumerate_filesystem_inputs, reference_candidates};
+#[doc(hidden)]
+pub use preview::write_scan_preview;
 pub(crate) use repos::{
     clone_or_update_git_repos_streaming, enumerate_azure_repos, enumerate_bitbucket_repos,
     enumerate_github_event_targets, enumerate_github_repos, enumerate_huggingface_repos,
 };
 pub use rule_loading::load_and_record_rules;
+#[doc(hidden)]
+pub use runner::run_scan_with_pre_commit_files;
 pub use runner::{run_async_scan, run_scan};
 pub(crate) use validation::{
     AccessMapCollector, direct_access_map_requests_with_options, run_secret_validation,
@@ -19,6 +23,9 @@ pub struct NoScanInputsError;
 mod discovery;
 mod docker;
 mod enumerate;
+mod preview;
+mod preview_inputs;
+mod preview_rules;
 mod processing;
 mod repos;
 mod roots;

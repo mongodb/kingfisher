@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD as b64};
 use chrono::Utc;
 use hmac::{Hmac, KeyInit, Mac};
@@ -19,6 +19,11 @@ pub fn generate_azure_cache_key(azure_json: &str) -> String {
     let mut h = Sha1::new();
     h.update(azure_json.as_bytes());
     format!("AZURE:{}", hex::encode(h.finalize()))
+}
+
+pub(super) fn is_storage_account_name(name: &str) -> bool {
+    (3..=24).contains(&name.len())
+        && name.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
 }
 
 /// Validate Azure Storage credentials without Azure SDK crates.
@@ -44,6 +49,7 @@ pub async fn validate_azure_storage_credentials(
         cache.insert(cache_key, CachedResponse::new(msg.clone(), StatusCode::BAD_REQUEST, false));
         return Ok((false, msg));
     }
+    ensure!(is_storage_account_name(storage_account), "Invalid Azure storage account name");
 
     let now_rfc = Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
     let url =
@@ -75,7 +81,7 @@ pub async fn validate_azure_storage_credentials(
         ))?,
     );
 
-    let client = Client::builder().build()?;
+    let client = Client::builder().redirect(reqwest::redirect::Policy::none()).build()?;
     let resp = client.get(&url).headers(hdrs).send().await?;
 
     let status = resp.status();
@@ -110,4 +116,23 @@ pub async fn validate_azure_storage_credentials(
     let body_opt = validation_body::from_string(body);
     cache.insert(cache_key, CachedResponse::new(body_opt.clone(), StatusCode::OK, true));
     Ok((true, body_opt))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn rejects_storage_accounts_that_could_change_the_request_destination() {
+        assert!(is_storage_account_name("storageaccount1"));
+        for account in ["ab", "a.b", "127.0.0.1/", "a@b", "a/b", "storage_account"] {
+            let credentials =
+                serde_json::json!({"storage_account": account, "storage_key": "YQ=="});
+            let error =
+                validate_azure_storage_credentials(&credentials.to_string(), &Cache::default())
+                    .await
+                    .unwrap_err();
+            assert_eq!(error.to_string(), "Invalid Azure storage account name");
+        }
+    }
 }

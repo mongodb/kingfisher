@@ -79,6 +79,37 @@ class PrepareDocsTests(unittest.TestCase):
                     f"[guide]({destination}#section)",
                 )
 
+    def test_comparison_publishes_runtime_chart_and_omits_repository_only_content(self):
+        destination, title, description = prepare_docs.DOC_MAP["COMPARISON.md"]
+        source = ROOT / "docs/COMPARISON.md"
+        with tempfile.TemporaryDirectory(prefix="comparison docs fixture ") as temporary:
+            target = Path(temporary) / destination
+            with patch.object(prepare_docs, "DOCS_DST", temporary):
+                prepare_docs.process_file(str(source), str(target), title, description)
+            generated = target.read_text(encoding="utf-8")
+            self.assertIn("](../assets/images/runtime-comparison.png)", generated)
+            self.assertIn("### Validated/Verified Findings Comparison", generated)
+            self.assertNotIn("runtime-comparison-original.png", generated)
+            self.assertNotIn("NoseyParker", generated)
+
+    def test_malformed_exclusion_blocks_fail_before_writing_page(self):
+        start = "<!-- docs-site:exclude -->\n"
+        end = "<!-- /docs-site:exclude -->\n"
+        for label, block in (
+            ("missing end", start + "Repository-only text\n"),
+            ("malformed end", start + "Repository-only text\n" + end.replace("-->", "--")),
+            ("nested start", start + "Repository-only text\n" + start + end),
+        ):
+            with self.subTest(block=label), tempfile.TemporaryDirectory() as temporary:
+                source = Path(temporary) / "source.md"
+                target = Path(temporary) / "generated.md"
+                source.write_text(start + "Excluded\n" + end + block, encoding="utf-8")
+
+                with self.assertRaisesRegex(ValueError, r"docs-site:exclude marker in .*source\.md"):
+                    prepare_docs.process_file(str(source), str(target), "Title", "Description")
+
+                self.assertFalse(target.exists())
+
     def test_root_pages_rewrite_mapped_docs_without_parent_prefix(self):
         for source, destination in prepare_docs.LINK_REWRITES.items():
             with self.subTest(source=source):

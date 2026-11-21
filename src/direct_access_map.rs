@@ -25,6 +25,7 @@ use crate::{
     rules::Validation,
     scanner::direct_access_map_requests_with_options,
     util::get_writer_for_file_or_stdout,
+    validation::internal_ip_policy::RuleInternalIpPolicy,
 };
 
 fn record_mapping_attempt(
@@ -64,7 +65,9 @@ pub async fn run_direct_access_map(
     args: &BlastRadiusArgs,
     global_args: &GlobalArgs,
 ) -> Result<Vec<DirectAccessMapResult>> {
+    let activity_before = chrono::Utc::now();
     args.analysis.validate()?;
+    let internal_ip_policy = RuleInternalIpPolicy::from_global_args(global_args)?;
     let rule_selector = args
         .rule
         .as_deref()
@@ -123,14 +126,18 @@ pub async fn run_direct_access_map(
             Arc::new(rule.clone()),
             &secret,
             variables,
-            global_args.allow_internal_ips,
+            internal_ip_policy.clone(),
         );
         if requests.is_empty() {
             continue;
         }
 
-        for attempt in
-            crate::access_map::map_request_attempts_with_options(requests, &args.analysis).await
+        for attempt in crate::access_map::map_request_attempts_with_options(
+            requests,
+            &args.analysis,
+            activity_before,
+        )
+        .await
         {
             record_mapping_attempt(rule.id(), rule.name(), attempt, &mut results, &mut failures);
         }

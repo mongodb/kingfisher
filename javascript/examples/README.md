@@ -2,7 +2,8 @@
 
 These examples teach **in-process Node.js scanning**, not the Kingfisher CLI.
 They use the public SDK API and work from the checkout before npm publication.
-The distribution is `kingfisher-secret-scanner`; its stable version is **1.0.2**.
+The distribution is `kingfisher-secret-scanner`. These examples target the
+prepared stable release **1.1.0**.
 
 ## Showcase: Kingfisher Workbench
 
@@ -65,7 +66,7 @@ Consumers receive native binaries and do **not** need Rust or a local Kingfisher
 
 ```sh
 npm init -y
-npm install kingfisher-secret-scanner@1.0.2 --ignore-scripts
+npm install kingfisher-secret-scanner@1.1.0 --ignore-scripts
 ```
 
 Copy the chosen example **and its `fixtures/` dependencies**, preserving their

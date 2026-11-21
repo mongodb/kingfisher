@@ -249,6 +249,7 @@ async fn test_scan_teams_messages() -> Result<()> {
         endpoint: Vec::new(),
         endpoint_config: None,
         config: None,
+        ..Default::default()
     };
 
     let loaded = RuleLoader::from_rule_specifiers(&scan_args.rules).load(&scan_args)?;

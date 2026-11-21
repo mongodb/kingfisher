@@ -1,4 +1,4 @@
-//! Removed native commands stay unavailable; browser-based reports remain supported.
+//! Verify public commands, help, and report formats.
 use std::process::Command;
 
 #[test]
@@ -51,4 +51,13 @@ fn browser_report_viewer_remains_available() {
     for format in ["JSON", "JSONL", "SARIF"] {
         assert!(help.contains(format), "missing {format}: {help}");
     }
+}
+
+#[test]
+fn scan_help_lists_sarif_as_stable_and_supported() {
+    let output =
+        Command::new(env!("CARGO_BIN_EXE_kingfisher")).args(["scan", "--help"]).output().unwrap();
+    assert!(output.status.success());
+    let help = String::from_utf8(output.stdout).unwrap();
+    assert!(help.contains("SARIF 2.1.0 (stable)"), "{help}");
 }

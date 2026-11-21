@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
 # Kingfisher pre-commit hook with automatic binary download
 # This script downloads the appropriate kingfisher binary if not already cached,
-# then runs the scan against staged changes.
+# then scans staged changes or files selected by the hook runner.
 set -euo pipefail
 
 REPO="mongodb/kingfisher"
 CACHE_DIR="${KINGFISHER_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/kingfisher}"
+SCAN_ARGS=(scan . --staged --quiet --no-update-check)
+if [[ "${1:-}" == "--pre-commit-files" ]]; then
+  shift
+  SCAN_ARGS=(scan --pre-commit-files --quiet --no-update-check)
+  # The staged hook's cached binary may predate file selection support.
+  CACHE_DIR="$CACHE_DIR/pre-commit-files"
+fi
 KINGFISHER_BIN="$CACHE_DIR/kingfisher"
 VERSION_FILE="$CACHE_DIR/.version"
 
@@ -129,8 +136,7 @@ main() {
     download_kingfisher "$platform" "$EXPECTED_VERSION"
   fi
 
-  # Run kingfisher scan on staged changes
-  exec "$KINGFISHER_BIN" scan . --staged --quiet --no-update-check "$@"
+  exec "$KINGFISHER_BIN" "${SCAN_ARGS[@]}" "$@"
 }
 
 main "$@"

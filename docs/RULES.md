@@ -185,7 +185,9 @@ kingfisher scan ./src --rule kingfisher.connection-string.password \
 ## Betterleaks v2 programs
 
 Predicate bodies support local `let` declarations and expression sequences; the last
-expression supplies the result. Existing YAML/TOML rules need no edits.
+expression supplies the result. Existing YAML/TOML rules need no edits. See the
+[cryptographic reference](#cryptographic-authentication) for Kingfisher's extended
+`crypto.*` functions, byte encodings and complete authentication examples.
 
 Custom TOML supports `validate`, `analyze`, and `revoke` Expr programs, named
 `finding.captures` and `components[id].captures`, optional components, `valueGroup`,
@@ -329,7 +331,7 @@ redaction, or live validation. A parsed requirement is enforced, not just inspec
 | Character minimums, custom special characters, ignored substrings and checksums | Enforced by default, including named-capture checksum context and missing-capture policy |
 | Required/optional components and `within` | Python retains full-match context automatically. Rust callers needing exact full-match windows use `Scanner::scan_blob_with_context` and `Validator::with_scan_context`; existing vector-only methods retain their historical location-based association |
 | `verify_candidates: true` | Shared fixed-origin eligibility, ranking, 16-combination budget, deadline and four-search concurrency limit; only explicit validation sends requests |
-| Validation types, HTTP/gRPC matchers, OAuth2 and Liquid signing | Shared validation engine; enable Rust's `validation` feature and call `Validator` explicitly |
+| Validation types, HTTP/gRPC matchers, OAuth2, Liquid/Expr signing and encryption | Shared validation engine; enable Rust's `validation` feature and call `Validator` explicitly |
 | HTTP/AWS/GCP and multi-step revocation | Shared revocation engine; Python requires `confirm=True` |
 | `visible: false` | Helpers remain in SDK results for association; filter `finding.visible` only when reporting |
 | Examples, negative examples and references | Rule metadata for inspection/checking; examples are not scan-time allowlists |
@@ -517,6 +519,7 @@ revocation:
 | depends_on_rule         | Chain rules: use captures from one rule in another's validation      |
 | pattern_requirements  | Require character types and/or exclude placeholder words from matches |
 | validation              | Configure `Assumed`, `Http`, `Grpc`, typed validators, or `Raw` exception-path checks |
+| allow_internal_ips      | Request permission to validate against internal IPs. Defaults to `false`. See [internal IP validation](#internal-ip-validation). |
 | fallbacks               | Up to two named HTTP alternatives, disabled unless explicitly enabled; see [fallbacks](#ordered-http-fallback-endpoints) |
 | revocation              | Configure HTTP, AWS, or multi-step revocation for a detected secret  |
 
@@ -528,6 +531,16 @@ Kingfisher supports these validation types:
 2. `Http` and `Grpc`: YAML-native validation flows. Prefer these first.
 3. Typed validators: schema-level validation families already modeled in the rule schema, such as `AWS`, `AzureStorage`, `Coinbase`, `CredentialUri`, `Ethereum`, `GCP`, `MongoDB`, `MySQL`, `Postgres`, `Jdbc`, and `JWT`. `CredentialUri` dispatches a named `URI` capture (falling back to `TOKEN`) to HTTPS Basic Auth, SMTP AUTH, or a supported database validator while leaving other unsupported schemes unvalidated. `Ethereum` is deterministic and network-free; it validates key material and derives an address without claiming the address is active.
 4. Raw validators: provider-specific or protocol-specific exception paths dispatched through `validation: type: Raw`.
+
+### Internal IP validation
+
+Add `allow_internal_ips: true` alongside `validation` in a trusted custom Kingfisher YAML rule to
+declare that it needs access to internal IPs. Pass `--enable-rule-internal-ips` on the CLI to honor
+the declaration. The rule defaults to `false` when the field is omitted.
+
+Existing YAML and Betterleaks TOML rules work without edits. Use `--enable-internal-ips-for` to
+allow a rule from either format by ID, including a YAML rule that omits the field or sets it to
+`false`. See [the CLI examples](USAGE.md#allow-internal-ips-for-selected-rules).
 
 ### Overlapping rules and validation deduplication
 
@@ -724,6 +737,9 @@ A `revocation_urls` list maps existing steps; it is **not** a list of alternativ
 mutation targets. Validation may
 try environments in order; revocation never falls back to another environment.
 Redirects are disabled, and response extractors cannot overwrite selection variables.
+If a crypto-templated fallback URL uses a prior response after a mutating step,
+start it with a fixed origin matching validation or `{{ VALIDATION_ORIGIN }}`
+followed by `/`, `?`, or `#`.
 URLs may contain secrets; selection snapshots stay out of ordinary reports.
 
 #### Validate, select, then revoke
@@ -750,8 +766,8 @@ Pass credential/supporting values using `--var NAME=VALUE`. With `--fallbacks`,
 internal endpoint state and values extracted by earlier revocation steps. Named
 variables are recommended for compound credentials. `TOKEN` and `VALIDATION_*`
 endpoint-selection variables are determined internally and cannot be overridden.
-For private services, also pass `--allow-internal-ips`: the selection phase uses
-the same SSRF protections and TLS policy as direct validation.
+For private services, use one of the [internal-IP validation options](USAGE.md#allow-internal-ips-for-selected-rules).
+The selection phase uses the same address checks and TLS policy as direct validation.
 
 `--timeout` bounds the whole validation phase, including fallback attempts and
 validation retries. Revocation retains its individual HTTP/AWS request/step timeouts.
@@ -840,8 +856,9 @@ Both endpoints use HTTPS with strict certificate verification, even with
 transports so those options and custom validator HTTP clients cannot weaken
 protection of the scanner's password-grant credentials or service access token.
 HTTPS requests retain environment proxy and `NO_PROXY` behavior; use a trusted
-certificate for internal services. The only plain-HTTP exception is loopback with
-`--allow-internal-ips` (Rust: `allow_internal_ips(true)`) for local development.
+certificate for internal services. The only plain-HTTP exception is loopback with an
+[internal-IP validation opt-in](USAGE.md#allow-internal-ips-for-selected-rules) for local development.
+In Rust, use `allow_internal_ips(true)`.
 Those loopback HTTP token and verifier requests connect directly, bypassing all
 proxies so plaintext credentials cannot be sent through an ambient proxy.
 This exception does not disable proxies for HTTPS or other validator traffic.
@@ -898,8 +915,9 @@ applies. Probing stops after the first definitive authentication result.
 Only advertised AUTH PLAIN or LOGIN mechanisms are used, after TLS succeeds.
 SMTP 235 means active; SMTP 535 means rejected credentials. Connection failures,
 TLS errors, timeouts, unsupported mechanisms, and other replies are inconclusive.
-Server reply text is omitted from reports. Internal targets require the existing
-`--allow-internal-ips` opt-in, and TLS follows the existing validation TLS policy.
+Server reply text is omitted from reports. Internal targets require an
+[internal-IP validation opt-in](USAGE.md#allow-internal-ips-for-selected-rules), and TLS follows the
+existing validation TLS policy.
 SMTP provides no portable credential-revocation operation.
 
 ## gRPC Validation (Grpc)
@@ -1167,6 +1185,187 @@ Do NOT use multi-step revocation when:
 - **You need more than 2 steps**: Kingfisher supports a maximum of 2 steps
 - **The service provides a native revocation method**: Use `AWS` or `GCP` types when applicable
 
+## Cryptographic authentication
+
+Custom rules can perform ECDH, ECDSA, authenticated encryption and key derivation
+without a native provider validator ([#587](https://github.com/mongodb/kingfisher/issues/587)).
+The shared implementation lives in `kingfisher-rules`; the Betterleaks expression
+runtime lives in `kingfisher-scanner`. The CLI and Rust/Python/Node SDK validators
+use these same rule capabilities, not separate SDK cryptography APIs. Existing
+YAML/TOML rules and legacy filters keep working without edits. These additions
+are **Kingfisher extensions**: a Betterleaks expression or TOML rule using them
+is not necessarily portable to upstream Betterleaks.
+
+### Key formats and limits
+
+Lengths below are **decoded bytes**, not Base64 character counts. Curve and
+signature-format names are literal, case-sensitive strings.
+
+| Operation | Accepted material / contract |
+| --- | --- |
+| `P-256` | Private: raw 32-byte big-endian scalar; public: 65-byte uncompressed SEC1 (`04 \|\| x \|\| y`). ECDH returns 32 bytes. ECDSA hashes the message with SHA-256. |
+| `P-384` | Private: raw 48-byte big-endian scalar; public: 97-byte uncompressed SEC1. ECDH returns 48 bytes. ECDSA hashes the message with SHA-384. |
+| EC containers | P-256/P-384 also accept unencrypted RFC 5915 `EC PRIVATE KEY` or PKCS#8 `PRIVATE KEY` PEM for private arguments, and SPKI `PUBLIC KEY` PEM for public arguments. The first matching PEM block is used. The curve must match. |
+| `X25519` | ECDH/public-key derivation only: raw private and public keys are 32 bytes; shared secret is 32 bytes. Not an ECDSA curve. |
+| ECDSA signatures | `p1363` (default): fixed-width `r \|\| s`, 64 bytes for P-256 or 96 for P-384. `der`: ASN.1 DER signature. Pass the **message**, not a precomputed digest. |
+| AES-GCM | AES-128 or AES-256 key (16 or 32 bytes), 12-byte nonce, arbitrary plaintext/AAD. Sealed output is `ciphertext \|\| tag` with a 16-byte tag. No unauthenticated plaintext is returned on failure. |
+| HKDF-SHA256 | Input key material, salt and info are bytes; output length **1–8160** bytes. Use protocol-specific info/domain separation. |
+| PBKDF2-HMAC-SHA256 | Password and salt are bytes; iterations **1–1,000,000**, output **1–65,536** bytes, and total work `iterations * ceil(length / 32) <= 4,000,000`. |
+| Cumulative budget | Each expression program and each Liquid request attempt shares one work budget across the new cryptographic calls, including those repeated by `map`/`filter` or `{% for %}`. URL, headers, body, and multipart fields share the budget, as do response extractors within each revocation step. The budget allows one maximal small-input PBKDF2 derivation plus roughly 1,000 inexpensive operations. Elliptic-curve operations count more, especially P-384. Each HTTP validation retry has a fresh budget. A read-only revocation retry resends the rendered request. Input sizes also count; PBKDF2 salt and HKDF info are charged for every 32-byte output block. Valid iteration/output lengths can therefore still exceed the budget. Both rule formats report exhausted budgets as unavailable with reason `invalid_configuration`. |
+| Scan-time templates | Pattern-requirement checksums support `sha384`, `sha512` and `hmac_sha512` alongside legacy helpers such as `sha256`. Key agreement, signing, encryption, key derivation and random-byte filters are reserved for validation and revocation. Invalid checksum template syntax produces a warning when the rule loads. Candidates that require the invalid template fail the checksum. |
+| Ed25519 | Raw 32-byte private **seed**, 32-byte public key, 64-byte signature; not a 64-byte expanded private key or Ed25519ph. |
+| Randomness | OS-backed cryptographic random bytes; requested length **1–65,536**. |
+
+### Liquid binary filters
+
+Every binary input and binary output in this table uses **standard padded
+Base64**, including messages, keys, signatures, AAD and KDF salt/info. EC key
+arguments (`ecdh`, `ec_public_key`, `ecdsa_sign`, `ecdsa_verify`) also accept PEM
+text directly, so a captured PEM `TOKEN` needs no `b64enc`; Base64 of the PEM
+still works.
+An empty byte string is `''`. Curve/format strings and integer arguments are
+**not** encoded. Verification/equality return booleans. Do not pipe arbitrary
+binary data through the legacy text-oriented `b64dec`/`b64url_dec`: their UTF-8
+conversion can lose bytes. Chain the encoded output directly into the next binary
+filter. Use `b64enc` only to introduce UTF-8 text into that chain.
+
+In the signatures below, `*_b64` denotes Base64-encoded bytes; brackets indicate
+an optional argument and are not Liquid syntax.
+
+| Liquid pipeline | Result |
+| --- | --- |
+| `public_b64 \| ecdh: private_b64, curve` | Shared secret, Base64; apply HKDF before using as an encryption key. |
+| `private_b64 \| ec_public_key: curve` | Public key, Base64 (uncompressed SEC1 for P-curves; raw X25519). |
+| `message_b64 \| ecdsa_sign: private_b64, curve [, format]` | Signature, Base64; format defaults to `p1363`. |
+| `message_b64 \| ecdsa_verify: public_b64, signature_b64, curve [, format]` | Boolean signature check. |
+| `plaintext_b64 \| aes_gcm_encrypt: key_b64, nonce_b64 [, aad_b64]` | Sealed ciphertext/tag, Base64; omitted AAD is empty. |
+| `sealed_b64 \| aes_gcm_decrypt: key_b64, nonce_b64 [, aad_b64]` | Authenticated plaintext, Base64; omitted AAD is empty. |
+| `ikm_b64 \| hkdf_sha256: salt_b64, info_b64, length` | Derived bytes, Base64. |
+| `password_b64 \| pbkdf2_sha256: salt_b64, iterations, length` | Derived bytes, Base64. |
+| `seed_b64 \| ed25519_public_key` | Raw public key, Base64. |
+| `message_b64 \| ed25519_sign: seed_b64` | Signature, Base64. |
+| `message_b64 \| ed25519_verify: public_b64, signature_b64` | Boolean signature check. |
+| `'' \| random_bytes: length` | Random bytes, Base64; pipeline input is ignored. |
+| `a_b64 \| constant_time_eq: b_b64` | Boolean comparison of decoded bytes, not their encoded spelling. |
+
+Text hashing/HMAC follows the existing text-filter convention instead:
+`text | sha384` and `text | sha512` return lowercase hex, like `sha256`;
+`text | hmac_sha512: key_text` returns standard Base64, like `hmac_sha384`.
+The HMAC input and key are literal UTF-8 text, **not** Base64-decoded keys. For
+arbitrary binary HMAC inputs, use the expression functions below.
+
+For example, this one template preserves binary data through ECDH → HKDF → AES:
+
+```liquid
+{%- assign shared_b64 = PINNED_PEER_PUBLIC_B64 | ecdh: EPHEMERAL_PRIVATE_B64, 'X25519' -%}
+{%- assign salt_b64 = '' | random_bytes: 16 -%}
+{%- assign info_b64 = 'provider/identity/v1' | b64enc -%}
+{%- assign key_b64 = shared_b64 | hkdf_sha256: salt_b64, info_b64, 32 -%}
+{%- assign nonce_b64 = '' | random_bytes: 12 -%}
+{%- assign message_b64 = '{"operation":"identity"}' | b64enc -%}
+{{- message_b64 | aes_gcm_encrypt: key_b64, nonce_b64 -}}
+```
+
+### Betterleaks expression functions
+
+Expression helpers consume and return **raw bytes**, unless noted. `bytes(text)`
+introduces UTF-8 bytes; `hex.decode(text)`, `base64.decode(text)` and
+`base64url.decode(text)` decode wire encodings without a lossy string conversion.
+The decoders also accept bytes that hold UTF-8 encoded text.
+Use `hex.encode(raw)`, `base64.encode(raw)` or `base64url.encode(raw)` for output
+(standard padded Base64 or unpadded URL-safe Base64 respectively). Do not convert
+keys, shared secrets or decrypted binary data with `string(raw)`.
+
+| Expression call | Result |
+| --- | --- |
+| `crypto.ecPublicKey(curve, private)` | Public-key bytes. |
+| `crypto.ecdh(curve, private, peerPublic)` | Shared-secret bytes. |
+| `crypto.ecdsaSign(curve, private, message [, format])` | Signature bytes; default `p1363`. |
+| `crypto.ecdsaVerify(curve, public, message, signature [, format])` | Boolean signature check. |
+| `crypto.aesGcmEncrypt(key, nonce, plaintext [, aad])` | Sealed ciphertext/tag bytes; default AAD is empty bytes. |
+| `crypto.aesGcmDecrypt(key, nonce, sealed [, aad])` | Authenticated plaintext bytes; default AAD is empty bytes. |
+| `crypto.hkdfSha256(ikm, salt, info, length)` | Derived bytes. |
+| `crypto.pbkdf2Sha256(password, salt, iterations, length)` | Derived bytes. |
+| `crypto.ed25519PublicKey(seed)` | Public-key bytes. |
+| `crypto.ed25519Sign(seed, message)` | Signature bytes. |
+| `crypto.ed25519Verify(public, message, signature)` | Boolean signature check. |
+| `crypto.randomBytes(length)` | Random bytes. |
+| `crypto.constantTimeEqual(a, b)` | Boolean comparison of bytes. |
+| `crypto.sha384(message)`, `crypto.sha512(message)` | Lowercase **hex strings**, matching legacy `crypto.sha256`, not raw digests. |
+| `crypto.hmacSha384(key, message)`, `crypto.hmacSha512(key, message)` | Raw HMAC bytes; the **key comes first**. |
+
+### Complete advanced rules
+
+Load the [complete cryptographic-authentication scaffold](../crates/kingfisher-scanner/examples/rules/cryptographic-auth.yml)
+for two equivalent rules: a Liquid `Http` validator and a YAML `Betterleaks`
+expression program. Both associate a nearby, invisible client-ID component,
+generate an independent ephemeral X25519 exchange key, derive an AES-256 key with
+HKDF, encrypt a read-only identity request, and sign the full envelope with the
+candidate P-256 key. The file specifies the canonical AAD/signing bytes and
+response contract. Its published RFC test keys are **nonproduction**; even the
+illustrative peer pin has a publicly known private counterpart.
+
+```bash
+kingfisher rules check --rules-path crates/kingfisher-scanner/examples/rules/cryptographic-auth.yml --load-builtins=false --no-update-check
+```
+
+This check is offline: it validates loading/detection examples, not a real
+provider or successful live authentication. The literal
+`https://crypto.example.invalid/v1/verify` endpoint is deliberately nonfunctional.
+Before live use, replace the fixed origin, trusted peer pin, wire format and
+success contract with the provider's reviewed protocol; do not capture hosts or
+peer keys from untrusted source. The example has **no revocation action**.
+
+Liquid assignments are local to a template: generating a nonce in a header does
+not make it available to the body. Keep coupled values in one template, as in the
+scaffold. Crypto templates are parsed but not rendered during offline input
+preparation, so preparation does not generate randomness or repeat expensive
+operations. Only unambiguous external requirements are diagnosed there; execution
+still checks inputs in the branches actually taken. `Http` validation remains a
+single request; `HttpMultiStep` is a revocation type, not a new validation schema.
+Expression programs can use existing HTTP calls when a reviewed protocol requires
+a challenge before its proof.
+
+**A header applying a new cryptographic filter aborts the request on parsing,
+rendering, or HTTP header-conversion failure**, and validation is reported as
+unavailable rather than inactive. A filter name in plain text, a string literal,
+or a Liquid comment/raw block does not enable this policy. Legacy HTTP header
+errors (including existing hash/HMAC filters) still omit that header without
+aborting, preserving rules from 2.19.1 and earlier. Require the provider to reject
+missing authentication, and never accept an unauthenticated landing page as proof.
+
+### Cryptographic validation safety
+
+- Pin the peer key and HTTPS origin in trusted configuration; keep TLS verification
+  enabled. Never let a finding select where credentials or proofs are sent.
+- Feed raw ECDH output through HKDF with the provider's salt/info. Keep exchange
+  keys separate from signing keys unless the protocol explicitly requires reuse.
+- Never reuse an AES-GCM nonce with the same key. Generate fresh ephemeral keys,
+  salt and nonces per request; random nonces still require collision/volume limits
+  for long-lived keys. Authenticate protocol context with AAD and enforce replay
+  protection according to the provider's protocol.
+- A local signature check, successful decryption, HTTP 200 or parseable JSON alone
+  does **not** prove a credential is active. Require the provider's authoritative
+  current-status signal and bind it to the expected identity/request. Liquid
+  `WordMatch` is a substring check, not a structural JSON assertion: the scaffold
+  assumes its exact canonical success-body contract; prefer expression JSON field
+  checks for more complex responses.
+- Keep KDF costs within the bounds above, and choose reviewed fixed costs instead
+  of accepting attacker-selected iterations or output sizes.
+- Malformed keys/encodings, unsupported curves/formats and authentication failures
+  must fail closed, never become valid results or partial plaintext. Do not catch
+  cryptographic errors and continue with an empty/default secret.
+- The shared primitives and Kingfisher validation diagnostics omit cryptographic
+  inputs. **Applications rendering raw Liquid templates must not log or return full
+  engine errors**: Liquid may attach runtime inputs or source expressions outside
+  the filter itself. Map parser/render failures to a static, safe error instead.
+  Avoid logging keys, shared secrets, plaintext, raw provider bodies or detailed
+  failure causes; do not expose a decryption/signature oracle. Leave
+  `report_response` off.
+- Keep validation read-only. Add revocation only for an explicitly supported,
+  narrowly scoped provider action with reliable success semantics and separate
+  operator authorization; these helpers do not enable revocation automatically.
+
 ## 3. Templating with Liquid
 Kingfisher leverages the Liquid template engine for dynamic parts of HTTP request bodies, headers, query parameters, and multipart payloads. The engine supports both built-in and custom filters to manipulate the captured secret (TOKEN) or other named captures ({{ NAME }}).
 
@@ -1185,7 +1384,9 @@ Arguments: Some filters accept parameters, provided after a colon:
 
 ### Built-in & Custom Liquid Filters
 
-Below is the complete list of Liquid filters available in Kingfisher, along with their usage patterns and examples.
+Common filters are listed below; ECDH, ECDSA, AES-GCM, KDF, Ed25519 and binary
+randomness/comparison filters are covered in the [cryptographic reference](#cryptographic-authentication).
+
 | Filter                | Parameters                                   | Description                                                                                                    | Example                                                             |
 | --------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
 | `b64enc`              | –                                            | Base64-encodes the input using the standard alphabet.                                                          | `{{ TOKEN \| b64enc }}`                                              |
@@ -1193,6 +1394,7 @@ Below is the complete list of Liquid filters available in Kingfisher, along with
 | `b64dec`              | –                                            | Decodes a Base64 string.                                                                                        | `{{ "aGVsbG8=" \| b64dec }}`                                         |
 | `b64url_dec`          | –                                            | Decodes a URL-safe Base64 string (with or without padding).                                                     | `{{ "Kys_Pw" \| b64url_dec }}`                                       |
 | `sha256`              | –                                            | Computes the SHA-256 hex digest of the input.                                                                  | `{{ TOKEN \| sha256 }}`                                              |
+| `sha384`, `sha512`    | – | SHA-384/SHA-512 lowercase hex digest of text input. | `{{ TOKEN \| sha512 }}` |
 | `bip39_valid`         | –                                            | Returns `true` only for a checksum-valid English BIP-39 mnemonic; the temporary normalized phrase is wiped on drop. | `{{ MNEMONIC \| bip39_valid }}`                                  |
 | `luhn_valid`          | – | Returns a boolean Luhn checksum result for at least two ASCII digits; ignores ASCII spaces and hyphens. No card issuer, length or account-existence check. | `{{ MATCH \| luhn_valid }}` |
 | `iban_valid`          | – | Returns a boolean for generic IBAN structure (5–34 ASCII alphanumeric characters, two letters then two digits) and MOD-97 checksum; ignores ASCII spaces and case. No country registry, country-specific length or account-existence check. | `{{ MATCH \| iban_valid }}` |
@@ -1204,6 +1406,7 @@ Below is the complete list of Liquid filters available in Kingfisher, along with
 | `hmac_sha256`         | `key` (string)                               | Computes HMAC-SHA256 over the input, returns Base64-encoded result.                                            | `{{ TOKEN \| hmac_sha256: "secret-key" }}`                           |
 | `hmac_sha384`         | `key` (string)                               | Computes HMAC-SHA384 over the input, returns Base64-encoded result.                                            | `{{ TOKEN \| hmac_sha384: "secret-key" }}`                           |
 | `hmac_sha384_hex`     | `key` (string)                               | Computes HMAC-SHA384 over the input, returns lowercase hexadecimal output.                                     | `{{ TOKEN \| hmac_sha384_hex: "secret-key" }}`                       |
+| `hmac_sha512`         | `key` (text string) | HMAC-SHA512 over text input; text key, standard Base64 output. | `{{ TOKEN \| hmac_sha512: "secret-key" }}` |
 | `hmac_sha256_b64key`  | `key` (string, base64-encoded)               | Decodes the key from Base64 to raw bytes, then computes HMAC-SHA256. Returns Base64. Use for Azure SAS and other protocols where the signing key is base64-encoded. | `{{ to_sign \| hmac_sha256_b64key: TOKEN }}`                         |
 | `random_string`       | `len` (integer, optional)                    | Generates a cryptographically-secure random alphanumeric string of the specified length (default: 32).        | `{{ "" \| random_string: 16 }}`                                      |
 | `prefix`              | `len` (integer, optional)                    | Returns the first `len` characters from the string (default: full).                                            | `{{ TOKEN \| prefix: 6 }}`                                           |

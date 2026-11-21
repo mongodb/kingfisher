@@ -230,6 +230,7 @@ fn test_github_remote_scan() -> Result<()> {
         endpoint: Vec::new(),
         endpoint_config: None,
         config: None,
+        ..Default::default()
     };
     // Create in-memory datastore
     let datastore = Arc::new(Mutex::new(FindingsStore::new(clone_dir)));

@@ -10,6 +10,7 @@ This guide covers all scan targets and usage patterns for Kingfisher.
 ## Table of Contents
 
 - [Basic Examples](#basic-examples)
+  - [Preview a scan](#preview-a-scan)
 - [Scanning Platform-Specific Targets](#scanning-platform-specific-targets)
   - [AWS S3](#aws-s3)
   - [Google Cloud Storage](#google-cloud-storage)
@@ -40,6 +41,25 @@ covers common Windows-produced files such as PowerShell output and `.reg` files.
 encodings such as Latin-1, GBK, and Shift-JIS do not require transcoding for ASCII secrets.
 
 > **Note:** `kingfisher scan` detects whether the input is a Git repository or a plain directory, no extra flags required.
+
+### Preview a scan
+
+Use `--preview` to see the inputs, filters, and rules Kingfisher would use with your
+CLI options and project config.
+
+```bash
+kingfisher scan ./repo --config ./kingfisher.yaml --preview
+kingfisher scan github --org example-org --preview
+```
+
+The preview lists the requested local paths or remote scopes, including applicable Git history
+and path filters. It shows selected rule IDs, dependency helpers, and the reason for each rule's
+internal-IP grant. For remote sources, the actual repositories and files are discovered during a
+scan. Source URLs omit embedded credentials, query strings, and fragments.
+
+Preview prints text to stdout. It exits before reading scan input or stdin, checking for updates,
+fetching remote sources, or running validation. Preview creates no finding report, audit log,
+rule cache, or clones. It cannot be combined with `--list-only` or `--self-update`.
 
 ### Live progress and final counts
 
@@ -191,6 +211,8 @@ kingfisher scan . --format toon
 Use `--format toon` when Kingfisher is being called by an LLM or agent runtime. The TOON report is optimized for token efficiency, keeps the scan summary up front, and flattens each finding into an easier-to-reason-about row.
 
 ### Output SARIF directly to disk
+
+Use `--format sarif` to export a stable, supported SARIF 2.1.0 report for code scanning.
 
 ```bash
 kingfisher scan /path/to/repo --format sarif --output findings.sarif
@@ -2114,14 +2136,44 @@ By default, validation requests are rejected if the target hostname resolves to 
 | `fec0::/10` | IPv6 site-local (deprecated, RFC 3879) |
 | Multicast, benchmarking ranges | Other reserved ranges |
 
-HTTP redirects during credential validation are also validated: each redirect target is resolved via DNS and checked against the same SSRF rules above. Redirects to non-public IPs are blocked. When `--allow-internal-ips` is used, redirect validation is disabled along with all other SSRF protections.
+The CLI disables HTTP redirects during credential validation.
+
+### Allow internal IPs for selected rules
+
+For a trusted Kingfisher YAML rule with [`allow_internal_ips: true`](../rules/overview.md#internal-ip-validation),
+pass `--enable-rule-internal-ips` to honor the rule's opt-in. To allow specific rules directly from
+the CLI, pass `--enable-internal-ips-for <GLOB>`. This works with either rule format and overrides
+`allow_internal_ips: false` or an omitted setting for matching rules.
+
+```bash
+kingfisher scan ./repo --rules-path ./internal-rules.yml --enable-rule-internal-ips
+
+kingfisher scan ./repo --rules-path ./custom-rules \
+  --enable-internal-ips-for 'custom.intranet-*' \
+  --enable-internal-ips-for 'custom.example.vault-token'
+```
+
+Patterns match the full, case-sensitive rule ID after loading, including the `custom.` prefix on
+custom Betterleaks TOML rules. Use an exact ID for one rule, or quote shell globs so Kingfisher
+receives the pattern. Wildcards can match `/` within rule IDs. Repeat the flag to allow more IDs.
+You can combine both flags. Other rules keep the default address checks.
+
+For recurring scans, save the settings in [project config](../usage/configuration.md#internal-ip-validation-policy)
+and pass it with `--config`.
+
+These options apply to validation in `scan` and `validate`, to validation and revocation
+requests made by `revoke --fallbacks`, and to Betterleaks access analysis run by
+`blast-radius --rule` or `scan --blast-radius` (alias `--access-map`). Each grant applies
+to all destinations checked for the eligible rule. Direct primary `revoke` without
+`--fallbacks` can contact internal addresses. Use trusted rule definitions and review
+where they can send credentials before granting access.
 
 ### `--allow-internal-ips`
 
-If you are scanning infrastructure that uses internal endpoints for credential validation (e.g., self-hosted GitLab, Artifactory, or Vault behind a private network), use `--allow-internal-ips` to disable SSRF protections:
+For runs that need internal IP access across all rules, use `--allow-internal-ips`.
 
 ```bash
-# Scan with SSRF protection disabled (allows requests to internal IPs)
+# Allow validation against internal IPs for all rules
 kingfisher scan --allow-internal-ips ./repo
 
 # Also works with direct validation against a self-hosted endpoint

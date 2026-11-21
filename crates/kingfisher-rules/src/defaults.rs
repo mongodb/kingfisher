@@ -694,13 +694,9 @@ mod test {
     }
 
     #[test]
-    fn test_get_default_rules() {
-        assert!(get_builtin_rules(None).unwrap().num_rules() >= 400);
-    }
-
-    #[test]
     fn connection_string_rules_are_available_at_default_confidence() {
         let rules = get_builtin_rules(None).unwrap();
+        assert!(rules.num_rules() >= 400);
         let high_confidence = get_builtin_rules(Some(Confidence::High)).unwrap();
         for suffix in ["unquoted", "double-quoted", "single-quoted", "odbc-braced"] {
             let id = format!("kingfisher.connection-string.password.{suffix}");

@@ -2,6 +2,56 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.20.0]
+
+### Added
+
+- Highlight the last recorded use and its source in blast-radius HTML reports, with
+  [provider lookups and optional audit credentials](docs/BLAST_RADIUS.md#credential-activity-coverage).
+- Add shared ECDH (P-256/P-384/X25519), ECDSA (P-256/P-384), AES-GCM,
+  HKDF/PBKDF2-SHA256, Ed25519, secure random bytes and constant-time comparison
+  helpers to Liquid rules and Kingfisher's Betterleaks expression runtime, plus
+  SHA-384/SHA-512 hashing and SHA-512 HMAC support
+  ([#587](https://github.com/mongodb/kingfisher/issues/587)). Existing custom YAML/TOML
+  rules and SDK APIs remain compatible; no bundled detector migration is required.
+- Bound cryptographic work per expression program and per Liquid request attempt,
+  including repeated KDF salt and info processing. Checksum templates support
+  SHA-384, SHA-512, and SHA-512 HMAC and warn on invalid syntax at load time. Fail HTTP
+  headers applying new crypto filters on parse, render, or field-conversion errors.
+  Accept PEM EC keys and bundles directly in Liquid crypto filters.
+- Inspect crypto-template inputs without executing cryptography or mistaking local
+  variables, unreachable branches, comments or string literals for new requirements.
+- Document binary-safe encodings, supported key/signature formats, bounded KDF
+  work and provider-validation safety, with equivalent complete Liquid/Expr
+  [authentication scaffolds](crates/kingfisher-scanner/examples/rules/cryptographic-auth.yml).
+  The examples use only published test vectors and a fixed `.invalid` origin,
+  and do not enable revocation.
+- Add file-scoped pre-commit hooks that honor `--all-files`, `--files`, and runner
+  filters. Existing hook IDs still scan the Git index ([#584](https://github.com/mongodb/kingfisher/issues/584)).
+- Allow internal IPs for selected credential validators. Use `--enable-rule-internal-ips`
+  to honor `allow_internal_ips: true` in trusted YAML rules or `--enable-internal-ips-for <GLOB>`
+  to grant access by rule ID for either rule format. Both settings can be saved in project config
+  for scans ([#582](https://github.com/mongodb/kingfisher/issues/582)).
+  `revoke --fallbacks` also checks revocation destinations against these grants.
+- Add `scan --preview` to show effective inputs, filters, selected rules, and internal-IP
+  grants before fetching sources, running validation, or writing reports.
+
+### Changed
+
+- Prepare Python SDK 1.7.0 and npm SDK 1.1.0 with the shared custom-rule
+  cryptographic helpers. Both releases preserve existing SDK APIs.
+- Mark SARIF 2.1.0 as a stable, supported scan report format.
+- Reuse indexed Git blob sizes in the content prepass and final scan to avoid repeat header lookups.
+- Reuse a bounded set of inflated Git blobs in the final scan, along with any completed
+  negative raw-match results from the prepass.
+- Stream top-level TAR and ZIP archives during filesystem scans. Read TAR members directly from
+  Git blob and nested archive bytes to reduce temporary disk I/O.
+- Reuse opened files for size checks and buffer files up to 16 KiB once for PDF and ZIP
+  detection and scanning. Speed up nested Git repository discovery with directory entries
+  and parallel traversal of sibling subtrees.
+- Skip short runs during shared Base64 candidate discovery and redundant BOM-less
+  UTF-16/32 checks on nearly zero-filled input.
+
 ## [v2.19.1]
 
 ### Fixed

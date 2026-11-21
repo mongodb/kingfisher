@@ -4,7 +4,6 @@ const path = require('node:path');
 const vm = require('node:vm');
 const html = fs.readFileSync(path.join(__dirname, '../docs/viewer/index.html'), 'utf8');
 const scripts = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/gi)].map(match => match[1]);
-for (const script of scripts) new vm.Script(script);
 // Collection-time caveats must remain visible after opening a snapshot, and
 // graph hints must use the actual view-switch label.
 assert.ok(!/body:not\(\.workspace-empty\)\s+\.workspace-context\s*\{[^}]*display:\s*none/.test(html));
@@ -21,7 +20,7 @@ for (const [tag] of html.matchAll(/<\/?section\b[^>]*>|<div\b[^>]*\bid="finding-
 }
 assert.ok(modalSections, 'Finding detail modal is present');
 assert.ok(!modalSections.some(tag => /\brole="tabpanel"/.test(tag)), 'Shared finding details must remain visible outside the Findings tab');
-const context = vm.createContext({ URL, URLSearchParams, Intl });
+const context = vm.createContext({ URL, URLSearchParams, Intl, accessMapByFindingFingerprint: new Map() });
 vm.runInContext(scripts.join('\n').match(/^    (?:async )?function \w+\([^]*?^    }/gm).join('\n'), context);
 context.scanMetadata = {};
 const entry = (evidence = {}, overrides = {}) => ({
@@ -41,6 +40,45 @@ assert.equal(context.generateRiskRationale(finding, [oldRead]).level, 'low');
 const explicitRisk = entry({ assessment: { capability_risk: 'high', legacy_severity: 'low', coverage: 'partial' } });
 assert.equal(context.generateRiskRationale(finding, [explicitRisk]).level, 'high');
 assert.match(context.generateRiskRationale(finding, []).text, /unknown/);
+
+// Last use is independent of validation, respects day precision and UTC, and keeps the newest usable history.
+const usedAt = (timestamp, provider = 'aws', source) => entry({}, {
+  provider, token_details: { last_used_at: timestamp }, provider_metadata: { credential_last_used_source: source },
+});
+const timedUse = usedAt('2026-01-02T01:05:06+01:00');
+const dayOnlyUse = usedAt('2026-01-02', 'gcp', 'Google Cloud Policy Analyzer (day precision)');
+const auditedUse = usedAt('2026-01-02T00:05:06Z', 'github', 'GitHub audit <latest event>');
+assert.match(context.credentialLastUsedHtml(timedUse), /<strong>Last used<\/strong> <time datetime="2026-01-02T00:05:06\.000Z">[^<]+UTC<\/time>/);
+assert.ok(context.credentialLastUsedHtml(auditedUse).includes('<span class="credential-last-used-source">GitHub audit &lt;latest event&gt;</span>'));
+assert.ok(!context.credentialLastUsedHtml(usedAt(null, 'github', 'GitHub audit <latest event>')).includes('latest event'));
+const displayDay = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeZone: 'UTC' }).format(new Date('2026-01-02'));
+assert.ok(context.credentialLastUsedHtml(dayOnlyUse).includes(`<time datetime="2026-01-02">${displayDay}</time>`));
+for (const unavailable of [entry(), usedAt('1'), usedAt('2026-02-31'), usedAt('2026-02-31T12:00:00Z'), usedAt('2026-01-02T12:00:00'), usedAt('2026-01-03', 'ibm_cloud'), usedAt('2026-01-02', 'monday')]) {
+  assert.match(context.credentialLastUsedHtml(unavailable), /<strong>Last used<\/strong> Unavailable/);
+}
+const ibmUse = usedAt('2026-01-02T00:00:00Z', 'ibm_cloud', 'IBM Cloud IAM');
+assert.equal(context.mergeAccessMapEntries(ibmUse, usedAt('2026-01-03', 'ibm_cloud')).token_details.last_used_at, ibmUse.token_details.last_used_at);
+assert.equal(context.mergeAccessMapEntries(ibmUse, entry({}, { provider: 'ibm_cloud' })).provider_metadata.credential_last_used_source, 'IBM Cloud IAM');
+assert.equal(context.mergeAccessMapEntries(ibmUse, { ...dayOnlyUse, provider: 'ibm_cloud' }).token_details.last_used_at, ibmUse.token_details.last_used_at);
+assert.equal(context.mergeAccessMapEntries(timedUse, usedAt('2026-01-03')).token_details.last_used_at, '2026-01-03');
+assert.equal(context.mergeAccessMapEntries(auditedUse, { ...timedUse, provider: 'github' }).provider_metadata.credential_last_used_source, 'GitHub audit <latest event>');
+assert.equal(context.mergeAccessMapEntries(auditedUse, usedAt('2026-01-03', 'github')).provider_metadata.credential_last_used_source, undefined);
+context.setAccessMap([
+  { ...auditedUse, finding_fingerprints: ['example', 'duplicate-a'] },
+  { ...auditedUse, finding_fingerprints: ['example', 'duplicate-b'] },
+  { ...timedUse, fingerprint: 'legacy' },
+]);
+const mapped = context.getAccessMapForFingerprint('example');
+assert.equal(mapped.length, 1);
+assert.equal(context.getAccessMapForFingerprint('duplicate-a')[0], mapped[0]);
+assert.equal(context.getAccessMapForFingerprint('duplicate-b')[0], mapped[0]);
+assert.equal(context.getAccessMapForFingerprint('legacy')[0].fingerprint, 'legacy');
+assert.equal(context.getAccessMapForFingerprint('unrelated').length, 0);
+const exported = context.findingAccessMapForExport('duplicate-a')[0];
+assert.equal(exported.fingerprint, 'example');
+assert.deepEqual([...exported.finding_fingerprints], ['duplicate-a']);
+context.setAccessMap([]);
+assert.equal(context.getAccessMapForFingerprint('example').length, 0);
 
 // Empty enumeration may identify a principal without establishing resource access.
 const identityOnly = entry({}, { context: { identity_id: 'arn:example:identity' }, groups: [{ resources: ['arn:example:identity'], permissions: [] }] });
@@ -177,6 +215,7 @@ const created = [];
 const element = tag => {
   const item = { tag, children: [], style: {}, dataset: {}, attributes: {}, handlers: new Map(),
     appendChild(child) { this.children.push(child); return child; }, append(...children) { this.children.push(...children); },
+    insertAdjacentHTML(position, markup) { assert.equal(position, 'beforeend'); this.children.push(markup); },
     setAttribute(key, value) { this.attributes[key] = value; }, addEventListener(name, fn) { this.handlers.set(name, fn); },
     querySelector() { return null; }, click() { this.handlers.get('click')?.({}); },
     focus() { context.document.activeElement = this; },
@@ -194,8 +233,9 @@ context.buildIdentityCard({ key: 'large', identity: largeIdentity, groups: large
 assert.ok(created.length < 75, `Collapsed identity allocated ${created.length} elements`);
 assert.ok(!created.some(item => item.className === 'evidence-workspace'));
 created.length = 0;
-const smallIdentity = entry();
+const smallIdentity = timedUse;
 context.buildIdentityCard({ key: 'small', identity: smallIdentity, groups: smallIdentity.groups });
+assert.ok(created.find(item => item.className === 'id-card__info').children.includes(context.credentialLastUsedHtml(timedUse)));
 const identityHeader = created.find(item => item.className === 'id-card__header');
 identityHeader.handlers.get('keydown')({ key: 'Enter', preventDefault() {} });
 assert.equal(identityHeader.attributes['aria-expanded'], 'true');
@@ -215,7 +255,7 @@ const body = element('body');
 context.document.body = body;
 context.document.getElementById = id => id === 'investigation-queue' ? queue : null;
 context.findings = [{ rule: { name: malicious }, finding: { path: malicious, validation: { status: malicious }, fingerprint: 'untrusted' } }];
-context.accessMap = [];
+context.setAccessMap([]);
 let investigated;
 const showFindingDetail = context.showFindingDetail;
 context.showFindingDetail = record => { investigated = record; };
@@ -301,7 +341,7 @@ for (const [snapshot, legalOwner] of [
 ]) {
   context.rawData = snapshot;
   context.findings = snapshot?.findings || [];
-  context.accessMap = [];
+  context.setAccessMap([]);
   context.extractScanMetadata();
   context.renderScanMetadata();
   context.renderInvestigationWorkspace();

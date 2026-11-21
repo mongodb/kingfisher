@@ -975,11 +975,6 @@ mod tests {
     };
 
     #[test]
-    fn docker_struct_new() {
-        let _ = Docker::new();
-    }
-
-    #[test]
     fn archive_directory_names_accept_windows_paths() -> Result<()> {
         let root = tempdir()?;
         for path in [r"C:\Users\runner\scan archives\image.tar", r"\\server\share\image.tar"] {

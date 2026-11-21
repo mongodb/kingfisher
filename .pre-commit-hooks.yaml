@@ -24,3 +24,36 @@
   pass_filenames: false
   types: [file]
   stages: [pre-commit]
+
+- id: kingfisher-auto-files
+  name: kingfisher (auto-install, selected files)
+  description: Automatically downloads and caches Kingfisher, then scans files selected by the hook runner.
+  entry: scripts/kingfisher-pre-commit-auto.sh --pre-commit-files
+  language: script
+  args: ['']
+  pass_filenames: true
+  require_serial: true
+  types: [file]
+  stages: [pre-commit]
+
+- id: kingfisher-docker-files
+  name: kingfisher (docker, selected files)
+  description: Scan files selected by the hook runner using the published Kingfisher image.
+  entry: ghcr.io/mongodb/kingfisher:latest scan --pre-commit-files --quiet --no-update-check
+  language: docker_image
+  args: ['']
+  pass_filenames: true
+  require_serial: true
+  types: [file]
+  stages: [pre-commit]
+
+- id: kingfisher-files
+  name: kingfisher (selected files)
+  description: Scan files selected by the hook runner with the locally installed Kingfisher binary.
+  entry: kingfisher scan --pre-commit-files --quiet --no-update-check
+  language: system
+  args: ['']
+  pass_filenames: true
+  require_serial: true
+  types: [file]
+  stages: [pre-commit]

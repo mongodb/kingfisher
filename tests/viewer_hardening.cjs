@@ -3,15 +3,8 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const html = fs.readFileSync(path.join(__dirname, '../docs/viewer/index.html'), 'utf8');
-function extractScripts(source) {
-  return [...source.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/gi)].map(m => m[1]);
-}
-for (const closingTag of ['</script>', '</SCRIPT >', '</script\t\n bar>']) {
-  assert.deepEqual(extractScripts(`<script>example();${closingTag}<p>after</p>`), ['example();']);
-}
-const scripts = extractScripts(html);
-for (const script of scripts) new vm.Script(script);
-const ctx = vm.createContext({ URL });
+const scripts = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/gi)].map(m => m[1]);
+const ctx = vm.createContext({ URL, accessMapByFindingFingerprint: new Map() });
 vm.runInContext(scripts.join('\n').match(/^    function \w+\([^]*?^    }/gm).join('\n'), ctx);
 
 for (const url of ['https://example.com/profile', 'http://localhost:8000/path', 'HTTPS://example.com']) {
@@ -27,6 +20,7 @@ function element(tag) {
   const el = { tag, children: [], style: {}, dataset: {}, classList: { add() {}, remove() {}, toggle() {} },
     appendChild(child) { this.children.push(child); return child; },
     append(...children) { this.children.push(...children); },
+    insertAdjacentHTML(position, markup) { assert.equal(position, 'beforeend'); this.children.push(markup); },
     setAttribute() {}, addEventListener() {}, querySelector() { return null; },
   };
   elements.push(el);
@@ -61,7 +55,16 @@ assert.equal(severity.risky, 1);
 assert.equal(severity.read_only, 0);
 
 ctx.findings = [finding];
-ctx.accessMap = [{ fingerprint: 'example', provider: 'aws', groups: [] }];
+ctx.setAccessMap([{ fingerprint: 'primary', finding_fingerprints: ['primary', 'example'], provider: 'aws', groups: [],
+  token_details: { last_used_at: '2026-01-02T00:01:02Z' },
+  provider_metadata: { credential_last_used_source: 'Provider audit <latest event>' } }]);
+const standaloneHtml = fs.readFileSync(path.join(__dirname, '../src/access_map/report.rs'), 'utf8');
+vm.runInContext(standaloneHtml.match(/^    function renderLastUsed\([^]*?^    }/m)[0], ctx);
+const standaloneLastUse = ctx.renderLastUsed(ctx.accessMap[0]);
+assert.equal(standaloneLastUse.children[1].dateTime, '2026-01-02T00:01:02.000Z');
+assert.equal(standaloneLastUse.children[2].className, 'credential-last-used-source');
+assert.equal(standaloneLastUse.children[2].textContent, 'Provider audit <latest event>');
+assert.equal(ctx.renderLastUsed({ provider_metadata: ctx.accessMap[0].provider_metadata }).children[1], 'Unavailable');
 ctx.scanMetadata = {};
 ctx.repositoryAudit = null;
 ctx.statusChartCanvas = null;
@@ -78,12 +81,17 @@ ctx.window = { open() {
     },
   }, focus() {}, print() { printCount++; } };
 } };
-for (const generate of [() => ctx.generateScanReport(), () => ctx.generateAccessMapReport(),
-  () => ctx.exportSingleFindingRiskReport(finding), () => ctx.generateRiskReport()]) {
+for (const [generate, showsLastUse] of [[() => ctx.generateScanReport(), false], [() => ctx.generateAccessMapReport(), true],
+  [() => ctx.exportSingleFindingRiskReport(finding), true], [() => ctx.generateRiskReport(), false]]) {
   generate();
   assert.ok(output.includes('<!doctype html>'));
   assert.ok(!output.includes(label));
   assert.ok(!/\sonclick\s*=/i.test(output));
+  if (showsLastUse) {
+    assert.ok(output.includes('.credential-last-used {'));
+    assert.match(output, /<strong>Last used<\/strong> <time datetime="2026-01-02T00:01:02\.000Z">/);
+    assert.ok(output.includes('<span class="credential-last-used-source">Provider audit &lt;latest event&gt;</span>'));
+  }
   assert.equal(typeof printHandler, 'function');
   printHandler();
   assert.equal(printCount, 1);

@@ -229,6 +229,7 @@ fn test_gitlab_remote_scan() -> Result<()> {
         endpoint: Vec::new(),
         endpoint_config: None,
         config: None,
+        ..Default::default()
     };
 
     let datastore = Arc::new(Mutex::new(FindingsStore::new(clone_dir)));
@@ -448,6 +449,7 @@ fn test_gitlab_remote_scan_no_history() -> Result<()> {
         endpoint: Vec::new(),
         endpoint_config: None,
         config: None,
+        ..Default::default()
     };
 
     let datastore = Arc::new(Mutex::new(FindingsStore::new(clone_dir)));

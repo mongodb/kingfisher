@@ -1,16 +1,32 @@
+use std::time::Duration;
+
 use anyhow::{Context, Result, anyhow};
+use chrono::{DateTime, SecondsFormat};
 use reqwest::{Client, header};
 use serde::Deserialize;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::{cli::commands::access_map::AccessMapArgs, validation::GLOBAL_USER_AGENT};
 
 use super::{
-    AccessMapResult, AccessSummary, AccessTokenDetails, PermissionSummary, ResourceExposure,
-    RoleBinding, Severity, build_recommendations,
+    AccessMapResult, AccessSummary, AccessTokenDetails, PermissionSummary, ProviderMetadata,
+    ResourceExposure, RoleBinding, Severity, build_recommendations,
 };
 
 const FASTLY_API: &str = "https://api.fastly.com";
+const KEY_USAGE_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
+const KEY_USAGE_SOURCE: &str = "Fastly current user token";
+
+#[derive(Deserialize)]
+struct FastlyTokenUsage {
+    last_used_at: Option<String>,
+}
+
+/// A completed validation lookup can return either a date or no history.
+#[derive(Clone, Debug)]
+pub(crate) struct FastlyValidationActivity {
+    pub last_used_at: Option<String>,
+}
 
 #[derive(Deserialize)]
 struct FastlyUser {
@@ -63,12 +79,41 @@ pub async fn map_access(args: &AccessMapArgs) -> Result<AccessMapResult> {
 }
 
 pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
+    map_access_from_token_with_activity(token, None).await
+}
+
+pub(crate) async fn map_access_from_token_with_activity(
+    token: &str,
+    activity: Option<FastlyValidationActivity>,
+) -> Result<AccessMapResult> {
+    map_access_from_token_at(token, FASTLY_API, activity).await
+}
+
+async fn map_access_from_token_at(
+    token: &str,
+    api_base: &str,
+    activity: Option<FastlyValidationActivity>,
+) -> Result<AccessMapResult> {
     let client = Client::builder()
         .user_agent(GLOBAL_USER_AGENT.as_str())
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .context("Failed to build Fastly HTTP client")?;
 
-    let user = fetch_current_user(&client, token).await?;
+    // Keep the first validation response even if Fastly supplied no timestamp.
+    let timestamp = match activity {
+        Some(activity) => activity.last_used_at,
+        None => fetch_token_last_used(&client, token, api_base).await,
+    };
+    let last_used_at = timestamp
+        .as_deref()
+        .and_then(|date| DateTime::parse_from_rfc3339(date).ok())
+        .map(|date| date.to_utc().to_rfc3339_opts(SecondsFormat::AutoSi, true));
+    let provider_metadata = last_used_at.as_ref().map(|_| ProviderMetadata {
+        credential_last_used_source: Some(KEY_USAGE_SOURCE.into()),
+        ..ProviderMetadata::default()
+    });
+    let user = fetch_current_user(&client, token, api_base).await?;
 
     let username = user
         .login
@@ -121,10 +166,11 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     if role == "superuser"
         && let Some(customer_id) = &user.customer_id
     {
-        let customer = fetch_customer(&client, token, customer_id).await.unwrap_or_else(|err| {
-            warn!("Fastly access-map: customer lookup failed: {err}");
-            None
-        });
+        let customer =
+            fetch_customer(&client, token, api_base, customer_id).await.unwrap_or_else(|err| {
+                warn!("Fastly access-map: customer lookup failed: {err}");
+                None
+            });
 
         if let Some(cust) = customer {
             let cust_name = cust.name.unwrap_or_else(|| customer_id.clone());
@@ -139,7 +185,7 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     }
 
     // Enumerate services
-    let services = list_services(&client, token).await.unwrap_or_else(|err| {
+    let services = list_services(&client, token, api_base).await.unwrap_or_else(|err| {
         warn!("Fastly access-map: service enumeration failed: {err}");
         Vec::new()
     });
@@ -208,19 +254,46 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
             url: None,
             token_type: None,
             created_at: None,
-            last_used_at: None,
+            last_used_at,
             expires_at: None,
             user_id: user.id,
             scopes: vec![role],
         }),
-        provider_metadata: None,
+        provider_metadata,
         fingerprint: None,
     })
 }
 
-async fn fetch_current_user(client: &Client, token: &str) -> Result<FastlyUser> {
+async fn fetch_token_last_used(client: &Client, token: &str, api_base: &str) -> Option<String> {
+    let response = client
+        .get(format!("{api_base}/tokens/self"))
+        .header("Fastly-Key", token)
+        .header(header::ACCEPT, "application/json")
+        .timeout(KEY_USAGE_LOOKUP_TIMEOUT)
+        .send()
+        .await;
+    let response = match response {
+        Ok(response) if response.status().is_success() => response,
+        Ok(response) => {
+            debug!(status = %response.status(), "Fastly access-map: current token usage unavailable");
+            return None;
+        }
+        Err(_) => {
+            debug!("Fastly access-map: current token usage request failed");
+            return None;
+        }
+    };
+    let usage: FastlyTokenUsage = response
+        .json()
+        .await
+        .inspect_err(|_| debug!("Fastly access-map: invalid current token usage response"))
+        .ok()?;
+    usage.last_used_at
+}
+
+async fn fetch_current_user(client: &Client, token: &str, api_base: &str) -> Result<FastlyUser> {
     let resp = client
-        .get(format!("{FASTLY_API}/current_user"))
+        .get(format!("{api_base}/current_user"))
         .header("Fastly-Key", token)
         .header(header::ACCEPT, "application/json")
         .send()
@@ -237,9 +310,9 @@ async fn fetch_current_user(client: &Client, token: &str) -> Result<FastlyUser> 
     resp.json().await.context("Fastly access-map: invalid current_user JSON")
 }
 
-async fn list_services(client: &Client, token: &str) -> Result<Vec<FastlyService>> {
+async fn list_services(client: &Client, token: &str, api_base: &str) -> Result<Vec<FastlyService>> {
     let resp = client
-        .get(format!("{FASTLY_API}/service"))
+        .get(format!("{api_base}/service"))
         .header("Fastly-Key", token)
         .header(header::ACCEPT, "application/json")
         .send()
@@ -257,10 +330,11 @@ async fn list_services(client: &Client, token: &str) -> Result<Vec<FastlyService
 async fn fetch_customer(
     client: &Client,
     token: &str,
+    api_base: &str,
     customer_id: &str,
 ) -> Result<Option<FastlyCustomer>> {
     let resp = client
-        .get(format!("{FASTLY_API}/customer/{customer_id}"))
+        .get(format!("{api_base}/customer/{customer_id}"))
         .header("Fastly-Key", token)
         .header(header::ACCEPT, "application/json")
         .send()
@@ -329,5 +403,99 @@ fn severity_to_str(severity: Severity) -> &'static str {
         Severity::Medium => "medium",
         Severity::High => "high",
         Severity::Critical => "critical",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{header, method, path},
+    };
+
+    use super::*;
+
+    #[tokio::test]
+    async fn previously_checked_usage_skips_the_mapper_lookup() {
+        for (timestamp, expected) in [
+            (Some("2025-01-02T03:04:05.123+01:00"), Some("2025-01-02T02:04:05.123Z")),
+            (Some("invalid"), None),
+            (None, None),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(path("/tokens/self"))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(0)
+                .mount(&server)
+                .await;
+            Mock::given(path("/current_user"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"login":"user"})))
+                .mount(&server)
+                .await;
+            Mock::given(path("/service"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+                .mount(&server)
+                .await;
+            let result = map_access_from_token_at(
+                "test-fastly-token",
+                &server.uri(),
+                Some(FastlyValidationActivity { last_used_at: timestamp.map(str::to_owned) }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result.token_details.unwrap().last_used_at.as_deref(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn current_token_usage_is_looked_up_first_and_is_optional() {
+        const TOKEN: &str = "test-fastly-token";
+        let other = MockServer::start().await;
+        Mock::given(path("/redirected"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&other)
+            .await;
+        for (response, expected) in [
+            (
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"last_used_at": "2025-01-02T03:04:05+01:00"})),
+                Some("2025-01-02T02:04:05Z"),
+            ),
+            (ResponseTemplate::new(200).set_body_json(json!({"last_used_at": null})), None),
+            (ResponseTemplate::new(403), None),
+            (
+                ResponseTemplate::new(302)
+                    .insert_header("location", format!("{}/redirected", other.uri())),
+                None,
+            ),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/tokens/self"))
+                .and(header("Fastly-Key", TOKEN))
+                .respond_with(response)
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(path("/current_user"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"login":"user"})))
+                .mount(&server)
+                .await;
+            Mock::given(path("/service"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+                .mount(&server)
+                .await;
+
+            let mapped = map_access_from_token_at(TOKEN, &server.uri(), None).await.unwrap();
+            assert_eq!(mapped.identity.id, "user");
+            assert_eq!(mapped.token_details.unwrap().last_used_at.as_deref(), expected);
+            assert_eq!(
+                mapped.provider_metadata.and_then(|metadata| metadata.credential_last_used_source),
+                expected.map(|_| KEY_USAGE_SOURCE.to_owned()),
+            );
+            assert_eq!(server.received_requests().await.unwrap()[0].url.path(), "/tokens/self");
+        }
     }
 }

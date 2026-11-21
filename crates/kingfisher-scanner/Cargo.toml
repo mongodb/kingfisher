@@ -1,6 +1,6 @@
 [package]
 name = "kingfisher-scanner"
-version = "4.0.0"
+version = "4.1.0"
 description = "High-level scanning API for Kingfisher secret scanner"
 edition.workspace = true
 rust-version.workspace = true
@@ -109,8 +109,8 @@ validation-all = ["validation"]
 
 [dependencies]
 # Internal dependencies
-kingfisher-core = { version = "2.0.0", path = "../kingfisher-core" }
-kingfisher-rules = { version = "3.2.1", path = "../kingfisher-rules", features = ["__scanner-internals"] }
+kingfisher-core = { version = "2.1.0", path = "../kingfisher-core" }
+kingfisher-rules = { version = "3.3.0", path = "../kingfisher-rules", features = ["__scanner-internals"] }
 
 # Error handling
 anyhow.workspace = true

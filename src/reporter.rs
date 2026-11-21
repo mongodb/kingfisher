@@ -1198,7 +1198,9 @@ impl DetailsReporter {
                 .iter()
                 .any(|fingerprint| non_authoritative_fingerprints.contains(fingerprint))
         }) {
-            entries.push(access_map_entry_from_result(&mapped.result));
+            let mut entry = access_map_entry_from_result(&mapped.result);
+            entry.finding_fingerprints = mapped.finding_fingerprints.clone();
+            entries.push(entry);
         }
 
         (!entries.is_empty()).then_some(entries)
@@ -1456,6 +1458,9 @@ pub struct AccessMapEntry {
     /// Discriminator context to tell duplicate-named identities apart in the UI.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<AccessIdentityContext>,
+    /// Fingerprints of the scan findings that share this credential.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub finding_fingerprints: Vec<String>,
 }
 
 /// Convert a provider result into the access-map shape consumed by report viewers.
@@ -1495,6 +1500,7 @@ pub fn access_map_entry_from_result(result: &crate::access_map::AccessMapResult)
         fingerprint: result.fingerprint.clone(),
         permissions_by_severity,
         context: AccessIdentityContext::from_summary(&result.identity),
+        finding_fingerprints: Vec::new(),
     }
 }
 

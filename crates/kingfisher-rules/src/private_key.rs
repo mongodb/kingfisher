@@ -199,15 +199,17 @@ fn has_plausible_payload(body: &str, label: &str) -> bool {
         // Unknown encodings, OpenSSH and OpenPGP are not ASN.1 SEQUENCEs.
         return true;
     }
-    if matches!(label, "RSA PRIVATE KEY" | "EC PRIVATE KEY" | "DSA PRIVATE KEY")
-        && body.lines().any(|line| {
-            let line = line.trim_start();
-            line.starts_with("Proc-Type:") || line.starts_with("DEK-Info:")
-        })
-    {
-        // Traditional encryption makes the key bytes opaque. Malformed or
-        // unfamiliar encryption metadata is not proof that no secret exists.
-        return true;
+    if matches!(label, "RSA PRIVATE KEY" | "EC PRIVATE KEY" | "DSA PRIVATE KEY") {
+        let is_encryption_header =
+            |line: &str| line.starts_with("Proc-Type:") || line.starts_with("DEK-Info:");
+        let lines = body.lines().map(str::trim).filter(|line| !line.is_empty());
+        if lines.clone().any(is_encryption_header) {
+            // Encryption metadata makes malformed ciphertext ambiguous. An explicit
+            // omission in place of the entire payload has no ciphertext to check.
+            let mut payload = lines.skip_while(|line| is_encryption_header(line));
+            return !matches!(payload.next(), Some("..." | "[...]" | "…" | "[…]"))
+                || payload.next().is_some();
+        }
     }
     // All supported ASN.1 private-key containers start with SEQUENCE (0x30),
     // encoded as M[A-P] followed by two Base64 characters. Look for that header
@@ -1474,6 +1476,21 @@ mod tests {
             assert!(!is_malformed(&encrypted));
             assert!(!is_malformed(&encrypted.replace("Proc-Type: 4,ENCRYPTED\n", "")));
             assert!(!is_malformed(&encrypted.replace("0123456789ABCDEF", "not an IV")));
+        }
+    }
+
+    #[test]
+    fn rejects_traditional_encrypted_pem_with_only_an_ellipsis_payload() {
+        for label in ["RSA PRIVATE KEY", "EC PRIVATE KEY", "DSA PRIVATE KEY"] {
+            for ellipsis in ["...", "[...]", "…", "[…]"] {
+                let pem = format!(
+                    "-----BEGIN {label}-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-256-CBC,8FBC260D17A943E255E1402DD7F39A21\n\n{ellipsis}\n-----END {label}-----"
+                );
+                assert!(is_malformed(&pem));
+                assert!(is_malformed(&pem.replace('\n', "\n * ")));
+                assert!(!is_malformed(&pem.replace(ellipsis, &format!("AQIDBA==\n{ellipsis}"))));
+                assert!(!is_malformed(&pem.replace(ellipsis, &format!("{ellipsis}\nAQIDBA=="))));
+            }
         }
     }
 

@@ -155,7 +155,7 @@ def test_pyc_never_executes_and_preserves_constants(rules, tmp_path):
     assert not marker.exists()
 
 
-def test_content_fallback_and_controls(tmp_path):
+def test_content_fallback_and_controls():
     plain = ScanInput("ordinary.txt", TOKEN)
     corrupt = ScanInput("corrupt.pyc", b"bad header")
     unsupported = ScanInput("future.pyc", b"\xff\xff\r\n" + bytes(16))
@@ -171,9 +171,6 @@ def test_content_fallback_and_controls(tmp_path):
     token.cancel()
     with pytest.raises(RuntimeError, match="cancelled"):
         list(expand_content([plain], cancellation=token))
-    for bad in (0, -1, "invalid"):
-        with pytest.raises(ValueError):
-            list(expand_content([], max_bytes=bad))
 
 
 def test_git_scopes_metadata_and_composition(repo, rules):

@@ -496,10 +496,8 @@ fn build_access_map(
             scopes: Vec::new(),
         }),
         provider_metadata: Some(ProviderMetadata {
-            betterleaks_analysis: None,
             version: Some(api_version.to_string()),
-            enterprise: None,
-            authorization_evidence: None,
+            ..ProviderMetadata::default()
         }),
         fingerprint: None,
     }

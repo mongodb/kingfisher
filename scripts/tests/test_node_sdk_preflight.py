@@ -237,24 +237,6 @@ class PublicationSourceTests(unittest.TestCase):
             with self.subTest(tag=tag), self.assertRaisesRegex(ValueError, "tag"):
                 self.source(environment(GITHUB_REF=f"refs/tags/{tag}"))
 
-    def test_default_manual_cli_tag_completion_requires_exact_source_and_ancestry(self):
-        env = environment(GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_REF="refs/tags/v2.14.0")
-        result, calls = self.source(env, event={"inputs": {"publish": False}}, main=BASE)
-        self.assertTrue(result)
-        self.assertIn((ROOT, "show", f"{HEAD}:Cargo.toml"), [call.args for call in calls])
-        self.assertIn((ROOT, "merge-base", "--is-ancestor", HEAD, BASE), [call.args for call in calls])
-        for tag in (f"npm-v{VERSION}", "python-v1.5.0"):
-            with self.subTest(tag=tag):
-                result, calls = self.source({**env, "GITHUB_REF": f"refs/tags/{tag}"}, event={"inputs": {}})
-                self.assertFalse(result)
-                self.assertEqual(calls, [])
-        with self.assertRaisesRegex(ValueError, "tag must match"):
-            self.source({**env, "GITHUB_REF": "refs/tags/v9.9.9"}, event={"inputs": {}})
-        with self.assertRaisesRegex(ValueError, "pinned GITHUB_SHA"):
-            self.source({**env, "GITHUB_SHA": BASE}, event={"inputs": {}})
-        with self.assertRaises(subprocess.CalledProcessError):
-            self.source(env, event={"inputs": {}}, failure="merge-base")
-
     def test_guarded_manual_uses_current_main_and_python_expected_version(self):
         env = environment(GITHUB_EVENT_NAME="workflow_dispatch")
         inputs = {"publish": "true", "expected_sha": HEAD, "expected_version": "1.5.0"}

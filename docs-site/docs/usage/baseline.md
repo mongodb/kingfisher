@@ -60,6 +60,13 @@ kingfisher scan /path/to/code \
   --baseline-file /path/to/baseline-file.yml
 ```
 
+The `kingfisher-files`, `kingfisher-auto-files`, and `kingfisher-docker-files` pre-commit hooks
+can reuse a baseline created with `--staged`,
+including line-ending conversions when the same single-line capture appears at the
+same line and column in the Git index. If a checkout filter changes the capture or
+moves it to a different line or column, create the baseline from the working tree
+with `--git-history none`.
+
 For the Bitbucket project example:
 
 ```bash

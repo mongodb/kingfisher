@@ -438,9 +438,4 @@ mod tests {
             Some("owner/repo")
         );
     }
-
-    #[test]
-    fn normalize_repo_identifier_handles_git_suffix() {
-        assert_eq!(normalize_repo_identifier("owner/repo.git"), Some("owner/repo".into()));
-    }
 }

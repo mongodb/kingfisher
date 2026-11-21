@@ -41,7 +41,7 @@ use crate::{
         summary::{compute_scan_totals, print_scan_summary},
     },
     util::set_redaction_enabled,
-    validation::CachedResponse,
+    validation::{CachedResponse, internal_ip_policy::RuleInternalIpPolicy},
     validation_rate_limit::ValidationRateLimiter,
 };
 
@@ -147,6 +147,29 @@ pub async fn run_async_scan(
     update_status: &crate::update::UpdateStatus,
     auto_cleanup_clones: bool,
 ) -> Result<()> {
+    run_scan_with_pre_commit_files(
+        global_args,
+        args,
+        rules_db,
+        datastore,
+        update_status,
+        auto_cleanup_clones,
+        None,
+    )
+    .await
+}
+
+/// Run the CLI scan with an optional repository-relative hook file selection.
+#[doc(hidden)]
+pub async fn run_scan_with_pre_commit_files(
+    global_args: &global::GlobalArgs,
+    args: &scan::ScanArgs,
+    rules_db: &RulesDatabase,
+    datastore: Arc<Mutex<FindingsStore>>,
+    update_status: &crate::update::UpdateStatus,
+    auto_cleanup_clones: bool,
+    pre_commit_files: Option<&[PathBuf]>,
+) -> Result<()> {
     scan_network_limits(args.content_filtering_args.no_limits, args.no_timeouts)
         .scope(run_async_scan_inner(
             global_args,
@@ -155,6 +178,7 @@ pub async fn run_async_scan(
             rules_db,
             update_status,
             auto_cleanup_clones,
+            pre_commit_files,
         ))
         .await
 }
@@ -177,8 +201,15 @@ async fn run_async_scan_inner(
     rules_db: &RulesDatabase,
     update_status: &crate::update::UpdateStatus,
     auto_cleanup_clones: bool,
+    pre_commit_files: Option<&[PathBuf]>,
 ) -> Result<()> {
-    args.content_filtering_args.path_selection.check()?;
+    let ScanPreflight {
+        rule_internal_ip_policy,
+        exclude_globset,
+        skip_regexes,
+        validation_rate_limiter,
+        provider_endpoints,
+    } = scan_preflight(args, global_args, pre_commit_files.is_some())?;
     let scan_started_at = chrono::Local::now();
     let mut timed_args = args.clone();
     timed_args.input_specifier_args.history_time_range =
@@ -203,11 +234,16 @@ async fn run_async_scan_inner(
     let _progress = crate::scan_progress::start(progress_enabled, args.include_hidden_findings);
 
     // ── Phase 1: Input validation and environment setup ──────────────────
-    validate_inputs(args)?;
+    validate_input_paths(args, false)?;
     if args.disk_offload {
         datastore.lock().unwrap().enable_spilling()?;
     }
-    register_safe_list_patterns(args)?;
+    for regex in skip_regexes {
+        safe_list::register_user_regex(regex);
+    }
+    for word in &args.skip_word {
+        safe_list::add_user_skipword(word);
+    }
 
     let start_time = Instant::now();
     let audit_log = args.audit_log.as_deref().map(crate::util::expand_tilde);
@@ -331,7 +367,7 @@ async fn run_async_scan_inner(
     crate::validation::set_skip_aws_account_ids(skip_aws_accounts);
 
     let mut access_map_collector = if args.access_map {
-        Some(AccessMapCollector::default().with_allow_internal_ips(global_args.allow_internal_ips))
+        Some(AccessMapCollector::default().with_internal_ip_policy(rule_internal_ip_policy.clone()))
     } else {
         None
     };
@@ -340,7 +376,6 @@ async fn run_async_scan_inner(
     // discovery pre-scan skips exactly the trees the scan will skip: this
     // avoids paying startup traversal for excluded dependency/build trees and
     // keeps excluded repositories out of the audit manifest.
-    let exclude_globset = crate::build_exclude_globset(&args.content_filtering_args.exclude)?;
     let (repo_roots, discovered_repos) = if args.input_specifier_args.scan_nested_repos {
         expand_repo_roots(&input_roots, exclude_globset.as_ref())?
     } else {
@@ -361,15 +396,11 @@ async fn run_async_scan_inner(
         + args.input_specifier_args.git_url.len();
     // Discovery is still running, so the final repository count is not known.
     let input = &args.input_specifier_args;
-    let use_parallel_repo_scan = git_repo_count > 10
-        || input.has_repository_discovery()
-        || input.include_contributors
-        || github_event_targets_by_root.len() > 10;
-
-    let validation_rate_limiter =
-        ValidationRateLimiter::from_cli(args.validation_rps, &args.validation_rps_rule)?
-            .map(Arc::new);
-    let provider_endpoints = Arc::new(ProviderEndpointOverrides::from_global_args(global_args)?);
+    let use_parallel_repo_scan = pre_commit_files.is_none()
+        && (git_repo_count > 10
+            || input.has_repository_discovery()
+            || input.include_contributors
+            || github_event_targets_by_root.len() > 10);
 
     let validation_deps: Option<ValidationDeps> = if !args.no_validate {
         Some(Arc::new((
@@ -381,6 +412,7 @@ async fn run_async_scan_inner(
                 args.content_filtering_args.no_limits,
             )?
             .with_unlimited_results(args.content_filtering_args.no_limits)
+            .with_rule_internal_ip_policy(rule_internal_ip_policy)
             .with_http_fallbacks(global_args.http_fallbacks),
             Arc::new(SkipMap::new()),
             validation_rate_limiter.clone(),
@@ -417,6 +449,7 @@ async fn run_async_scan_inner(
             update_status,
             auto_cleanup_clones,
             Arc::clone(&scan_audit),
+            pre_commit_files,
         )
         .await?;
         return Ok(());
@@ -454,8 +487,54 @@ async fn run_async_scan_inner(
 // Phase helpers
 // =================================================================================================
 
-/// Validates that all provided input paths exist.
-fn validate_inputs(args: &scan::ScanArgs) -> Result<()> {
+pub(super) struct ScanPreflight {
+    pub(super) rule_internal_ip_policy: RuleInternalIpPolicy,
+    pub(super) exclude_globset: Option<Arc<globset::GlobSet>>,
+    skip_regexes: Vec<regex::bytes::Regex>,
+    validation_rate_limiter: Option<Arc<ValidationRateLimiter>>,
+    provider_endpoints: Arc<ProviderEndpointOverrides>,
+}
+
+/// Resolve scan options without acquiring any sources or changing process state.
+pub(super) fn scan_preflight(
+    args: &scan::ScanArgs,
+    global_args: &global::GlobalArgs,
+    pre_commit_files: bool,
+) -> Result<ScanPreflight> {
+    if pre_commit_files {
+        args.check_pre_commit_options()?;
+    }
+    args.content_filtering_args.path_selection.check()?;
+    validate_history_scope(args)?;
+    let exclude_globset = crate::build_exclude_globset(&args.content_filtering_args.exclude)?;
+    let skip_regexes = args
+        .skip_regex
+        .iter()
+        .enumerate()
+        .map(|(index, pattern)| {
+            regex::bytes::Regex::new(pattern)
+                .map_err(|_| anyhow::anyhow!("Invalid skip-regex #{}", index + 1))
+        })
+        .collect::<Result<_>>()?;
+    let rule_internal_ip_policy = RuleInternalIpPolicy::from_global_args(global_args)?;
+    let validation_rate_limiter =
+        ValidationRateLimiter::from_cli(args.validation_rps, &args.validation_rps_rule)
+            .context("Invalid --validation-rps or --validation-rps-rule")?
+            .map(Arc::new);
+    let provider_endpoints = Arc::new(
+        ProviderEndpointOverrides::from_global_args(global_args)
+            .context("Invalid --endpoint or --endpoint-config")?,
+    );
+    Ok(ScanPreflight {
+        rule_internal_ip_policy,
+        exclude_globset,
+        skip_regexes,
+        validation_rate_limiter,
+        provider_endpoints,
+    })
+}
+
+fn validate_history_scope(args: &scan::ScanArgs) -> Result<()> {
     let input = &args.input_specifier_args;
     if let Some(hours) = input.since_hours {
         if hours == 0 {
@@ -479,23 +558,15 @@ fn validate_inputs(args: &scan::ScanArgs) -> Result<()> {
             );
         }
     }
-    for path in &args.input_specifier_args.path_inputs {
-        if !path.exists() {
-            error!("Specified input path does not exist: {}", path.display());
-            bail!("Invalid input: Path does not exist - {}", path.display());
-        }
-    }
     Ok(())
 }
 
-/// Registers user-provided allow-list patterns (skip-regex and skip-word).
-fn register_safe_list_patterns(args: &scan::ScanArgs) -> Result<()> {
-    for pattern in &args.skip_regex {
-        safe_list::add_user_regex(pattern)
-            .map_err(|e| anyhow::anyhow!("Invalid skip-regex '{pattern}': {e}"))?;
-    }
-    for word in &args.skip_word {
-        safe_list::add_user_skipword(word);
+pub(super) fn validate_input_paths(args: &scan::ScanArgs, allow_stdin: bool) -> Result<()> {
+    for path in &args.input_specifier_args.path_inputs {
+        if !(allow_stdin && path.as_os_str() == "-") && !path.exists() {
+            error!("Specified input path does not exist: {}", path.display());
+            bail!("Invalid input: Path does not exist - {}", path.display());
+        }
     }
     Ok(())
 }
@@ -624,10 +695,16 @@ fn apply_baseline_if_configured(
     datastore: &Arc<Mutex<FindingsStore>>,
     baseline: &crate::baseline::BaselineFile,
     roots: &[PathBuf],
+    pre_commit_files: bool,
 ) -> Result<()> {
     if args.baseline_file.is_some() || args.manage_baseline {
         let mut ds = datastore.lock().unwrap();
-        crate::baseline::apply_loaded_baseline(&mut ds, baseline, roots)?;
+        crate::baseline::apply_loaded_baseline_for_scan(
+            &mut ds,
+            baseline,
+            roots,
+            pre_commit_files,
+        )?;
     }
     Ok(())
 }
@@ -717,6 +794,7 @@ async fn run_sequential_scan(
     update_status: &crate::update::UpdateStatus,
     auto_cleanup_clones: bool,
     scan_audit: SharedScanAudit,
+    pre_commit_files: Option<&[PathBuf]>,
 ) -> Result<()> {
     let mut streamed_roots = Vec::new();
     // Run the scan loop in a closure so that, even if a per-repo
@@ -751,6 +829,7 @@ async fn run_sequential_scan(
                 enable_profiling,
                 Arc::clone(shared_profiler),
                 &repo_matcher_stats,
+                pre_commit_files,
             ) {
                 Ok(partial) => {
                     deduplicate_new_matches(&repo_datastore, global_args, args, 0)?;
@@ -759,6 +838,7 @@ async fn run_sequential_scan(
                         &repo_datastore,
                         baseline.as_ref(),
                         std::slice::from_ref(root),
+                        pre_commit_files.is_some(),
                     )?;
                     let local_stats = repo_matcher_stats.lock().unwrap().clone();
                     let findings = repo_datastore.lock().unwrap().get_matches().len();
@@ -825,6 +905,7 @@ async fn run_sequential_scan(
                             enable_profiling,
                             Arc::clone(shared_profiler),
                             &repo_matcher_stats,
+                            None,
                         )?;
                     }
                 } else {
@@ -838,6 +919,7 @@ async fn run_sequential_scan(
                         enable_profiling,
                         Arc::clone(shared_profiler),
                         &repo_matcher_stats,
+                        None,
                     )?;
                 }
                 deduplicate_new_matches(&repo_datastore, global_args, args, 0)?;
@@ -846,6 +928,7 @@ async fn run_sequential_scan(
                     &repo_datastore,
                     baseline.as_ref(),
                     std::slice::from_ref(&repo_root),
+                    false,
                 )?;
                 let local_stats = repo_matcher_stats.lock().unwrap().clone();
                 let findings = repo_datastore.lock().unwrap().get_matches().len();
@@ -913,7 +996,13 @@ async fn run_sequential_scan(
         .map_err(|_| anyhow::anyhow!("Failed to lock datastore while restoring spilled findings"))?
         .restore_spilled()?;
     deduplicate_new_matches(datastore, global_args, args, 0)?;
-    apply_baseline_if_configured(args, datastore, baseline.as_ref(), input_roots)?;
+    apply_baseline_if_configured(
+        args,
+        datastore,
+        baseline.as_ref(),
+        input_roots,
+        pre_commit_files.is_some(),
+    )?;
     update_baseline_if_configured(
         args,
         datastore,
@@ -926,7 +1015,7 @@ async fn run_sequential_scan(
         .await?;
 
     if let Some(collector) = access_map_collector.take() {
-        finalize_access_map(datastore, collector, args).await?;
+        finalize_access_map(datastore, collector, args, scan_started_at.to_utc()).await?;
     }
 
     let repository_audit = scan_audit.lock().unwrap().finish()?;
@@ -994,7 +1083,7 @@ async fn run_parallel_scan(
     scan_audit: SharedScanAudit,
 ) -> Result<()> {
     deduplicate_new_matches(datastore, global_args, args, 0)?;
-    apply_baseline_if_configured(args, datastore, baseline.as_ref(), repo_roots)?;
+    apply_baseline_if_configured(args, datastore, baseline.as_ref(), repo_roots, false)?;
 
     // Validate initial (non-repo) matches
     if let Some(validation) = validation_deps {
@@ -1237,6 +1326,7 @@ async fn run_parallel_scan(
                                         enable_profiling,
                                         Arc::clone(&shared_profiler),
                                         &repo_matcher_stats,
+                                        None,
                                     )?;
                                 }
                             } else {
@@ -1250,6 +1340,7 @@ async fn run_parallel_scan(
                                     enable_profiling,
                                     Arc::clone(&shared_profiler),
                                     &repo_matcher_stats,
+                                    None,
                                 )?;
                             }
                             deduplicate_new_matches(&repo_datastore, global_args, &args, 0)?;
@@ -1426,7 +1517,7 @@ async fn run_parallel_scan(
     }
 
     if let Some(collector) = access_map_collector.take() {
-        finalize_access_map(datastore, collector, args).await?;
+        finalize_access_map(datastore, collector, args, scan_started_at.to_utc()).await?;
     }
 
     let repository_audit = scan_audit.lock().unwrap().finish()?;
@@ -1468,7 +1559,7 @@ async fn run_parallel_scan(
 
     if !ran_repo_scan.load(Ordering::Relaxed) {
         deduplicate_new_matches(datastore, global_args, args, 0)?;
-        apply_baseline_if_configured(args, datastore, baseline.as_ref(), repo_roots)?;
+        apply_baseline_if_configured(args, datastore, baseline.as_ref(), repo_roots, false)?;
         update_baseline_if_configured(
             args,
             datastore,
@@ -1481,7 +1572,7 @@ async fn run_parallel_scan(
             .await?;
 
         if let Some(collector) = access_map_collector.take() {
-            finalize_access_map(datastore, collector, args).await?;
+            finalize_access_map(datastore, collector, args, scan_started_at.to_utc()).await?;
         }
 
         let audit_context = build_scan_audit_context(
@@ -1541,6 +1632,7 @@ async fn finalize_access_map(
     datastore: &Arc<Mutex<FindingsStore>>,
     collector: AccessMapCollector,
     args: &scan::ScanArgs,
+    activity_before: chrono::DateTime<chrono::Utc>,
 ) -> Result<()> {
     let requests = collector.into_collected_requests();
 
@@ -1558,8 +1650,12 @@ async fn finalize_access_map(
         0,
         crate::scan_progress::PhaseKind::Other,
     );
-    let results =
-        access_map::map_collected_requests_with_options(requests, &args.blast_radius_options).await;
+    let results = access_map::map_collected_requests_with_options(
+        requests,
+        &args.blast_radius_options,
+        activity_before,
+    )
+    .await;
 
     {
         let mut ds = datastore.lock().unwrap();

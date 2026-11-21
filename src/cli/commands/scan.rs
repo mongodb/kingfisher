@@ -16,7 +16,7 @@ use crate::{
             azure::AzureRepoSpecifiers,
             bitbucket::BitbucketRepoSpecifiers,
             gitea::GiteaRepoSpecifiers,
-            github::GitHubRepoSpecifiers,
+            github::{GitHistoryMode, GitHubRepoSpecifiers},
             gitlab::GitLabRepoSpecifiers,
             huggingface::HuggingFaceRepoSpecifiers,
             inputs::{ContentFilteringArgs, InputSpecifierArgs},
@@ -389,6 +389,15 @@ pub enum ValidationFilter {
 crate::cli::impl_value_enum_display!(ConfidenceLevel, ValidationFilter);
 
 impl ScanArgs {
+    pub(crate) fn check_pre_commit_options(&self) -> anyhow::Result<()> {
+        if self.manage_baseline {
+            bail!(
+                "--manage-baseline requires a full scan and cannot be used with pre-commit file hooks"
+            );
+        }
+        Ok(())
+    }
+
     /// Effective budget for repository enumeration, scanning, and audit metadata.
     pub fn repository_timeout(&self) -> Option<std::time::Duration> {
         if self.no_timeouts || self.git_repo_timeout == 0 {
@@ -506,6 +515,10 @@ pub struct ScanCommandArgs {
     #[command(flatten)]
     pub scan_args: ScanArgs,
 
+    /// Show the effective inputs, filters, and rules without running the scan.
+    #[arg(global = true, long)]
+    pub preview: bool,
+
     /// Serve a JSON report locally and open the browser (http://127.0.0.1:7890)
     #[arg(global = true, long = "view-report", default_value_t = false)]
     pub view_report: bool,
@@ -617,6 +630,77 @@ fn load_provider_users(
 }
 
 impl ScanCommandArgs {
+    /// Set the repository root for a file selection supplied by a pre-commit runner.
+    #[doc(hidden)]
+    pub fn prepare_pre_commit_files(
+        &mut self,
+        files: Vec<PathBuf>,
+    ) -> anyhow::Result<Vec<PathBuf>> {
+        self.scan_args.check_pre_commit_options()?;
+        let input = &mut self.scan_args.input_specifier_args;
+        if self.provider.is_some() || input.has_any_input() || input.has_artifact_sources() {
+            bail!("Pre-commit file hooks take scan targets from the runner");
+        }
+        if input.staged
+            || input.since_commit.is_some()
+            || input.since_hours.is_some()
+            || input.branch.is_some()
+            || input.branch_root
+            || input.branch_root_commit.is_some()
+        {
+            bail!("Pre-commit file hooks cannot be combined with Git diff or ref selection");
+        }
+
+        let root = std::env::current_dir()
+            .context("Failed to resolve the pre-commit working directory")?;
+        let mut canonical_root = None;
+        let files = files
+            .into_iter()
+            .map(|path| {
+                use std::path::Component::{CurDir, Normal};
+                let relative = if !path.is_absolute() {
+                    path.clone()
+                } else if let Ok(relative) = path.strip_prefix(&root) {
+                    relative.to_owned()
+                } else {
+                    // The runner and the process may spell the same directory differently,
+                    // e.g. /var vs /private/var on macOS. Compare resolved directories but keep
+                    // the file name, so a symlinked file is still judged by its own location.
+                    if canonical_root.is_none() {
+                        canonical_root = root.canonicalize().ok();
+                    }
+                    canonical_root
+                        .as_deref()
+                        .zip(path.parent().and_then(|parent| parent.canonicalize().ok()))
+                        .zip(path.file_name())
+                        .and_then(|((root, parent), name)| {
+                            parent.join(name).strip_prefix(root).ok().map(Path::to_path_buf)
+                        })
+                        .with_context(|| {
+                            format!(
+                                "Pre-commit file is outside the working directory: {}",
+                                path.display()
+                            )
+                        })?
+                };
+                let mut components = relative.components();
+                if components.clone().next() == Some(CurDir) {
+                    components.next();
+                }
+                if components.as_path().as_os_str().is_empty()
+                    || !components.clone().all(|component| matches!(component, Normal(_)))
+                {
+                    bail!("Invalid path selected by pre-commit: {}", path.display());
+                }
+                Ok(components.as_path().to_owned())
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        input.path_inputs.push(root);
+        input.git_history = GitHistoryMode::None;
+        input.scan_nested_repos = false;
+        Ok(files)
+    }
+
     fn infer_positional_git_urls(&mut self) {
         let mut inferred_git_urls = Vec::new();
         let mut retained_paths = Vec::new();

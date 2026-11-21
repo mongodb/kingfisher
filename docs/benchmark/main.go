@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -62,6 +63,7 @@ const (
 	toolKingfisher = "Kingfisher"
 	toolTruffleHog = "TruffleHog"
 	toolGitLeaks   = "GitLeaks"
+	trialCount     = 5
 )
 
 // ScanResult holds the metrics captured for a single tool scanning a single repo.
@@ -88,19 +90,24 @@ func main() {
 	baseDir := flag.String("basedir", "", "directory to clone repos into (default: $TMPDIR/benchmark)")
 	withGitleaks := flag.Bool("gitleaks", true, "include GitLeaks in the benchmark (requires gitleaks in PATH)")
 	validate := flag.Bool("validate", false, "enable credential validation (requires -gitleaks=false; no runtime chart)")
+	trufflehogInPlace := flag.Bool("trufflehog-in-place", false, "have TruffleHog scan the local repository directly (requires trusted local Git configuration)")
 	repoNames := flag.String("repos", "", "comma-separated repository names to scan (default: all)")
 	makeChart := flag.Bool("chart", true, "render a runtime-comparison PNG chart")
 	outRoot := flag.String("out", ".", "directory under which the timestamped results folder is created")
 	chartFrom := flag.String("chart-from", "", "regenerate only the chart from an existing benchmark-<timestamp> directory, then exit")
+	withNoseyParkerChart := flag.Bool("nosey-parker-chart", false, "chart Kingfisher vs. NoseyParker from the saved report (requires -chart-from)")
 	flag.Parse()
 
 	// Chart-only mode: rebuild the PNG from a previous run's report and exit
 	// without cloning or scanning anything.
 	if *chartFrom != "" {
-		if err := regenerateChart(*chartFrom); err != nil {
+		if err := regenerateChart(*chartFrom, *withNoseyParkerChart); err != nil {
 			log.Fatalf("regenerating chart: %v", err)
 		}
 		return
+	}
+	if *withNoseyParkerChart {
+		log.Fatal("-nosey-parker-chart requires -chart-from")
 	}
 	if *validate && *withGitleaks {
 		log.Fatal("-validate requires -gitleaks=false; validation-enabled runs permit only Kingfisher and TruffleHog")
@@ -180,10 +187,10 @@ func main() {
 	fmt.Println("\n=== Scanning ===")
 	results := make([]RepoResult, 0, len(ready))
 	for _, r := range ready {
-		results = append(results, scanRepo(r, cloneDir, outDir, tools, *validate))
+		results = append(results, scanRepo(r, cloneDir, outDir, tools, *validate, *trufflehogInPlace))
 		// Keep a report on disk even if a later scan is interrupted.
 		var report bytes.Buffer
-		writeReport(&report, results, tools, versions, "", timestamp, *validate)
+		writeReport(&report, results, tools, versions, "", timestamp, *validate, *trufflehogInPlace)
 		if err := os.WriteFile(filepath.Join(outDir, "comparison_"+timestamp+".md"), report.Bytes(), 0644); err != nil {
 			log.Fatalf("saving progress: %v", err)
 		}
@@ -194,7 +201,8 @@ func main() {
 	chartFile := ""
 	if *makeChart && !*validate {
 		name := "runtime-comparison-" + timestamp + ".png"
-		config := buildRuntimeChartConfig(results, tools, versions, monthFromTimestamp(timestamp))
+		subtitle := runtimeChartSubtitle(monthFromTimestamp(timestamp), trialCount)
+		config := buildRuntimeChartConfig(results, tools, versions, subtitle)
 		if err := renderChartPNG(config, filepath.Join(outDir, name)); err != nil {
 			log.Printf("chart generation failed: %v", err)
 		} else {
@@ -208,7 +216,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("creating report: %v", err)
 	}
-	writeReport(io.MultiWriter(os.Stdout, mdFile), results, tools, versions, chartFile, timestamp, *validate)
+	writeReport(io.MultiWriter(os.Stdout, mdFile), results, tools, versions, chartFile, timestamp, *validate, *trufflehogInPlace)
 	mdFile.Close()
 
 	fmt.Printf("\nResults written to %s/\n", outDir)
@@ -227,27 +235,67 @@ func toolBinary(tool string) string {
 	return strings.ToLower(tool)
 }
 
-// scanRepo runs every enabled tool against a single repo, saving each tool's raw
-// output into outDir as <repo>-<tool>.json.
-func scanRepo(r repo, cloneDir, outDir string, tools []string, validate bool) RepoResult {
+// scanRepo runs sequential trials and rotates which scanner goes first.
+func scanRepo(r repo, cloneDir, outDir string, tools []string, validate, trufflehogInPlace bool) RepoResult {
 	repoPath := filepath.Join(cloneDir, r.name)
 	res := RepoResult{Repo: r.name, Scans: make(map[string]ScanResult, len(tools)), Metadata: repositoryMetadata(repoPath)}
-	for _, tool := range tools {
-		fmt.Printf("[%s] scanning %s...\n", tool, repoPath)
-		rawPath := filepath.Join(outDir, fmt.Sprintf("%s-%s.json", r.name, toolBinary(tool)))
-		switch tool {
-		case toolKingfisher:
-			res.Scans[tool] = scanKingfisher(repoPath, rawPath, validate)
-		case toolTruffleHog:
-			res.Scans[tool] = scanTruffleHog(repoPath, rawPath, validate)
-		case toolGitLeaks:
-			res.Scans[tool] = scanGitleaks(repoPath, rawPath)
-		}
-		if s := res.Scans[tool]; s.Error != "" {
-			log.Printf("%s / %s failed: %s", r.name, tool, s.Error)
+	trials := make(map[string][]ScanResult, len(tools))
+	for trial := 0; trial < trialCount; trial++ {
+		for i := range tools {
+			tool := tools[(i+trial)%len(tools)]
+			fmt.Printf("[%s] scanning %s (trial %d/%d)...\n", tool, repoPath, trial+1, trialCount)
+			rawPath := filepath.Join(outDir, trialFilename(r.name, tool, trial+1))
+			var scan ScanResult
+			switch tool {
+			case toolKingfisher:
+				scan = scanKingfisher(repoPath, rawPath, validate)
+			case toolTruffleHog:
+				scan = scanTruffleHog(repoPath, rawPath, validate, trufflehogInPlace)
+			case toolGitLeaks:
+				scan = scanGitleaks(repoPath, rawPath)
+			}
+			trials[tool] = append(trials[tool], scan)
+			if scan.Error != "" {
+				log.Printf("%s / %s trial %d failed: %s", r.name, tool, trial+1, scan.Error)
+			}
 		}
 	}
+	for _, tool := range tools {
+		res.Scans[tool] = medianScan(trials[tool])
+	}
 	return res
+}
+
+func trialFilename(repo, tool string, trial int) string {
+	return fmt.Sprintf("%s-%s-trial-%d.json", repo, toolBinary(tool), trial)
+}
+
+func medianScan(trials []ScanResult) ScanResult {
+	if len(trials) != trialCount {
+		return ScanResult{Error: fmt.Sprintf("received %d of %d trials", len(trials), trialCount)}
+	}
+	var durations [trialCount]time.Duration
+	var findings, validated [trialCount]int
+	var requests [trialCount]int64
+	var failures []string
+	for i, scan := range trials {
+		if scan.Error != "" {
+			failures = append(failures, fmt.Sprintf("trial %d: %s", i+1, scan.Error))
+		}
+		durations[i] = scan.Duration
+		findings[i] = scan.Findings
+		validated[i] = scan.Validated
+		requests[i] = scan.NetReq
+	}
+	if len(failures) != 0 {
+		return ScanResult{Error: strings.Join(failures, ", ")}
+	}
+	slices.Sort(durations[:])
+	slices.Sort(findings[:])
+	slices.Sort(validated[:])
+	slices.Sort(requests[:])
+	middle := trialCount / 2
+	return ScanResult{Duration: durations[middle], Findings: findings[middle], Validated: validated[middle], NetReq: requests[middle]}
 }
 
 // repositoryMetadata snapshots the input before scanning; unknown fields retain
@@ -503,7 +551,7 @@ func scanKingfisher(repoPath, rawPath string, validate bool) ScanResult {
 	return ScanResult{Duration: d, Findings: findings, Validated: validated, NetReq: netReqSnapshot(), Error: scanError(runErr)}
 }
 
-func scanTruffleHog(repoPath, rawPath string, validate bool) ScanResult {
+func scanTruffleHog(repoPath, rawPath string, validate, inPlace bool) ScanResult {
 	f, err := os.Create(rawPath)
 	if err != nil {
 		log.Printf("trufflehog: %v", err)
@@ -518,6 +566,9 @@ func scanTruffleHog(repoPath, rawPath string, validate bool) ScanResult {
 	}
 	gitURL := (&url.URL{Scheme: "file", Path: gitPath}).String()
 	args := []string{"trufflehog", "git", gitURL, "--json", "--no-update", "--fail-on-scan-errors"}
+	if inPlace {
+		args = append(args, "--trust-local-git-config")
+	}
 	if !validate {
 		args = append(args, "--no-verification")
 	}
@@ -685,13 +736,14 @@ func getSystemInfo() string {
 }
 
 // writeReport renders the full Markdown report to w.
-func writeReport(w io.Writer, results []RepoResult, tools []string, versions map[string]string, chartFile, timestamp string, validate bool) {
+func writeReport(w io.Writer, results []RepoResult, tools []string, versions map[string]string, chartFile, timestamp string, validate, trufflehogInPlace bool) {
 	fmt.Fprintf(w, "# Kingfisher Benchmark — %s\n\n", timestamp)
 	mode := "detection-only"
 	if validate {
 		mode = "validation-enabled"
 	}
-	fmt.Fprintf(w, "Validation mode: %s\n\nAnalysis month: %s\n\n", mode, monthFromTimestamp(timestamp))
+	fmt.Fprintf(w, "Validation mode: %s\n\nScan date: %s\n\nAnalysis month: %s\n\nTrials per tool per repository: %d\n\n",
+		mode, dateFromTimestamp(timestamp), monthFromTimestamp(timestamp), trialCount)
 
 	fmt.Fprintf(w, "## Environment\n\n```\n%s```\n\n", getSystemInfo())
 
@@ -703,7 +755,12 @@ func writeReport(w io.Writer, results []RepoResult, tools []string, versions map
 		fmt.Fprintf(w, "| %s | %s |\n", t, versions[t])
 	}
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "One sequential scan per tool per repository, using existing clones and all available Git history (shallow status recorded below). Concurrency and detection settings retain each tool's defaults. Update checks are disabled where supported, and Kingfisher repository timeouts are disabled. TruffleHog's automatic private clone preparation is included in its runtime. No repetitions or cache flushing are performed. Detection settings, filters, and deduplication differ between tools; finding counts do not measure equivalent recall.")
+	fmt.Fprintf(w, "%d sequential trials per tool per repository, using existing clones and all available Git history (shallow status recorded below). The starting tool rotates each trial. Each metric reports its median across all %d trials. A failed or missing trial prevents a median for that tool and repository. Concurrency and detection settings retain each tool's defaults. Update checks are disabled where supported, and Kingfisher repository timeouts are disabled. Caches are kept in their normal state. Each tool's settings, filters, and deduplication affect its finding count.\n", trialCount, trialCount)
+	if trufflehogInPlace {
+		fmt.Fprintln(w, "TruffleHog scans the existing repositories directly with `--trust-local-git-config`.")
+	} else {
+		fmt.Fprintln(w, "TruffleHog's private clone preparation is included in its runtime.")
+	}
 	if validate {
 		fmt.Fprintln(w, "Live validation/verification is enabled for Kingfisher and TruffleHog only. Use the same repository HEADs, refs, shallow state, and worktree state as the separate detection-only run; runtime charts are not generated for this mode.")
 	} else {
@@ -723,8 +780,12 @@ func writeReport(w io.Writer, results []RepoResult, tools []string, versions map
 		metadataJSON, _ := json.MarshalIndent(r.Metadata, "", "  ")
 		fmt.Fprintf(w, "\n### %s input\n\n```json\n%s\n```\n\nRaw data sources (%s):\n", r.Repo, metadataJSON, mode)
 		for _, tool := range tools {
-			name := fmt.Sprintf("%s-%s.json", r.Repo, toolBinary(tool))
-			fmt.Fprintf(w, "- %s: [%s](%s), [stderr](%s.stderr)\n", tool, name, name, name)
+			fmt.Fprintf(w, "- %s", tool)
+			for trial := 1; trial <= trialCount; trial++ {
+				name := trialFilename(r.Repo, tool, trial)
+				fmt.Fprintf(w, " · [%d](%s) ([stderr](%s.stderr))", trial, name, name)
+			}
+			fmt.Fprintln(w)
 		}
 	}
 	fmt.Fprintln(w)
@@ -815,16 +876,30 @@ func suffixed(tools []string, suffix string) []string {
 
 const quickChartURL = "https://quickchart.io/chart"
 
+const (
+	scanDateLayout      = "January 2, 2006"
+	analysisMonthLayout = "January 2006"
+	toolNoseyParker     = "NoseyParker" // Optional series from a comparable, separate benchmark.
+)
+
 // toolColors maps each tool to its bar color, matching the reference chart.
 var toolColors = map[string]string{
-	toolKingfisher: "#01ec64", // green
-	toolTruffleHog: "#4a85e8", // blue
-	toolGitLeaks:   "#fabd05", // amber
+	toolKingfisher:  "#01ec64", // green
+	toolTruffleHog:  "#4a85e8", // blue
+	toolGitLeaks:    "#fabd05", // amber
+	toolNoseyParker: "#4a85e8", // blue in the head-to-head chart
 }
 
 // buildRuntimeChartConfig matches the reference chart's dimensions, typography,
 // colors, outlined Kingfisher bars, and straight downward arrow annotations.
-func buildRuntimeChartConfig(results []RepoResult, tools []string, versions map[string]string, analysisMonth string) string {
+func buildRuntimeChartConfig(results []RepoResult, tools []string, versions map[string]string, subtitle string) string {
+	title := "Runtime comparison"
+	footer := "Based on results of internal testing conducted by MongoDB engineering"
+	headToHead := len(tools) == 2 && tools[1] == toolNoseyParker
+	if headToHead {
+		title = "Kingfisher vs. NoseyParker"
+		footer = "* Kingfisher extracts and scans archives and decodes Base64. NoseyParker ran without those steps."
+	}
 	labels := make([]string, len(results))
 	maxSeconds := 1.0
 	for i, r := range results {
@@ -839,7 +914,12 @@ func buildRuntimeChartConfig(results []RepoResult, tools []string, versions map[
 	versionLabels := make([]string, len(tools))
 	for i, tool := range tools {
 		version := strings.TrimSpace(versions[tool])
-		if semverRe.MatchString(version) && !strings.HasPrefix(version, "v") {
+		if tool == toolKingfisher && semverRe.MatchString(version) {
+			version = strings.TrimPrefix(version, "v")
+			if parts := strings.Split(version, "."); len(parts) == 3 && parts[2] == "0" {
+				version = strings.Join(parts[:2], ".")
+			}
+		} else if semverRe.MatchString(version) && !strings.HasPrefix(version, "v") {
 			version = "v" + version
 		}
 		if version == "" {
@@ -880,16 +960,13 @@ func buildRuntimeChartConfig(results []RepoResult, tools []string, versions map[
 	}
 	ceiling := upper + step*0.1
 	annotations := make([]string, 0, len(results))
+	kingfisherIndex := slices.Index(tools, toolKingfisher)
 	for i, r := range results {
 		pct, ok := kingfisherSpeedup(r, tools)
 		if !ok {
 			continue
 		}
-		label := fmt.Sprintf("%.0f%% faster", pct)
-		if pct < 0 {
-			label = fmt.Sprintf("%.0f%% slower", -pct)
-		}
-		x := float64(i) - 0.6/2 + 0.6/(2*float64(len(tools)))
+		x := float64(i) - 0.6/2 + 0.6*(float64(kingfisherIndex)+0.5)/float64(len(tools))
 		y := r.Scans[toolKingfisher].Duration.Seconds()
 		highest := y
 		for _, tool := range tools {
@@ -908,25 +985,47 @@ func buildRuntimeChartConfig(results []RepoResult, tools []string, versions map[
 		annotations = append(annotations, fmt.Sprintf(`"arrow%d":{
    type:'line',xMin:%f,xMax:%f,yMin:%f,yMax:%f,
    borderColor:'#011e2a',borderWidth:1.6,
-   arrowHeads:{start:{display:true,length:16,width:6,fill:true}},
-   label:{display:true,position:'end',content:['Kingfisher',%q],
-    backgroundColor:'transparent',color:'#011e2a',yAdjust:-30,xAdjust:%d,
-    font:[{size:18,weight:'normal'},{size:15,weight:'normal'}]}
-  }`, i, x, x, y+ceiling*0.008, arrowTop, label, labelOffset))
+   arrowHeads:{start:{display:true,length:16,width:6,fill:true}}
+  }`, i, x, x, y+ceiling*0.008, arrowTop))
+		addLabel := func(id, content string, size, vertical int, horizontal float64, weight string) {
+			annotations = append(annotations, fmt.Sprintf(`"%s%d":{
+   type:'label',xValue:%f,yValue:%f,adjustScaleRange:false,
+   xAdjust:%f,yAdjust:%d,padding:0,content:%q,
+   backgroundColor:'transparent',color:'#011e2a',font:{family:'Noto Sans',size:%d,weight:%q}
+  }`, id, i, x, arrowTop, float64(labelOffset)+horizontal, vertical, content, size, weight))
+		}
+		addLabel("scanner", "Kingfisher", 18, -39, 0, "normal")
+		switch {
+		case pct > 0:
+			// Separate the number and the word so only "faster" is bold.
+			// At this font size digits take about 8.6 px and the percent sign 12.5 px.
+			percentage := fmt.Sprintf("%.0f%%", pct)
+			percentageWidth := 8.6*float64(len(percentage)-1) + 12.5
+			addLabel("percentage", percentage, 15, -18, -22.5, "normal")
+			addLabel("faster", "faster", 15, -18, (percentageWidth+4)/2, "bold")
+		case pct < 0:
+			addLabel("slower", fmt.Sprintf("%.0f%% slower", -pct), 15, -18, 0, "normal")
+		default:
+			addLabel("equal", "Same runtime", 15, -18, 0, "normal")
+		}
 	}
 	// Built-in annotations support multi-line legends on QuickChart Community,
 	// whose sandbox does not expose canvas methods to custom drawing plugins.
 	legendWidths := make([]float64, len(tools))
 	legendWidth := -28.0
 	for i, tool := range tools {
-		legendWidths[i] = 32 + math.Max(float64(len(tool))*10, float64(len(versionLabels[i]))*8)
+		legendWidths[i] = 32 + math.Max(float64(len(tool))*11.7, float64(len(versionLabels[i]))*8)
 		legendWidth += legendWidths[i] + 28
 	}
 	left := (1360 - legendWidth) / 2
 	middle := float64(len(results)-1) / 2
 	for i, tool := range tools {
 		textCenter := left + 32 + (legendWidths[i]-32)/2
-		content, _ := json.Marshal([]string{tool, versionLabels[i]})
+		legendName := tool
+		if headToHead && tool == toolKingfisher {
+			legendName += "*"
+		}
+		content, _ := json.Marshal([]string{legendName, versionLabels[i]})
 		border := 0
 		if tool == toolKingfisher {
 			border = 2
@@ -934,43 +1033,42 @@ func buildRuntimeChartConfig(results []RepoResult, tools []string, versions map[
 		annotations = append(annotations, fmt.Sprintf(`"legendText%d":{
    type:'label',xValue:%f,yValue:0,adjustScaleRange:false,
    xAdjust:function(c){return %f-(c.chart.chartArea.left+c.chart.chartArea.right)/2;},
-   yAdjust:function(c){return c.chart.chartArea.top-42-c.chart.chartArea.bottom;},
-   content:%s,font:[{size:20},{size:16}],backgroundColor:'transparent',color:'#274553'
+   yAdjust:function(c){return c.chart.chartArea.top-36-c.chart.chartArea.bottom;},
+   content:%s,font:[{family:'Noto Sans',size:20},{family:'Noto Sans',size:16}],backgroundColor:'transparent',color:'#274553'
   },"legendSymbol%d":{
    type:'box',adjustScaleRange:false,
    xMin:function(c){return (%f-c.chart.chartArea.left)/(c.chart.chartArea.right-c.chart.chartArea.left)*%d-0.5;},
    xMax:function(c){return (%f-c.chart.chartArea.left)/(c.chart.chartArea.right-c.chart.chartArea.left)*%d-0.5;},
-   yMin:function(c){return %f*(1+41/(c.chart.chartArea.bottom-c.chart.chartArea.top));},
-   yMax:function(c){return %f*(1+63/(c.chart.chartArea.bottom-c.chart.chartArea.top));},
+   yMin:function(c){return %f*(1+35/(c.chart.chartArea.bottom-c.chart.chartArea.top));},
+   yMax:function(c){return %f*(1+57/(c.chart.chartArea.bottom-c.chart.chartArea.top));},
    backgroundColor:%q,borderColor:'#011e2a',borderWidth:%d,borderRadius:3
   }`, i, middle, textCenter, content, i, left, len(results), left+22, len(results), ceiling, ceiling, toolColors[tool], border))
 		left += legendWidths[i] + 28
 	}
 	annotations = append(annotations, fmt.Sprintf(`"footer":{
    type:'label',xValue:%f,yValue:0,adjustScaleRange:false,
-   xAdjust:function(c){return c.chart.width/2-(c.chart.chartArea.left+c.chart.chartArea.right)/2;},
    yAdjust:function(c){return c.chart.height-c.chart.chartArea.bottom-12;},
-   content:'Based on results of internal testing conducted by MongoDB engineering',
-   backgroundColor:'transparent',color:'#274553',font:{size:15},drawTime:'afterDraw'
-  }`, middle))
+   content:%q,
+   backgroundColor:'transparent',color:'#274553',font:{family:'DejaVu Sans',size:15},drawTime:'afterDraw'
+  }`, middle, footer))
 	return fmt.Sprintf(`{
   type:'bar',
   data:{labels:%s,datasets:[%s]},
   options:{
    layout:{padding:{top:0,right:34,bottom:42,left:0}},
    plugins:{
-    title:{display:true,fullSize:false,text:'Runtime comparison',font:{size:52,family:'Georgia',weight:'normal'},color:'#011e2a',padding:{top:0,bottom:8}},
-    subtitle:{display:true,fullSize:false,position:'top',text:%q,color:'#274553',font:{size:20,weight:'normal'},padding:{top:0,bottom:78}},
+    title:{display:true,fullSize:false,text:%q,font:{size:52,family:'Georgia',weight:'normal'},color:'#011e2a',padding:{top:-6,bottom:8}},
+    subtitle:{display:true,fullSize:false,position:'top',text:%q,color:'#274553',font:{family:'Noto Sans',size:20,weight:'normal'},padding:{top:0,bottom:68}},
     legend:{display:false},
     datalabels:{display:false},
     annotation:{clip:false,annotations:{%s}}
    },
    scales:{
-    x:{title:{display:true,text:'Repository',font:{size:36,weight:'normal'},color:'#011e2a',padding:{top:8}},grid:{display:false},ticks:{font:{size:20},color:'#274553',maxRotation:0,autoSkip:false}},
-    y:{beginAtZero:true,max:%f,title:{display:true,text:'Runtime in seconds',font:{size:36,weight:'normal'},color:'#011e2a',padding:{bottom:46}},ticks:{stepSize:%f,includeBounds:false,font:{size:20},color:'#274553'},border:{display:false},grid:{color:'#d4d4d4'}}
+    x:{title:{display:true,text:'Repository',font:{family:'DejaVu Sans',size:36,weight:'normal'},color:'#011e2a',padding:{top:8}},grid:{display:false},border:{color:'#9d9d9d',width:1.5},ticks:{font:{family:'DejaVu Sans',size:20},color:'#274553',maxRotation:0,autoSkip:false}},
+    y:{beginAtZero:true,max:%f,title:{display:true,text:'Runtime in seconds',font:{family:'DejaVu Sans',size:36,weight:'normal'},color:'#011e2a',padding:{bottom:46}},ticks:{stepSize:%f,includeBounds:false,font:{family:'DejaVu Sans',size:20},color:'#274553'},border:{display:false},grid:{color:'#d4d4d4',lineWidth:1.5}}
    }
   }
- }`, labelsJSON, strings.Join(datasets, ","), analysisMonth, strings.Join(annotations, ","), ceiling, step)
+ }`, labelsJSON, strings.Join(datasets, ","), title, subtitle, strings.Join(annotations, ","), ceiling, step)
 }
 
 // kingfisherSpeedup returns how much faster Kingfisher was than the fastest
@@ -997,14 +1095,18 @@ func kingfisherSpeedup(r RepoResult, tools []string) (pct float64, ok bool) {
 
 // regenerateChart rebuilds the runtime chart from a previous run's report,
 // writing a fresh runtime-comparison-<timestamp>.png into the same directory.
-func regenerateChart(dir string) error {
-	results, tools, versions, analysisMonth, err := loadResultsFromReport(dir)
+func regenerateChart(dir string, includeNoseyParker bool) error {
+	results, tools, versions, subtitle, err := loadResultsFromReport(dir, includeNoseyParker)
 	if err != nil {
 		return err
 	}
-	name := "runtime-comparison-" + time.Now().Format("20060102-150405") + ".png"
+	name := "runtime-comparison-" + time.Now().Format("20060102-150405")
+	if includeNoseyParker {
+		name += "-with-nosey-parker"
+	}
+	name += ".png"
 	outPath := filepath.Join(dir, name)
-	if err := renderChartPNG(buildRuntimeChartConfig(results, tools, versions, analysisMonth), outPath); err != nil {
+	if err := renderChartPNG(buildRuntimeChartConfig(results, tools, versions, subtitle), outPath); err != nil {
 		return err
 	}
 	fmt.Printf("Chart written to %s\n", outPath)
@@ -1017,12 +1119,38 @@ func monthFromTimestamp(timestamp string) string {
 	if err != nil {
 		return ""
 	}
-	return date.Format("January 2006")
+	return date.Format(analysisMonthLayout)
+}
+
+func dateFromTimestamp(timestamp string) string {
+	date, err := time.Parse("20060102-150405", timestamp)
+	if err != nil {
+		return ""
+	}
+	return date.Format(scanDateLayout)
+}
+
+func runtimeChartSubtitle(month string, trials int) string {
+	if trials == 0 {
+		return month
+	}
+	return fmt.Sprintf("%s · Median of %d trials per tool per repository", month, trials)
+}
+
+// chartReportTool accepts the name used in saved reports before the renderer
+// standardized on NoseyParker.
+func chartReportTool(name string) string {
+	if name == "Nosey Parker" {
+		return toolNoseyParker
+	}
+	return name
 }
 
 // loadResultsFromReport reconstructs chart runtimes, tool order, versions, and
-// analysis month from the comparison_<timestamp>.md report in dir.
-func loadResultsFromReport(dir string) ([]RepoResult, []string, map[string]string, string, error) {
+// the subtitle from the comparison_<timestamp>.md report in dir. The head-to-head
+// uses the normal Kingfisher scan configuration and the comparable NoseyParker
+// timings.
+func loadResultsFromReport(dir string, includeNoseyParker bool) ([]RepoResult, []string, map[string]string, string, error) {
 	matches, err := filepath.Glob(filepath.Join(dir, "comparison_*.md"))
 	if err != nil || len(matches) == 0 {
 		return nil, nil, nil, "", fmt.Errorf("no comparison_*.md report found in %s", dir)
@@ -1048,29 +1176,48 @@ func loadResultsFromReport(dir string) ([]RepoResult, []string, map[string]strin
 		return nil, nil, nil, "", fmt.Errorf("%s must declare exactly one 'Validation mode: detection-only'; refusing legacy or ambiguous runtime data", matches[0])
 	}
 
+	scanMonth := ""
 	analysisMonth := ""
+	trials := 0
 	for _, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "Analysis month:") {
-			value := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "Analysis month:"))
-			date, err := time.Parse("January 2006", value)
+		line = strings.TrimSpace(line)
+		if value, ok := strings.CutPrefix(line, "Scan date:"); ok {
+			date, err := time.Parse(scanDateLayout, strings.TrimSpace(value))
+			if err != nil || scanMonth != "" {
+				return nil, nil, nil, "", fmt.Errorf("invalid or repeated Scan date in %s", matches[0])
+			}
+			scanMonth = date.Format(analysisMonthLayout)
+		}
+		if value, ok := strings.CutPrefix(line, "Analysis month:"); ok {
+			date, err := time.Parse(analysisMonthLayout, strings.TrimSpace(value))
 			if err != nil || analysisMonth != "" {
 				return nil, nil, nil, "", fmt.Errorf("invalid or repeated Analysis month in %s", matches[0])
 			}
-			analysisMonth = date.Format("January 2006")
+			analysisMonth = date.Format(analysisMonthLayout)
+		}
+		if value, ok := strings.CutPrefix(line, "Trials per tool per repository:"); ok {
+			count, err := strconv.Atoi(strings.TrimSpace(value))
+			if err != nil || count < 1 || trials != 0 {
+				return nil, nil, nil, "", fmt.Errorf("invalid or repeated trial count in %s", matches[0])
+			}
+			trials = count
 		}
 	}
-	if analysisMonth == "" {
+	if scanMonth == "" {
+		scanMonth = analysisMonth
+	}
+	if scanMonth == "" {
 		for _, line := range lines {
 			if strings.HasPrefix(line, "# ") {
 				if timestamp := regexp.MustCompile(`\b\d{8}-\d{6}\b`).FindString(line); timestamp != "" {
-					analysisMonth = monthFromTimestamp(timestamp)
+					scanMonth = monthFromTimestamp(timestamp)
 					break
 				}
 			}
 		}
 	}
-	if analysisMonth == "" {
-		return nil, nil, nil, "", fmt.Errorf("Analysis month or dated report header required in %s", matches[0])
+	if scanMonth == "" {
+		return nil, nil, nil, "", fmt.Errorf("Scan date, Analysis month, or dated report header required in %s", matches[0])
 	}
 
 	// Runtime table: header columns are "<Tool> Runtime"; rows are "<repo> <secs>...".
@@ -1078,26 +1225,46 @@ func loadResultsFromReport(dir string) ([]RepoResult, []string, map[string]strin
 	if len(rtHeader) < 2 {
 		return nil, nil, nil, "", fmt.Errorf("runtime table not found in %s", matches[0])
 	}
+	if len(rtRows) == 0 {
+		return nil, nil, nil, "", fmt.Errorf("runtime table has no repositories in %s", matches[0])
+	}
 	tools := make([]string, 0, len(rtHeader)-1)
-	for _, h := range rtHeader[1:] {
-		tool := strings.TrimSpace(strings.TrimSuffix(h, "Runtime"))
-		switch tool {
-		case toolKingfisher, toolTruffleHog, toolGitLeaks:
+	columns := make(map[string]int, len(rtHeader)-1)
+	for i, h := range rtHeader[1:] {
+		tool := chartReportTool(strings.TrimSpace(strings.TrimSuffix(h, "Runtime")))
+		if _, known := toolColors[tool]; !known {
+			return nil, nil, nil, "", fmt.Errorf("unsupported runtime tool column %q in %s", h, matches[0])
+		}
+		if _, exists := columns[tool]; exists {
+			return nil, nil, nil, "", fmt.Errorf("repeated %s runtime column in %s", tool, matches[0])
+		}
+		columns[tool] = i + 1
+		if tool != toolNoseyParker {
 			tools = append(tools, tool)
-		default:
-			return nil, nil, nil, "", fmt.Errorf("unsupported runtime tool column %q in %s; supported tools are %s, %s, and %s", h, matches[0], toolKingfisher, toolTruffleHog, toolGitLeaks)
+		}
+	}
+	if includeNoseyParker {
+		tools = []string{toolKingfisher, toolNoseyParker}
+		for _, tool := range tools {
+			if _, ok := columns[tool]; !ok {
+				return nil, nil, nil, "", fmt.Errorf("%s runtime column required with -nosey-parker-chart in %s", tool, matches[0])
+			}
 		}
 	}
 	results := make([]RepoResult, 0, len(rtRows))
 	for _, row := range rtRows {
-		if len(row) < len(tools)+1 {
-			continue
-		}
 		rr := RepoResult{Repo: row[0], Scans: make(map[string]ScanResult, len(tools))}
-		for i, t := range tools {
-			secs, err := strconv.ParseFloat(row[i+1], 64)
-			if err != nil {
-				rr.Scans[t] = ScanResult{Error: row[i+1]}
+		for _, t := range tools {
+			if columns[t] >= len(row) {
+				return nil, nil, nil, "", fmt.Errorf("missing %s runtime cell for %s in %s", t, rr.Repo, matches[0])
+			}
+			cell := row[columns[t]]
+			secs, err := strconv.ParseFloat(cell, 64)
+			if err != nil || math.IsNaN(secs) || math.IsInf(secs, 0) || secs <= 0 {
+				if t == toolNoseyParker {
+					return nil, nil, nil, "", fmt.Errorf("successful %s runtime required for %s in %s", t, rr.Repo, matches[0])
+				}
+				rr.Scans[t] = ScanResult{Error: "runtime unavailable"}
 			} else {
 				rr.Scans[t] = ScanResult{Duration: time.Duration(secs * float64(time.Second))}
 			}
@@ -1110,11 +1277,14 @@ func loadResultsFromReport(dir string) ([]RepoResult, []string, map[string]strin
 	if _, vRows := markdownTable(lines, "## Tool Versions"); vRows != nil {
 		for _, row := range vRows {
 			if len(row) >= 2 {
-				versions[row[0]] = row[1]
+				versions[chartReportTool(row[0])] = row[1]
 			}
 		}
 	}
-	return results, tools, versions, analysisMonth, nil
+	if includeNoseyParker && strings.TrimSpace(versions[toolNoseyParker]) == "" {
+		return nil, nil, nil, "", fmt.Errorf("%s version required in %s", toolNoseyParker, matches[0])
+	}
+	return results, tools, versions, runtimeChartSubtitle(scanMonth, trials), nil
 }
 
 // markdownTable returns the header cells and data rows of the first Markdown

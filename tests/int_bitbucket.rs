@@ -225,6 +225,7 @@ fn test_bitbucket_remote_scan() -> Result<()> {
         endpoint: Vec::new(),
         endpoint_config: None,
         config: None,
+        ..Default::default()
     };
 
     let datastore = Arc::new(Mutex::new(FindingsStore::new(clone_dir)));

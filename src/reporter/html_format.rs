@@ -15,6 +15,60 @@ fn format_timestamp(input: &str) -> String {
         .unwrap_or_else(|_| input.to_string())
 }
 
+#[derive(Clone, Copy)]
+struct LastUse<'a> {
+    date: chrono::NaiveDate,
+    time: Option<chrono::NaiveTime>,
+    source: Option<&'a str>,
+}
+
+impl LastUse<'_> {
+    fn sort_key(self) -> (chrono::NaiveDate, Option<chrono::NaiveTime>, bool) {
+        (self.date, self.time, self.source.is_some())
+    }
+}
+
+fn last_used_at(entry: &AccessMapEntry) -> Option<LastUse<'_>> {
+    let timestamp = entry.token_details.as_ref()?.last_used_at.as_deref()?;
+    let source = entry
+        .provider_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.credential_last_used_source.as_deref())
+        .map(str::trim)
+        .filter(|source| !source.is_empty());
+    if let Ok(date) = timestamp.parse::<chrono::NaiveDate>()
+        && date.to_string() == timestamp
+    {
+        return Some(LastUse { date, time: None, source });
+    }
+    let timestamp = chrono::DateTime::parse_from_rfc3339(timestamp).ok()?.with_timezone(&Utc);
+    Some(LastUse { date: timestamp.date_naive(), time: Some(timestamp.time()), source })
+}
+
+fn render_last_used(last_use: Option<LastUse<'_>>) -> String {
+    let mut value = last_use.map_or_else(
+        || "Unavailable".to_string(),
+        |LastUse { date, time, .. }| {
+            let Some(time) = time else {
+                return format!("<time datetime=\"{date}\">{date}</time>");
+            };
+            let timestamp = date.and_time(time).and_utc();
+            format!(
+                "<time datetime=\"{}\">{}</time>",
+                timestamp.to_rfc3339(),
+                timestamp.format("%Y-%m-%d %H:%M:%S UTC")
+            )
+        },
+    );
+    if let Some(source) = last_use.and_then(|usage| usage.source) {
+        value.push_str(&format!(
+            " <span class=\"credential-last-used-source\">{}</span>",
+            escape_html(source),
+        ));
+    }
+    format!("<div class=\"credential-last-used\"><strong>Last used</strong> {value}</div>")
+}
+
 fn summary_line(label: &str, value: &str) -> String {
     format!(
         "<div class=\"summary-line\"><span class=\"label\">{}</span><span class=\"dots\"></span><span class=\"value\">{}</span></div>",
@@ -287,10 +341,40 @@ fn finding_git_identities_html(record: &FindingReporterRecord) -> String {
     }
 }
 
-fn render_findings_table(findings: &[FindingReporterRecord]) -> String {
+fn render_findings_table(
+    findings: &[FindingReporterRecord],
+    access_map: &[AccessMapEntry],
+) -> String {
     if findings.is_empty() {
         return "<p>No findings detected.</p>".to_string();
     }
+
+    let mut last_used_by_fingerprint: BTreeMap<_, Option<LastUse<'_>>> = BTreeMap::new();
+    for entry in access_map {
+        let timestamp = last_used_at(entry);
+        // A credential found in several places maps once but applies to every finding.
+        let fingerprints = entry
+            .fingerprint
+            .iter()
+            .chain(&entry.finding_fingerprints)
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        for fingerprint in fingerprints {
+            last_used_by_fingerprint
+                .entry(fingerprint)
+                .and_modify(|previous| {
+                    if timestamp.map(LastUse::sort_key) > previous.map(LastUse::sort_key) {
+                        *previous = timestamp;
+                    }
+                })
+                .or_insert(timestamp);
+        }
+    }
+    let usage_note = if last_used_by_fingerprint.values().any(Option::is_some) {
+        "<p class=\"section-note\">Last-use timestamps come from provider records, which may lag.</p>"
+    } else {
+        ""
+    };
 
     let mut sorted = findings.to_vec();
     sorted.sort_by(|a, b| {
@@ -303,6 +387,11 @@ fn render_findings_table(findings: &[FindingReporterRecord]) -> String {
     let mut rows = String::new();
     for record in &sorted {
         let status_class = validation_status_class(record.finding.validation.outcome);
+        let validation_status = escape_html(&record.finding.validation.status);
+        let last_used = last_used_by_fingerprint
+            .get(record.finding.fingerprint.as_str())
+            .map(|timestamp| render_last_used(*timestamp))
+            .unwrap_or_default();
         let git_url_html = finding_git_url(record)
             .map(|url| {
                 format!(
@@ -351,7 +440,7 @@ fn render_findings_table(findings: &[FindingReporterRecord]) -> String {
                 <td>{}</td>\
                 <td><code>{}</code></td>\
                 <td>{}</td>\
-                <td><span class=\"status {}\">{}</span></td>\
+                <td data-filter-value=\"{validation_status}\" data-sort-value=\"{validation_status}\"><span class=\"status {status_class}\">{validation_status}</span>{last_used}</td>\
                 <td data-sort-value=\"{}\">{}</td>\
                 <td data-sort-value=\"{}\">{}</td>\
                 <td>{}</td>\
@@ -361,8 +450,6 @@ fn render_findings_table(findings: &[FindingReporterRecord]) -> String {
             escape_html(&record.rule.description),
             escape_html(&record.finding.path),
             git_context_html,
-            status_class,
-            escape_html(&record.finding.validation.status),
             confidence_sort,
             escape_html(&record.finding.confidence),
             record.finding.line,
@@ -372,7 +459,7 @@ fn render_findings_table(findings: &[FindingReporterRecord]) -> String {
     }
 
     format!(
-        "<div class=\"table-toolbar\" data-table-controls=\"detailed-findings-table\">
+        "{usage_note}<div class=\"table-toolbar\" data-table-controls=\"detailed-findings-table\">
           <label class=\"search-control\"><span>Filter findings</span><input type=\"search\" data-table-search=\"detailed-findings-table\" aria-controls=\"detailed-findings-table\" placeholder=\"Rule, path, repository, command…\"></label>
           <label class=\"select-control\"><span>Validation</span><select data-table-column-filter=\"detailed-findings-table\" data-column=\"5\"><option value=\"\">All validation states</option><option value=\"active credential\">Active</option><option value=\"assumed valid (not live-validated)\">Assumed valid</option><option value=\"locally derived\">Locally derived</option><option value=\"invalid cryptographic material\">Invalid material</option><option value=\"inactive credential\">Inactive</option><option value=\"inconclusive validation\">Inconclusive</option><option value=\"validation skipped\">Skipped</option><option value=\"canary token (skipped)\">Canary (skipped)</option><option value=\"not attempted\">Not attempted</option></select></label>
           <label class=\"select-control\"><span>Confidence</span><select data-table-column-filter=\"detailed-findings-table\" data-column=\"6\"><option value=\"\">All confidence levels</option><option value=\"high\">High</option><option value=\"medium\">Medium</option><option value=\"low\">Low</option></select></label>
@@ -399,10 +486,7 @@ fn render_findings_table(findings: &[FindingReporterRecord]) -> String {
     )
 }
 
-fn render_access_map(access_map: Option<&Vec<AccessMapEntry>>) -> String {
-    let Some(entries) = access_map else {
-        return String::new();
-    };
+fn render_access_map(entries: &[AccessMapEntry]) -> String {
     if entries.is_empty() {
         return String::new();
     }
@@ -480,14 +564,15 @@ fn render_access_map(access_map: Option<&Vec<AccessMapEntry>>) -> String {
             .and_then(|e| e.assessment.as_ref())
             .map(render_assessment)
             .unwrap_or_default();
+        let last_used = render_last_used(last_used_at(entry));
         items.push_str(&format!(
-            "<article class=\"access-identity\"><h3>{} · {}</h3><p>{resources} recorded resources · {permissions} unique permissions</p>{assessment}<ol class=\"access-paths\">{paths}</ol>{evidence_counts}{limitations}</article>",
+            "<article class=\"access-identity\"><h3>{} · {}</h3>{last_used}<p>{resources} recorded resources · {permissions} unique permissions</p>{assessment}<ol class=\"access-paths\">{paths}</ol>{evidence_counts}{limitations}</article>",
             escape_html(&entry.provider.to_uppercase()),
             escape_html(entry.account.as_deref().unwrap_or("Identity")),
         ));
     }
     format!(
-        "<section class=\"panel\"><h2>Blast Radius Summary</h2><p>Snapshot of recorded access. Unlisted resources are not proof of no access.</p>{items}</section>"
+        "<section class=\"panel\"><h2>Blast Radius Summary</h2><p>Snapshot of recorded access. Unlisted resources are not proof of no access. Last-use timestamps come from provider records, which may lag.</p>{items}</section>"
     )
 }
 
@@ -675,8 +760,9 @@ const INTERACTIVE_TABLE_SCRIPT: &str = r#"<script>
 fn build_html(envelope: &ReportEnvelope) -> String {
     let metadata_html = envelope.metadata.as_ref().map(render_metadata).unwrap_or_default();
     let repository_audit_html = render_repository_audit(envelope.audit.as_ref());
-    let findings_html = render_findings_table(&envelope.findings);
-    let access_map_html = render_access_map(envelope.access_map.as_ref());
+    let access_map = envelope.access_map.as_deref().unwrap_or_default();
+    let findings_html = render_findings_table(&envelope.findings, access_map);
+    let access_map_html = render_access_map(access_map);
 
     format!(
         "<!doctype html>
@@ -788,6 +874,8 @@ fn build_html(envelope: &ReportEnvelope) -> String {
     .git-identities {{ display: grid; gap: 3px; margin-top: 6px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }}
     .git-identity strong {{ color: var(--text); }}
     .access-identity {{ margin-top: 20px; overflow-wrap: anywhere; }}
+    .credential-last-used {{ width: fit-content; max-width: 100%; margin-top: 6px; padding: 4px 8px; border-radius: 5px; background: var(--surface-strong); font-size: 12px; font-variant-numeric: tabular-nums; }}
+    .credential-last-used-source {{ display: block; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }}
     .access-paths {{ list-style: none; padding: 0; display: grid; gap: 12px; }}
     .access-path {{ display: grid; grid-template-columns: minmax(0, 1fr) 24px minmax(0, 1.2fr); gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; }}
     .access-path h4 {{ margin: 0 0 10px; }}
@@ -957,13 +1045,15 @@ mod tests {
             fingerprint: None,
             permissions_by_severity: None,
             context: None,
+            finding_fingerprints: Vec::new(),
         };
-        let html = render_access_map(Some(&vec![entry]));
+        let html = render_access_map(&[entry]);
         assert!(html.contains("1 recorded resources · 1 unique permissions"));
         assert_eq!(html.matches("class=\"access-path\"").count(), 2);
         assert!(html.contains("&lt;script&gt;account&lt;/script&gt;"));
         assert!(html.contains("bucket&amp;one"));
         assert!(html.contains("Scope not recorded"));
+        assert!(html.contains("<strong>Last used</strong> Unavailable"));
         assert!(!html.contains("<script>account"));
     }
 
@@ -976,6 +1066,88 @@ mod tests {
             validation_status_class(kingfisher_core::ValidationOutcome::Skipped),
             "status-canary"
         );
+    }
+
+    #[test]
+    fn html_displays_last_use_for_the_matching_finding_and_identity() {
+        let finding = sample_finding();
+        let entry = AccessMapEntry {
+            provider: "github".into(),
+            account: Some("Example account".into()),
+            groups: vec![],
+            roles: vec![],
+            token_details: Some(AccessTokenDetails {
+                last_used_at: Some("2026-01-02T04:05:06+01:00".into()),
+                ..Default::default()
+            }),
+            provider_metadata: Some(ProviderMetadata {
+                credential_last_used_source: Some("GitHub audit <latest event>".into()),
+                ..Default::default()
+            }),
+            fingerprint: Some(finding.finding.fingerprint.clone()),
+            permissions_by_severity: None,
+            context: None,
+            finding_fingerprints: Vec::new(),
+        };
+        let mut unrelated = entry.clone();
+        unrelated.fingerprint = Some("other-fingerprint".into());
+        unrelated.token_details.as_mut().unwrap().last_used_at =
+            Some("2026-01-03T00:00:00Z".into());
+        let mut day_only = entry.clone();
+        day_only.provider = "gcp".into();
+        day_only.token_details.as_mut().unwrap().last_used_at = Some("2026-01-02".into());
+        day_only.provider_metadata.as_mut().unwrap().credential_last_used_source =
+            Some("Google Cloud day evidence".into());
+        let mut unavailable = entry.clone();
+        unavailable.token_details = None;
+        unavailable.provider_metadata.as_mut().unwrap().credential_last_used_source =
+            Some("No matching event".into());
+        let entries = [entry, unrelated, day_only, unavailable];
+        let expected = "<strong>Last used</strong> <time datetime=\"2026-01-02T03:05:06+00:00\">2026-01-02 03:05:06 UTC</time>";
+        let escaped_source =
+            "<span class=\"credential-last-used-source\">GitHub audit &lt;latest event&gt;</span>";
+        let findings_html = render_findings_table(&[finding], &entries);
+        assert!(findings_html.contains(&format!("{expected} {escaped_source}")));
+        assert!(!findings_html.contains("2026-01-03"));
+        assert!(!findings_html.contains("Google Cloud day evidence"));
+        assert!(findings_html.contains("data-filter-value=\"Active Credential\""));
+        let summary_html = render_access_map(&entries);
+        assert!(summary_html.contains(&format!("{expected} {escaped_source}")));
+        assert!(summary_html.contains("<time datetime=\"2026-01-02\">2026-01-02</time>"));
+        assert!(!summary_html.contains("No matching event"));
+    }
+
+    #[test]
+    fn html_last_use_applies_to_every_finding_sharing_the_credential() {
+        let first = sample_finding();
+        let mut second = sample_finding();
+        second.finding.fingerprint = "second-finding".into();
+        second.finding.path = "other/path.txt".into();
+        let entry = AccessMapEntry {
+            provider: "github".into(),
+            account: None,
+            groups: vec![],
+            roles: vec![],
+            token_details: Some(AccessTokenDetails {
+                last_used_at: Some("2026-01-02T03:04:05Z".into()),
+                ..Default::default()
+            }),
+            provider_metadata: None,
+            fingerprint: Some(first.finding.fingerprint.clone()),
+            permissions_by_severity: None,
+            context: None,
+            finding_fingerprints: vec![
+                first.finding.fingerprint.clone(),
+                second.finding.fingerprint.clone(),
+            ],
+        };
+        let serialized = serde_json::to_value(&entry).unwrap();
+        assert_eq!(
+            serialized["finding_fingerprints"],
+            serde_json::json!(entry.finding_fingerprints)
+        );
+        let html = render_findings_table(&[first, second], &[entry]);
+        assert_eq!(html.matches("<time datetime=\"2026-01-02T03:04:05+00:00\">").count(), 2);
     }
 
     #[test]
@@ -1046,7 +1218,7 @@ mod tests {
         let mut inactive = sample_finding();
         inactive.finding.validation.outcome = kingfisher_core::ValidationOutcome::VerifiedInactive;
         inactive.finding.validation.status = "Inactive Credential".to_string();
-        let html = render_findings_table(&[sample_finding(), inactive]);
+        let html = render_findings_table(&[sample_finding(), inactive], &[]);
 
         assert!(html.contains("data-table-search=\"detailed-findings-table\""));
         assert!(html.contains("data-table-column-filter=\"detailed-findings-table\""));

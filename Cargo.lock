@@ -4465,7 +4465,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-bin"
-version = "2.19.1"
+version = "2.20.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -4586,7 +4586,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-core"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "bstr",
@@ -4608,7 +4608,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-node"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "ignore",
@@ -4627,7 +4627,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-python"
-version = "1.6.4"
+version = "1.7.0"
 dependencies = [
  "anyhow",
  "ignore",
@@ -4660,7 +4660,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-rules"
-version = "3.2.1"
+version = "3.3.0"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -4710,7 +4710,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-scanner"
-version = "4.0.0"
+version = "4.1.0"
 dependencies = [
  "anyhow",
  "aws-config",

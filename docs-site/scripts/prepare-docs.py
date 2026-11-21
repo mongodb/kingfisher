@@ -2,6 +2,7 @@
 """
 Copies documentation from /docs/ into docs-site/docs/ with transformations:
 - Removes breadcrumb links ([<- Back to README](../README.md))
+- Removes repository-only blocks marked with docs-site:exclude
 - Rewrites internal links for MkDocs site structure
 - Adds SEO frontmatter (title + description)
 """
@@ -149,7 +150,7 @@ DOC_MAP = {
     "JAVASCRIPT.md": (
         "reference/javascript-bindings.md",
         "JavaScript and TypeScript SDK",
-        "Use Kingfisher's stable Node SDK (1.0.2): native Node-API detection, validation, revocation and VS Code workspace extensions.",
+        "Explore Kingfisher's upcoming stable Node SDK (1.1.0) with native Node-API detection, validation, revocation, and VS Code workspace extensions.",
     ),
     "COMPARISON.md": (
         "reference/comparison.md",
@@ -312,6 +313,17 @@ def process_file(src_path: str, dst_path: str, title: str, description: str):
     with open(src_path, "r", encoding="utf-8") as f:
         content = f.read()
 
+    exclude_starts = content.count("<!-- docs-site:exclude -->")
+    if exclude_starts:
+        content, removed_blocks = re.subn(
+            r"(?ms)^<!-- docs-site:exclude -->\n.*?^<!-- /docs-site:exclude -->(?:\n+|\Z)",
+            "",
+            content,
+        )
+        # A replacement can consume an extra opening marker before its closing marker.
+        if removed_blocks != exclude_starts:
+            raise ValueError(f"Unmatched or nested docs-site:exclude marker in {src_path}")
+        content = content.rstrip() + "\n"
     content = remove_breadcrumbs(content)
     content = rewrite_links(content)
     content = fix_table_spacing(content)
@@ -414,6 +426,10 @@ def main():
 
     copy_changelog()
     copy_llms_index()
+    shutil.copy2(
+        os.path.join(DOCS_SRC, "runtime-comparison.png"),
+        os.path.join(DOCS_DST, "assets", "images", "runtime-comparison.png"),
+    )
     copy_report_viewer()
     print("Done.")
 

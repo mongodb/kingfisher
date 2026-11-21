@@ -43,9 +43,13 @@ struct YamlTestFile(std::path::PathBuf);
 
 impl YamlTestFile {
     fn new(content: &[u8]) -> Self {
+        Self::with_extension(content, "yml")
+    }
+
+    fn with_extension(content: &[u8], extension: &str) -> Self {
         use std::io::Write;
         let path = std::env::temp_dir()
-            .join(format!("kingfisher-yaml-loader-{}.yml", uuid::Uuid::new_v4()));
+            .join(format!("kingfisher-yaml-loader-{}.{extension}", uuid::Uuid::new_v4()));
         let mut file =
             std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
         file.write_all(content).unwrap();
@@ -126,6 +130,13 @@ fn legacy_yaml_entrypoints_preserve_defaults_anchors_and_block_scalars() {
     .unwrap();
     let loaded = Rules::from_yaml_file(&file.0, Confidence::Low).unwrap();
     assert_eq!(memory.rules, loaded.rules);
+    let (runtime, prefilter) = Rules::load_runtime_rules([&file.0], Confidence::Low).unwrap();
+    assert_eq!(prefilter, loaded.betterleaks_prefilter);
+    assert_eq!(runtime.len(), loaded.num_rules());
+    for rule in runtime {
+        assert_eq!(rule.syntax(), &loaded.rules[rule.id()]);
+        assert!(!rule.allow_internal_ips());
+    }
     assert_eq!(syntax.len(), 2);
     assert_eq!(syntax[0].name, "yes");
     assert_eq!(syntax[0].pattern, "(token_[a-z]+)");
@@ -152,6 +163,64 @@ fn legacy_yaml_entrypoints_preserve_defaults_anchors_and_block_scalars() {
             "https://backup.example.invalid/{{ TOKEN }}"
         ]
     );
+}
+
+#[test]
+fn runtime_policy_follows_the_winning_rule_definition() {
+    let allowed = YamlTestFile::new(
+        br#"rules:
+  - id: custom.policy
+    name: Permit
+    pattern: token
+    allow_internal_ips: true
+  - id: custom.disabled
+    name: Deny
+    pattern: token
+    allow_internal_ips: false
+  - id: custom.default
+    name: Default
+    pattern: token
+  - id: custom.duplicate
+    name: Earlier duplicate
+    pattern: token
+    allow_internal_ips: true
+  - id: custom.duplicate
+    name: Later duplicate
+    pattern: token
+"#,
+    );
+    let replacement = YamlTestFile::new(
+        br#"rules:
+  - id: custom.policy
+    name: Replacement YAML
+    pattern: token
+    allow_internal_ips: false
+"#,
+    );
+    let toml = YamlTestFile::with_extension(
+        br#"[[rules]]
+id = "policy"
+description = "Replacement TOML"
+regex = "(token)"
+"#,
+        "toml",
+    );
+    let (rules, _) = Rules::load_runtime_rules([&allowed.0], Confidence::Low).unwrap();
+    let requests: Vec<_> =
+        rules.iter().filter(|rule| rule.allow_internal_ips()).map(|rule| rule.id()).collect();
+    assert_eq!(requests, ["custom.policy"]);
+
+    for later in [&replacement, &toml] {
+        let (rules, _) =
+            Rules::load_runtime_rules([&allowed.0, &later.0], Confidence::Low).unwrap();
+        assert!(rules.iter().all(|rule| !rule.allow_internal_ips()));
+
+        let (rules, _) =
+            Rules::load_runtime_rules([&later.0, &allowed.0], Confidence::Low).unwrap();
+        assert!(
+            rules.iter().find(|rule| rule.id() == "custom.policy").unwrap().allow_internal_ips()
+        );
+    }
 }
 
 #[test]

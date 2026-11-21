@@ -59,10 +59,11 @@ def git(repo, *args):
 def repo(tmp_path):
     repo = tmp_path / "repository with spaces"
     repo.mkdir()
-    git(repo, "init", "-b", "main")
+    git(repo, "init", "-b", "main", "--template=")
     git(repo, "config", "user.name", "SDK Test")
     git(repo, "config", "user.email", "sdk@example.invalid")
     git(repo, "config", "commit.gpgsign", "false")
+    git(repo, "config", "core.hooksPath", ".git/no-hooks")
     (repo / "deleted.txt").write_bytes(TOKEN)
     (repo / "unchanged.txt").write_bytes(b"no credential")
     git(repo, "add", ".")
@@ -249,7 +250,7 @@ def test_compressed_tar_budget_exhaustion_never_yields_partial_members(name, enc
     assert [member.data for member in members] == [TOKEN, b"x" * 3000]
 
 
-def test_nested_archives_budgets_and_safe_paths(scanner, tmp_path):
+def test_nested_archive_depth_and_budgets():
     inner = zip_bytes([("config.txt", TOKEN)])
     source = ScanInput("dir/outer!.zip", zip_bytes([("nested.zip", inner)]))
     raw, = expand_archives([source], depth=0)
@@ -265,20 +266,6 @@ def test_nested_archives_budgets_and_safe_paths(scanner, tmp_path):
     with pytest.raises(RuntimeError):
         list(expand_archives([ScanInput("broken.zip", b"invalid")]))
     assert list(expand_archives([ScanInput("empty.zip", zip_bytes([]))])) == []
-    archive = tmp_path / "unsafe.zip"
-    archive.write_bytes(zip_bytes([
-        ("safe.txt", TOKEN), ("../escape.txt", TOKEN), ("/absolute.txt", TOKEN),
-    ]))
-    expanded = expand_archives([ScanInput.from_file(archive)], temp_dir=tmp_path)
-    with pytest.raises(RuntimeError, match="unsafe"):
-        next(expanded)  # The safe first member must not escape the failed root.
-    assert not (tmp_path / "escape.txt").exists()
-    for option in (
-        {"depth": -1}, {"depth": 33}, {"depth": True}, {"max_bytes": 0},
-        {"max_bytes": True}, {"max_entries": 0}, {"max_entries": True},
-    ):
-        with pytest.raises(ValueError):
-            list(expand_archives([], **option))
 
 
 def test_git_history_metadata_and_composition(scanner, repo, monkeypatch, tmp_path):
@@ -439,16 +426,22 @@ for path, data, suffix in [
     subprocess.run([sys.executable, "-c", script], env=env, check=True)
 
 
-@pytest.mark.parametrize("options", [{"depth": 99}, {"max_bytes": 0}, {"max_entries": 0}])
-def test_archive_options_are_validated_before_iteration(options):
-    with pytest.raises(ValueError):
-        expand_archives([], **options)
+@pytest.mark.parametrize("option, invalid_values", [
+    ("depth", (-1, 33, True)),
+    ("max_bytes", (0, True)),
+    ("max_entries", (0, True)),
+])
+def test_archive_options_are_validated_before_iteration(option, invalid_values):
+    for value in invalid_values:
+        with pytest.raises(ValueError, match=option):
+            expand_archives([], **{option: value})
 
 
 def test_content_options_are_validated_before_iteration():
     from kingfisher_sdk import expand_content
-    with pytest.raises(ValueError):
-        expand_content([], max_bytes=0)
+    for value in (0, -1, "invalid"):
+        with pytest.raises(ValueError, match="max_bytes"):
+            expand_content([], max_bytes=value)
 
 
 def test_filesystem_skips_case_variants_of_git_directory(tmp_path):

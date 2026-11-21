@@ -4,6 +4,7 @@ use std::io::Write;
 use std::pin::Pin;
 
 use anyhow::Result;
+use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 use schemars::JsonSchema;
 use serde::Serialize;
 
@@ -29,6 +30,7 @@ mod buildkite;
 mod circleci;
 mod digitalocean;
 mod fastly;
+pub(crate) use fastly::FastlyValidationActivity;
 mod gcp;
 mod gitea;
 mod github;
@@ -37,6 +39,7 @@ mod harness;
 mod hubspot;
 mod huggingface;
 mod ibm_cloud;
+mod jfrog;
 mod jira;
 mod microsoft_teams;
 mod monday;
@@ -98,7 +101,10 @@ pub async fn run(args: AccessMapArgs) -> Result<()> {
 type AccessMapResultFuture<'a> = Pin<Box<dyn Future<Output = Result<AccessMapResult>> + Send + 'a>>;
 type MappedRequestFuture = Pin<Box<dyn Future<Output = (AccessMapAttempt, String)> + Send>>;
 
-fn dispatch_cli_request(args: &AccessMapArgs) -> AccessMapResultFuture<'_> {
+fn dispatch_cli_request(
+    args: &AccessMapArgs,
+    activity_before: DateTime<Utc>,
+) -> AccessMapResultFuture<'_> {
     match &args.provider {
         AccessMapProvider::Gcp if args.analysis.gcp_projects.is_empty() => {
             Box::pin(gcp::map_access(args.credential_path.as_deref()))
@@ -107,7 +113,7 @@ fn dispatch_cli_request(args: &AccessMapArgs) -> AccessMapResultFuture<'_> {
             Box::pin(gcp::map_access_with_options(args.credential_path.as_deref(), &args.analysis))
         }
         AccessMapProvider::Aws => Box::pin(aws::map_access(args)),
-        AccessMapProvider::Azure => Box::pin(azure::map_access(args)),
+        AccessMapProvider::Azure => Box::pin(azure::map_access(args, activity_before)),
         AccessMapProvider::Github => Box::pin(github::map_access(args)),
         AccessMapProvider::Gitlab => Box::pin(gitlab::map_access(args)),
         AccessMapProvider::Slack => Box::pin(slack::map_access(args)),
@@ -326,6 +332,7 @@ impl AccessMapRequest {
 pub(crate) struct CollectedAccessMapRequest {
     pub request: AccessMapRequest,
     pub finding_fingerprints: Vec<String>,
+    pub fastly_activity: Option<FastlyValidationActivity>,
 }
 
 /// Structured output describing the resolved identity and its risk profile.
@@ -355,7 +362,7 @@ pub struct AccessMapResult {
     /// Additional risk notes derived from permissions and impersonation exposure.
     pub risk_notes: Vec<String>,
 
-    /// Optional access token metadata (for GitHub/GitLab).
+    /// Optional credential metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_details: Option<AccessTokenDetails>,
     /// Optional provider metadata (for GitLab instance details, etc.).
@@ -471,6 +478,7 @@ pub struct AccessTokenDetails {
     pub url: Option<String>,
     pub token_type: Option<String>,
     pub created_at: Option<String>,
+    /// Provider-reported timestamp or date for this credential's last recorded use.
     pub last_used_at: Option<String>,
     pub expires_at: Option<String>,
     pub user_id: Option<String>,
@@ -486,6 +494,9 @@ pub struct ProviderMetadata {
     pub betterleaks_analysis: Option<serde_json::Value>,
     pub version: Option<String>,
     pub enterprise: Option<bool>,
+    /// Provider source of the credential-specific last-use timestamp, when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_last_used_source: Option<String>,
     /// Read-only evidence explaining how permissions and identity paths were derived.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authorization_evidence: Option<AuthorizationEvidence>,
@@ -676,19 +687,22 @@ pub async fn map_requests(requests: Vec<AccessMapRequest>) -> Vec<AccessMapResul
 
 /// Map a batch of credentials while preserving whether each provider request succeeded.
 pub(crate) async fn map_request_attempts(requests: Vec<AccessMapRequest>) -> Vec<AccessMapAttempt> {
-    map_request_attempts_with_options(requests, &BlastRadiusOptions::default()).await
+    map_request_attempts_with_options(requests, &BlastRadiusOptions::default(), Utc::now()).await
 }
 
 pub(crate) async fn map_request_attempts_with_options(
     requests: Vec<AccessMapRequest>,
     options: &BlastRadiusOptions,
+    activity_before: DateTime<Utc>,
 ) -> Vec<AccessMapAttempt> {
     let mut results = Vec::new();
 
     for request in requests {
-        let (mut attempt, fp) = dispatch_access_map_request(request, options.clone()).await;
+        let (mut attempt, fp) =
+            dispatch_access_map_request(request, options.clone(), activity_before, None).await;
 
         attempt.result.fingerprint = Some(fp);
+        retain_prior_credential_activity(&mut attempt.result, activity_before);
         assessment::attach(&mut attempt.result);
         results.push(attempt);
     }
@@ -702,17 +716,24 @@ pub(crate) async fn map_request_attempts_with_options(
 pub(crate) async fn map_collected_requests_with_options(
     requests: Vec<CollectedAccessMapRequest>,
     options: &BlastRadiusOptions,
+    activity_before: DateTime<Utc>,
 ) -> Vec<ScanAccessMapResult> {
     let mut results = Vec::with_capacity(requests.len());
 
     for collected in requests {
-        let (mut attempt, primary_fingerprint) =
-            dispatch_access_map_request(collected.request, options.clone()).await;
+        let (mut attempt, primary_fingerprint) = dispatch_access_map_request(
+            collected.request,
+            options.clone(),
+            activity_before,
+            collected.fastly_activity,
+        )
+        .await;
         let mut finding_fingerprints = collected.finding_fingerprints;
         finding_fingerprints.push(primary_fingerprint);
         finding_fingerprints.sort_unstable();
         finding_fingerprints.dedup();
         attempt.result.fingerprint = finding_fingerprints.first().cloned();
+        retain_prior_credential_activity(&mut attempt.result, activity_before);
         assessment::attach(&mut attempt.result);
         results.push(ScanAccessMapResult {
             result: attempt.result,
@@ -722,6 +743,27 @@ pub(crate) async fn map_collected_requests_with_options(
     }
 
     results
+}
+
+fn retain_prior_credential_activity(result: &mut AccessMapResult, cutoff: DateTime<Utc>) {
+    let Some(details) = result.token_details.as_mut() else {
+        return;
+    };
+    let Some(last_used) = details.last_used_at.as_deref() else {
+        return;
+    };
+    // Google Cloud's date-only activity window starts at 07:00 UTC. A bucket still
+    // open at scan start, like a timestamp in the same second, can include this scan.
+    let predates_scan = DateTime::parse_from_rfc3339(last_used)
+        .is_ok_and(|date| date.timestamp() < cutoff.timestamp())
+        || NaiveDate::parse_from_str(last_used, "%Y-%m-%d")
+            .is_ok_and(|date| date < (cutoff - TimeDelta::hours(7)).date_naive());
+    if !predates_scan {
+        details.last_used_at = None;
+        if let Some(metadata) = result.provider_metadata.as_mut() {
+            metadata.credential_last_used_source = None;
+        }
+    }
 }
 
 fn finish_mapping(
@@ -741,6 +783,8 @@ fn finish_mapping(
 fn dispatch_access_map_request(
     request: AccessMapRequest,
     options: BlastRadiusOptions,
+    activity_before: DateTime<Utc>,
+    fastly_activity: Option<FastlyValidationActivity>,
 ) -> MappedRequestFuture {
     match request {
         AccessMapRequest::Betterleaks(request) => Box::pin(async move {
@@ -797,8 +841,12 @@ fn dispatch_access_map_request(
         AccessMapRequest::Azure { credential_json, containers, fingerprint } => {
             Box::pin(async move {
                 let mapped = finish_mapping(
-                    azure::map_access_from_json_with_hints(&credential_json, containers.as_deref())
-                        .await,
+                    azure::map_access_from_json_before(
+                        &credential_json,
+                        containers.as_deref(),
+                        activity_before,
+                    )
+                    .await,
                     "azure",
                     "credential",
                 );
@@ -815,26 +863,38 @@ fn dispatch_access_map_request(
                 (mapped, fingerprint)
             })
         }
-        AccessMapRequest::Github { token, fingerprint } => {
-            Box::pin(async move { (map_token(&GithubMapper, &token).await, fingerprint) })
-        }
+        AccessMapRequest::Github { token, fingerprint } => Box::pin(async move {
+            let mapped = finish_mapping(
+                github::map_access_from_token_before(&token, activity_before).await,
+                "github",
+                "token",
+            );
+            (mapped, fingerprint)
+        }),
         AccessMapRequest::GithubAt { token, fingerprint, api_endpoint } => Box::pin(async move {
             (
                 finish_mapping(
-                    github::map_access_from_token_at(&token, &api_endpoint).await,
+                    github::map_access_from_token_at_before(&token, &api_endpoint, activity_before)
+                        .await,
                     "github",
                     "credential",
                 ),
                 fingerprint,
             )
         }),
-        AccessMapRequest::Gitlab { token, fingerprint } => {
-            Box::pin(async move { (map_token(&GitlabMapper, &token).await, fingerprint) })
-        }
+        AccessMapRequest::Gitlab { token, fingerprint } => Box::pin(async move {
+            let mapped = finish_mapping(
+                gitlab::map_access_from_token_before(&token, activity_before).await,
+                "gitlab",
+                "token",
+            );
+            (mapped, fingerprint)
+        }),
         AccessMapRequest::GitlabAt { token, fingerprint, api_endpoint } => Box::pin(async move {
             (
                 finish_mapping(
-                    gitlab::map_access_from_token_at(&token, &api_endpoint).await,
+                    gitlab::map_access_from_token_at_before(&token, &api_endpoint, activity_before)
+                        .await,
                     "gitlab",
                     "credential",
                 ),
@@ -872,9 +932,14 @@ fn dispatch_access_map_request(
         AccessMapRequest::Bitbucket { token, fingerprint } => {
             Box::pin(async move { (map_token(&BitbucketMapper, &token).await, fingerprint) })
         }
-        AccessMapRequest::Buildkite { token, fingerprint } => {
-            Box::pin(async move { (map_token(&BuildkiteMapper, &token).await, fingerprint) })
-        }
+        AccessMapRequest::Buildkite { token, fingerprint } => Box::pin(async move {
+            let mapped = finish_mapping(
+                buildkite::map_access_from_token_before(&token, activity_before).await,
+                "buildkite",
+                "token",
+            );
+            (mapped, fingerprint)
+        }),
         AccessMapRequest::Harness { token, fingerprint } => {
             Box::pin(async move { (map_token(&HarnessMapper, &token).await, fingerprint) })
         }
@@ -927,9 +992,14 @@ fn dispatch_access_map_request(
         AccessMapRequest::DigitalOcean { token, fingerprint } => {
             Box::pin(async move { (map_token(&DigitalOceanMapper, &token).await, fingerprint) })
         }
-        AccessMapRequest::Fastly { token, fingerprint } => {
-            Box::pin(async move { (map_token(&FastlyMapper, &token).await, fingerprint) })
-        }
+        AccessMapRequest::Fastly { token, fingerprint } => Box::pin(async move {
+            let mapped = finish_mapping(
+                fastly::map_access_from_token_with_activity(&token, fastly_activity).await,
+                "fastly",
+                "token",
+            );
+            (mapped, fingerprint)
+        }),
         AccessMapRequest::HubSpot { token, fingerprint } => {
             Box::pin(async move { (map_token(&HubSpotMapper, &token).await, fingerprint) })
         }
@@ -1062,6 +1132,7 @@ pub fn write_reports(results: &[AccessMapResult], html_out: &std::path::Path) ->
 
 /// Map a provider credential without writing its result to an output stream.
 pub async fn map_credential(args: &AccessMapArgs) -> Result<AccessMapResult> {
+    let activity_before = Utc::now();
     args.analysis.validate()?;
     if args.provider != AccessMapProvider::Aws && !args.analysis.aws_regions.is_empty() {
         anyhow::bail!("--aws-region requires the aws provider in standalone mapping");
@@ -1069,7 +1140,8 @@ pub async fn map_credential(args: &AccessMapArgs) -> Result<AccessMapResult> {
     if args.provider != AccessMapProvider::Gcp && !args.analysis.gcp_projects.is_empty() {
         anyhow::bail!("--gcp-project requires the gcp provider in standalone mapping");
     }
-    let mut result = dispatch_cli_request(args).await?;
+    let mut result = dispatch_cli_request(args, activity_before).await?;
+    retain_prior_credential_activity(&mut result, activity_before);
     assessment::attach(&mut result);
     Ok(result)
 }
@@ -1493,6 +1565,36 @@ mod tests {
 
     const TEAMS_WEBHOOK: &str = "https://example.webhook.office.com/webhookb2/webhook-id@tenant-id/IncomingWebhook/secret-token/channel-id";
 
+    #[test]
+    fn activity_must_predate_the_scan_at_its_reported_precision() {
+        let cutoff = DateTime::parse_from_rfc3339("2026-01-02T02:03:04.500Z").unwrap().to_utc();
+        let mut result = build_failed_result("example", "fixture", anyhow::anyhow!("fixture"));
+        for (timestamp, retained) in [
+            ("2026-01-02T03:03:03+01:00", true),
+            ("2026-01-02T02:03:04Z", false),
+            ("2026-01-02T02:03:05Z", false),
+            ("2025-12-31", true),
+            ("2026-01-01", false),
+            ("2026-01-02", false),
+        ] {
+            result.token_details = Some(AccessTokenDetails {
+                last_used_at: Some(timestamp.into()),
+                ..Default::default()
+            });
+            result.provider_metadata = Some(ProviderMetadata {
+                credential_last_used_source: Some("Fixture source".into()),
+                version: Some("1.0".into()),
+                ..Default::default()
+            });
+            retain_prior_credential_activity(&mut result, cutoff);
+            let details = result.token_details.as_ref().unwrap();
+            let metadata = result.provider_metadata.as_ref().unwrap();
+            assert_eq!(details.last_used_at.as_deref(), retained.then_some(timestamp));
+            assert_eq!(metadata.credential_last_used_source.is_some(), retained);
+            assert_eq!(metadata.version.as_deref(), Some("1.0"));
+        }
+    }
+
     #[tokio::test]
     async fn batch_mapping_automatically_assesses_without_changing_provider_fields() {
         let original = microsoft_teams::map_access_from_webhook_url(TEAMS_WEBHOOK).await.unwrap();
@@ -1535,10 +1637,15 @@ mod tests {
                     fingerprint: "finding-b".into(),
                 },
                 finding_fingerprints: vec!["finding-a".into(), "finding-a".into()],
+                fastly_activity: None,
             })
             .collect();
-        let results =
-            map_collected_requests_with_options(requests, &BlastRadiusOptions::default()).await;
+        let results = map_collected_requests_with_options(
+            requests,
+            &BlastRadiusOptions::default(),
+            chrono::Utc::now(),
+        )
+        .await;
 
         assert_eq!(results.len(), 2);
         for (index, mapped) in results.iter().enumerate() {
@@ -1596,9 +1703,6 @@ mod tests {
     #[test]
     fn authorization_evidence_serializes_ordered_identity_path() {
         let metadata = ProviderMetadata {
-            betterleaks_analysis: None,
-            version: None,
-            enterprise: None,
             authorization_evidence: Some(AuthorizationEvidence {
                 paths: vec![AuthorizationPath {
                     direction: Some("outbound".into()),
@@ -1634,6 +1738,7 @@ mod tests {
                 }],
                 ..AuthorizationEvidence::default()
             }),
+            ..ProviderMetadata::default()
         };
 
         let json = serde_json::to_value(metadata).unwrap();

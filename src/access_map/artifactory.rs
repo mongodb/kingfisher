@@ -7,8 +7,8 @@ use tracing::warn;
 use crate::{cli::commands::access_map::AccessMapArgs, validation::GLOBAL_USER_AGENT};
 
 use super::{
-    AccessMapResult, AccessSummary, AccessTokenDetails, PermissionSummary, ResourceExposure,
-    RoleBinding, Severity, build_recommendations,
+    AccessMapResult, AccessSummary, AccessTokenDetails, PermissionSummary, ProviderMetadata,
+    ResourceExposure, RoleBinding, Severity, build_recommendations, jfrog,
 };
 
 const MAX_REPO_RESOURCES: usize = 100;
@@ -119,6 +119,12 @@ pub async fn map_access_from_token_and_url(token: &str, base_url: &str) -> Resul
 
     let mut risk_notes = Vec::new();
     let mut permissions = PermissionSummary::default();
+
+    let last_used_at = jfrog::fetch_token_last_used(token, base_url).await;
+    let provider_metadata = last_used_at.as_ref().map(|_| ProviderMetadata {
+        credential_last_used_source: Some(jfrog::LAST_USED_SOURCE.into()),
+        ..ProviderMetadata::default()
+    });
 
     // Fetch current user info
     let user = fetch_current_user(&client, token, base_url).await?;
@@ -243,12 +249,12 @@ pub async fn map_access_from_token_and_url(token: &str, base_url: &str) -> Resul
             url: Some(base_url.to_string()),
             token_type: Some("bearer_token".into()),
             created_at: None,
-            last_used_at: None,
+            last_used_at,
             expires_at: None,
             user_id: None,
             scopes: groups,
         }),
-        provider_metadata: None,
+        provider_metadata,
         fingerprint: None,
     })
 }

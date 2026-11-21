@@ -7,32 +7,43 @@ description: "Compare published benchmarks, live verification, revocation, and l
 
 ## Runtime Comparison (seconds)
 
-These are published reference results, not a fresh benchmark of the current release.
-Repository revisions, rule catalogs, network conditions and tool versions affect
-runtime and findings. See the [benchmark harness](https://github.com/mongodb/kingfisher/blob/main/docs/benchmark/README.md) to generate
-a new report recording tool versions and raw results.
+Scanned November 20, 2026 using Kingfisher 2.20, TruffleHog 3.100.0, and
+Gitleaks 8.30.1. Each value is the median wall-clock time of five sequential
+trials over the local repositories and their available Git history. Kingfisher
+and TruffleHog ran with live credential checks disabled.
+Gitleaks only detects secrets. Update checks were disabled where available.
+TruffleHog scanned the local clones in place. Kingfisher used its default
+detection settings, including archive extraction. Tool-specific filters and Git
+enumeration affect coverage. [Benchmark commands and methodology](https://github.com/mongodb/kingfisher/blob/main/docs/benchmark/README.md).
 
-*Lower runtimes are better.*
+| Repository | Kingfisher | TruffleHog | Gitleaks |
+|---|---:|---:|---:|
+| croc | 0.36 | 2.54 | 2.35 |
+| rails | 4.93 | 21.42 | 25.26 |
+| ruby | 17.83 | 102.05 | 46.92 |
+| gitlab | 83.96 | 462.59 | 726.61 |
+| django | 3.96 | 372.25 | 19.60 |
+| lucene | 11.12 | 87.03 | 50.22 |
+| mongodb | 17.45 | 223.09 | 161.34 |
+| linux | 86.92 | 626.05 | 588.86 |
+| typescript | 20.07 | 145.31 | 177.60 |
+| **Sum of medians** | **246.62** | 2042.32 | 1798.76 |
 
-| Repository | Kingfisher Runtime | TruffleHog Runtime | Gitleaks Runtime |
-|------------|--------------------|--------------------|------------------|
-| croc | 2.64 | 10.36 | 3.10 |
-| rails | 8.75 | 24.19 | 24.24 |
-| ruby | 22.93 | 132.68 | 61.37 |
-| gitlab | 135.41 | 325.93 | 350.84 |
-| django | 6.91 | 227.63 | 59.50 |
-| lucene | 15.62 | 89.11 | 76.24 |
-| mongodb | 25.37 | 174.93 | 175.80 |
-| linux | 205.19 | 597.51 | 548.96 |
-| typescript | 64.99 | 183.04 | 232.34 |
+Kingfisher had the lowest median on all nine repositories.
 
-<p align="center">
-  <img src="../assets/images/runtime-comparison.png" alt="Kingfisher Runtime Comparison" style="vertical-align: center;" />
-</p>
+A replacement trial after disk space was restored supplies the fifth usable
+GitLab TruffleHog measurement.
+
+TruffleHog logged localized errors while parsing Git dates and reading compressed
+streams. The Linux checkout had pre-existing changes, and scanners handle working
+trees and Git history differently.
+
+![Median detection-only runtime by repository](../assets/images/runtime-comparison.png)
 
 ### Validated/Verified Findings Comparison
 
-Gitleaks does not perform live validation; its verified counts are **N/A**, not zero.
+These counts come from a separate run with live credential checks. Gitleaks has
+no live validation, so its verified counts are **N/A**.
 
 | Repository | Kingfisher Validated | TruffleHog Verified | Gitleaks Verified |
 |------------|----------------------|---------------------|-------------------|
@@ -47,28 +58,36 @@ Gitleaks does not perform live validation; its verified counts are **N/A**, not 
 | typescript | 0 | 0 | N/A |
 
 ### Network Requests Comparison
-*'Network Requests' counts plain HTTP requests and HTTPS CONNECT tunnels observed by the benchmark proxy. TLS is not decrypted, so individual requests inside a tunnel are not counted; clients that bypass the proxy are not observed. Gitleaks does not perform live validation; zero describes these runs, not every possible network interaction.*
 
-| Repository | Kingfisher Network Requests | TruffleHog Network Requests | Gitleaks Network Requests |
-|------------|-----------------------------|-----------------------------|---------------------------|
-| croc | 0 | 17 | 0 |
-| rails | 1 | 25 | 0 |
-| ruby | 3 | 33 | 0 |
-| gitlab | 17 | **15624** | 0 |
-| django | 0 | 66 | 0 |
-| lucene | 0 | 116 | 0 |
-| mongodb | 1 | 191 | 0 |
-| linux | 0 | 287 | 0 |
-| typescript | 0 | 10 | 0 |
+On November 20, 2026, Kingfisher 2.20 and TruffleHog 3.100.0 each scanned
+each repository once with validation enabled and update checks disabled. The
+scanners could reach a local counting proxy, which rejected every plain HTTP
+request and HTTPS CONNECT attempt with HTTP 403. Direct connections and DNS
+egress were blocked independently of the proxy.
 
-*Lower runtimes are better. Validated/Verified counts are reported where available. 'Network Requests' is the benchmark proxy's request/tunnel count.*
+Counts include retries that reached the proxy. Validation that stopped at a
+DNS preflight or tried a direct connection falls outside this count.
+
+| Repository | Kingfisher Proxy Attempts | TruffleHog Proxy Attempts |
+|---|---:|---:|
+| croc | 0 | 241 |
+| rails | 0 | 18 |
+| ruby | 0 | 252 |
+| gitlab | 1 | 13,612 |
+| django | 0 | 13 |
+| lucene | 0 | 72 |
+| mongodb | 0 | 3,533 |
+| linux | 0 | 93 |
+| typescript | 0 | 13 |
+| **Total** | **1** | **17,847** |
+
+With live credential checks, both scanners reported six verified findings
+across the nine repositories. The proxy recorded 16,369 HTTP requests and HTTPS
+CONNECT tunnels for TruffleHog and 22 for Kingfisher in that run.
 
 ## Benchmark Environment
 
-OS: darwin
-Architecture: arm64
-CPU Cores: 16
-RAM: 48.00 GB
+Apple M4 Max, macOS 27.2 (arm64), 16 logical CPUs, 48 GiB RAM.
 
 
 All four tools detect secrets. Kingfisher and Betterleaks 2.0 RC5 also include

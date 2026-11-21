@@ -21,7 +21,7 @@ use tokio::sync::Notify;
 use tracing::{info, trace, warn};
 
 use crate::{
-    access_map::{AccessMapRequest, CollectedAccessMapRequest},
+    access_map::{AccessMapRequest, CollectedAccessMapRequest, FastlyValidationActivity},
     blob::BlobId,
     findings_store::{FindingsStore, FindingsStoreMessage},
     location::OffsetSpan,
@@ -30,8 +30,8 @@ use crate::{
     rules::rule::{BetterleaksAccessMapHandler, Rule, Validation},
     validation::{
         CachedResponse, CredentialUriTarget, classify_credential_uri,
-        collect_variables_and_dependencies, utils, validate_single_match,
-        validation_context_values,
+        collect_variables_and_dependencies, internal_ip_policy::RuleInternalIpPolicy, utils,
+        validate_single_match, validation_context_values,
     },
     validation_body,
     validation_rate_limit::ValidationRateLimiter,
@@ -41,7 +41,8 @@ use crate::{
 pub struct AccessMapCollector {
     inner: Arc<DashMap<u64, AccessMapRequest>>,
     finding_fingerprints: Arc<DashMap<u64, FxHashSet<String>>>,
-    allow_internal_ips: bool,
+    fastly_activity: Arc<DashMap<u64, FastlyValidationActivity>>,
+    internal_ip_policy: RuleInternalIpPolicy,
 }
 
 struct ValidationInFlight {
@@ -56,16 +57,21 @@ pub(crate) fn direct_access_map_requests(
     secret: &str,
     dependent_captures: BTreeMap<String, String>,
 ) -> Vec<AccessMapRequest> {
-    direct_access_map_requests_with_options(rule, secret, dependent_captures, false)
+    direct_access_map_requests_with_options(
+        rule,
+        secret,
+        dependent_captures,
+        RuleInternalIpPolicy::default(),
+    )
 }
 
 pub(crate) fn direct_access_map_requests_with_options(
     rule: Arc<Rule>,
     secret: &str,
     dependent_captures: BTreeMap<String, String>,
-    allow_internal_ips: bool,
+    internal_ip_policy: RuleInternalIpPolicy,
 ) -> Vec<AccessMapRequest> {
-    let collector = AccessMapCollector::default().with_allow_internal_ips(allow_internal_ips);
+    let collector = AccessMapCollector::default().with_internal_ip_policy(internal_ip_policy);
     let mut synthetic_captures = smallvec::smallvec![crate::matcher::SerializableCapture {
         name: Some(crate::util::intern("TOKEN")),
         match_number: 0,
@@ -110,8 +116,8 @@ pub(crate) fn direct_access_map_requests_with_options(
 
 #[allow(dead_code)] // Retained for standalone providers awaiting compatible Betterleaks validators.
 impl AccessMapCollector {
-    pub(crate) fn with_allow_internal_ips(mut self, allowed: bool) -> Self {
-        self.allow_internal_ips = allowed;
+    pub(crate) fn with_internal_ip_policy(mut self, policy: RuleInternalIpPolicy) -> Self {
+        self.internal_ip_policy = policy;
         self
     }
     fn record_request(&self, key: u64, request: AccessMapRequest) {
@@ -439,7 +445,19 @@ impl AccessMapCollector {
     }
 
     pub fn record_fastly(&self, token: &str, fingerprint: String) {
+        self.record_fastly_with_activity(token, fingerprint, None);
+    }
+
+    fn record_fastly_with_activity(
+        &self,
+        token: &str,
+        fingerprint: String,
+        activity: Option<FastlyValidationActivity>,
+    ) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("fastly|{token}").as_bytes());
+        if let Some(activity) = activity {
+            self.fastly_activity.entry(key).or_insert(activity);
+        }
         self.record_request(
             key,
             AccessMapRequest::Fastly { token: token.to_string(), fingerprint },
@@ -618,7 +636,14 @@ impl AccessMapCollector {
                     .map(|fingerprints| fingerprints.iter().cloned().collect::<Vec<_>>())
                     .unwrap_or_else(|| vec![entry.value().finding_fingerprint().to_string()]);
                 finding_fingerprints.sort();
-                CollectedAccessMapRequest { request: entry.value().clone(), finding_fingerprints }
+                CollectedAccessMapRequest {
+                    request: entry.value().clone(),
+                    finding_fingerprints,
+                    fastly_activity: self
+                        .fastly_activity
+                        .get(&key)
+                        .map(|activity| activity.clone()),
+                }
             })
             .collect();
         requests.sort_unstable_by(|a, b| {
@@ -660,6 +685,9 @@ pub async fn run_secret_validation(
     validation_retries: u32,
     max_body_len: usize,
 ) -> Result<()> {
+    let profiled_clients = clients.profiled_for_scan();
+    let clients = profiled_clients.as_ref().unwrap_or(clients);
+
     // ── 1. Concurrency & counters ───────────────────────────────────────────
     let concurrency = if num_jobs > 0 {
         num_jobs
@@ -1069,6 +1097,8 @@ pub async fn run_secret_validation(
             }
         }
     }
+
+    clients.log_phase_profile();
 
     // Validation intentionally executes once per unique credential, but alert correlation is
     // occurrence-specific: the same credential at two source locations has two finding
@@ -1925,7 +1955,7 @@ fn record_betterleaks_access_map(
             key,
             AccessMapRequest::Betterleaks(Box::new(
                 crate::access_map::betterleaks::AnalysisRequest {
-                    allow_internal_ips: collector.allow_internal_ips,
+                    allow_internal_ips: collector.internal_ip_policy.allows(&om.rule),
                     rule_id: om.rule.id().to_owned(),
                     config: validation.clone(),
                     captures: captures.to_vec(),
@@ -2045,7 +2075,11 @@ fn record_betterleaks_access_map(
         }
         BetterleaksAccessMapHandler::Buildkite => collector.record_buildkite(token, fp()),
         BetterleaksAccessMapHandler::Circleci => collector.record_circleci(token, fp()),
-        BetterleaksAccessMapHandler::Fastly => collector.record_fastly(token, fp()),
+        BetterleaksAccessMapHandler::Fastly => {
+            let activity = crate::validation::cached_fastly_token_usage(om)
+                .map(|last_used_at| FastlyValidationActivity { last_used_at });
+            collector.record_fastly_with_activity(token, fp(), activity);
+        }
         BetterleaksAccessMapHandler::Github => collector.record_github_at(
             token,
             om.dependent_captures.get("GITHUB_API_BASE_URL").map(String::as_str),
@@ -2390,6 +2424,27 @@ mod tests {
     }
 
     #[test]
+    fn fastly_collector_retains_the_first_checked_activity_across_findings() {
+        let collector = AccessMapCollector::default();
+        collector.record_fastly("test-token", "first".into());
+        collector.record_fastly_with_activity(
+            "test-token",
+            "second".into(),
+            Some(FastlyValidationActivity { last_used_at: None }),
+        );
+        collector.record_fastly_with_activity(
+            "test-token",
+            "third".into(),
+            Some(FastlyValidationActivity { last_used_at: Some("2025-01-01T00:00:00Z".into()) }),
+        );
+
+        let requests = collector.into_collected_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].finding_fingerprints, ["first", "second", "third"]);
+        assert!(requests[0].fastly_activity.as_ref().unwrap().last_used_at.is_none());
+    }
+
+    #[test]
     fn access_map_collector_dedupes_alibaba_credentials() {
         let collector = AccessMapCollector::default();
         collector.record_alibaba("LTAIexample", "secret-value", None, "fp-1".to_string());
@@ -2426,7 +2481,7 @@ mod tests {
                 Arc::new(Rule::new(syntax)),
                 "credential-fixture",
                 dependencies,
-                false,
+                RuleInternalIpPolicy::default(),
             );
             assert_eq!(requests.len(), 1, "{id}");
             assert!(

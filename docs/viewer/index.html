@@ -1168,6 +1168,28 @@
       word-break: break-all;
     }
 
+    .credential-last-used {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 4px 8px;
+      width: fit-content;
+      max-width: 100%;
+      margin: 6px 0;
+      padding: 4px 8px;
+      border-radius: 5px;
+      background: var(--surface-strong);
+      color: var(--text);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .credential-last-used-source {
+      color: var(--text-muted);
+      font-size: 11px;
+      overflow-wrap: anywhere;
+    }
+
     /* Provider section header */
     .am-provider-section { margin-bottom: 18px; }
     .am-provider-header {
@@ -3512,7 +3534,7 @@
               <div class="panel__header">
                 <div class="panel__title">
                   <h2>Blast Radius</h2>
-                  <p>Inspect recorded access, policy provenance, and the limits of this snapshot</p>
+                  <p>Inspect recorded access, policy provenance, and the limits of this snapshot. Last-use timestamps come from provider records, which may lag.</p>
                 </div>
                 <div style="display:flex; gap:10px; align-items:center;">
                   <button class="btn" id="copy-access-map" type="button">Copy JSON</button>
@@ -3805,6 +3827,7 @@
     const selectedViewerFindings = new Set();
     let viewerSelectionControls = [];
     let accessMap = [];
+    const accessMapByFindingFingerprint = new Map();
     let repositoryAudit = null;
     let coveragePage = 1;
     const coveragePageSize = 50;
@@ -4175,6 +4198,38 @@ function createFindingFilters(container, fields, onChange, onClear) {
 
     function formatDisplayDate(value) {
       return value ? formatDateTime(value) : formatDateTime();
+    }
+
+    function credentialLastUsed(entry) {
+      const provider = typeof entry.provider === "string" ? entry.provider.toLowerCase() : "";
+      const sourceValue = entry.provider_metadata?.credential_last_used_source;
+      const source = typeof sourceValue === "string" ? sourceValue.trim() : "";
+      // Older snapshots used key modification time or account-wide activity for these providers.
+      if ((provider === "ibm_cloud" || provider === "monday") && !source) {
+        return null;
+      }
+      const raw = entry.token_details?.last_used_at;
+      const iso = typeof raw === "string" && /^(\d{4}-\d{2}-\d{2})(T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))?$/i.exec(raw);
+      if (!iso) return null;
+      const calendarDate = new Date(iso[1]);
+      const timestamp = Date.parse(raw);
+      if (!Number.isFinite(timestamp) || !Number.isFinite(calendarDate.getTime()) || !calendarDate.toISOString().startsWith(iso[1])) return null;
+      return { raw, timestamp, dateOnly: !iso[2], source };
+    }
+
+    function credentialLastUsedHtml(entry) {
+      const usage = credentialLastUsed(entry);
+      let value = "Unavailable";
+      if (usage) {
+        const { raw, timestamp, dateOnly, source } = usage;
+        const date = new Date(timestamp);
+        const display = new Intl.DateTimeFormat(undefined, {
+          dateStyle: "medium", timeStyle: dateOnly ? undefined : "long", timeZone: "UTC",
+        }).format(date);
+        value = `<time datetime="${dateOnly ? raw : date.toISOString()}">${escapeHtml(display)}</time>`;
+        if (source) value += ` <span class="credential-last-used-source">${escapeHtml(source)}</span>`;
+      }
+      return `<div class="credential-last-used"><strong>Last used</strong> ${value}</div>`;
     }
 
     function getStoredThemePreference() {
@@ -5731,7 +5786,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
       selectedViewerFindings.clear();
       viewerFindingFilters.restore();
       findings = [];
-      accessMap = [];
+      setAccessMap([]);
       repositoryAudit = null;
       coveragePage = 1;
       filteredAccessMapView = [];
@@ -5844,7 +5899,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
       // Layer Kingfisher validation/revoke data onto matched imported findings
       findings = enrichImportedFindings(findings);
       // Deduplicate access map entries by fingerprint
-      accessMap = deduplicateAccessMap(nextAccessMap);
+      setAccessMap(nextAccessMap);
       rawData = nextRawData;
 
       finalizeRender(t0);
@@ -5854,7 +5909,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
       const t0 = performance.now();
       selectedViewerFindings.clear();
       findings = [];
-      accessMap = [];
+      setAccessMap([]);
       rawData = null;
 
       const { f, am, rd } = parseSingleText(text);
@@ -5868,7 +5923,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
       findings = dedupResultSingle.findings;
       duplicatesRemoved = dedupResultSingle.dropped;
       findings = enrichImportedFindings(findings);
-      accessMap = deduplicateAccessMap(am);
+      setAccessMap(am);
       rawData = rd;
 
       finalizeRender(t0);
@@ -6024,6 +6079,24 @@ function createFindingFilters(container, fields, onChange, onClear) {
       return findingList;
     }
 
+    function accessMapFindingFingerprints(entry) {
+      const linked = Array.isArray(entry.finding_fingerprints) ? entry.finding_fingerprints : [];
+      return [entry.fingerprint, ...linked].filter((value) => typeof value === "string" && value);
+    }
+
+    function setAccessMap(entries) {
+      accessMap = deduplicateAccessMap(entries);
+      accessMapByFindingFingerprint.clear();
+      for (const entry of accessMap) {
+        for (const fingerprint of new Set(accessMapFindingFingerprints(entry))) {
+          if (!accessMapByFindingFingerprint.has(fingerprint)) {
+            accessMapByFindingFingerprint.set(fingerprint, []);
+          }
+          accessMapByFindingFingerprint.get(fingerprint).push(entry);
+        }
+      }
+    }
+
     function deduplicateAccessMap(list) {
       const byFingerprint = new Map();
       const result = [];
@@ -6051,6 +6124,10 @@ function createFindingFilters(container, fields, onChange, onClear) {
       ["provider", "account", "fingerprint"].forEach((field) => {
         merged[field] = preferPresent(existing[field], incoming[field]);
       });
+      merged.finding_fingerprints = [...new Set([
+        ...accessMapFindingFingerprints(existing),
+        ...accessMapFindingFingerprints(incoming),
+      ])];
       merged.context = Object.assign({}, existing.context || {});
       Object.entries(incoming.context || {}).forEach(([key, value]) => {
         merged.context[key] = preferPresent(merged.context[key], value);
@@ -6091,6 +6168,24 @@ function createFindingFilters(container, fields, onChange, onClear) {
       Object.entries(incoming.provider_metadata || {}).forEach(([key, value]) => {
         merged.provider_metadata[key] = preferPresent(merged.provider_metadata[key], value);
       });
+      const existingUsage = credentialLastUsed(existing);
+      const incomingUsage = credentialLastUsed(incoming);
+      let usage = existingUsage;
+      if (incomingUsage && (
+        !existingUsage || incomingUsage.timestamp > existingUsage.timestamp ||
+        (incomingUsage.timestamp === existingUsage.timestamp && (
+          (existingUsage.dateOnly && !incomingUsage.dateOnly) ||
+          (existingUsage.dateOnly === incomingUsage.dateOnly && (incomingUsage.source || !existingUsage.source))
+        ))
+      )) {
+        usage = incomingUsage;
+      }
+      delete merged.token_details.last_used_at;
+      delete merged.provider_metadata.credential_last_used_source;
+      if (usage) {
+        merged.token_details.last_used_at = usage.raw;
+        if (usage.source) merged.provider_metadata.credential_last_used_source = usage.source;
+      }
       if (existing.permissions_by_severity || incoming.permissions_by_severity) {
         merged.permissions_by_severity = {};
         ["admin", "privilege_escalation", "risky", "read_only"].forEach((bucket) => {
@@ -7205,7 +7300,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
       }
 
       const enriched = filtered.map((entry) => {
-        const blastRadius = getAccessMapForFingerprint(entry.finding && entry.finding.fingerprint);
+        const blastRadius = findingAccessMapForExport(entry.finding && entry.finding.fingerprint);
         return Object.assign({}, entry, {
           blast_radius: blastRadius,
           access_map: blastRadius,
@@ -7248,7 +7343,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
           finding.validation && finding.validation.status
             ? validationStatusLabel(finding.validation.status)
             : "Not Attempted";
-        const blastRadius = getAccessMapForFingerprint(finding.fingerprint);
+        const blastRadius = findingAccessMapForExport(finding.fingerprint);
 
         return [
           rule.id || "",
@@ -7741,7 +7836,6 @@ function createFindingFilters(container, fields, onChange, onClear) {
           if (td.email) fields.push(["Email", td.email]);
           if (td.created_at) fields.push(["Created", td.created_at]);
           if (td.expires_at) fields.push(["Expires", td.expires_at]);
-          if (td.last_used_at) fields.push(["Last Used", td.last_used_at]);
           if (Array.isArray(td.scopes) && td.scopes.length) fields.push(["Scopes", td.scopes.join(", ")]);
           if (fields.length) {
             tokenHtml = `<div style="margin-top:10px;padding:10px 14px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;">
@@ -7788,6 +7882,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
               <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;background:#e0f2fe;color:#075985;margin-top:2px;">${escapeHtml(provider)}</span>
             </div>
           </div>
+          ${credentialLastUsedHtml(entry)}
           ${metaLine}
           ${tokenHtml}
           ${groupsHtml}
@@ -7821,6 +7916,8 @@ function createFindingFilters(container, fields, onChange, onClear) {
     th, td { border: 1px solid #d1d5db; padding: 6px 12px; font-size: 12px; text-align: left; }
     th { background: #f1f5f9; font-weight: 700; color: #374151; }
     .section { margin-bottom: 24px; }
+    .credential-last-used { width: fit-content; max-width: 100%; margin: 6px 0; padding: 4px 8px; border-radius: 5px; background: #e2e8f0; font-size: 12px; font-variant-numeric: tabular-nums; }
+    .credential-last-used-source { display: block; color: #475569; font-size: 11px; overflow-wrap: anywhere; }
     code { background: #f1f5f9; padding: 1px 5px; border-radius: 4px; font-size: 11px; }
     @media print { body { padding: 12px; } .no-print { display: none; } }
   </style>
@@ -7830,6 +7927,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
     <h1>Kingfisher Blast Radius Report</h1>
      <div class="report-date">${escapeHtml(formatDateTime())}</div>
   </div>
+  <p>Last-use timestamps come from provider records, which may lag.</p>
 
   <div class="section">
     <h2>Summary</h2>
@@ -8187,7 +8285,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
       fpEl.textContent = fpVal;
 
       if (fpVal && Array.isArray(accessMap)) {
-          const hasEntry = accessMap.some(entry => entry.fingerprint === fpVal);
+          const hasEntry = getAccessMapForFingerprint(fpVal).length > 0;
           if (hasEntry) {
               const btn = document.createElement("button");
               btn.className = "badge";
@@ -8467,8 +8565,14 @@ function createFindingFilters(container, fields, onChange, onClear) {
     }
 
     function getAccessMapForFingerprint(fingerprint) {
-      if (!fingerprint || !Array.isArray(accessMap)) return [];
-      return accessMap.filter((entry) => entry.fingerprint === fingerprint);
+      return accessMapByFindingFingerprint.get(fingerprint) || [];
+    }
+
+    function findingAccessMapForExport(fingerprint) {
+      return getAccessMapForFingerprint(fingerprint).map((entry) => ({
+        ...entry,
+        finding_fingerprints: entry.fingerprint === fingerprint ? undefined : [fingerprint],
+      }));
     }
 
     function countResources(entries) {
@@ -8792,6 +8896,12 @@ function createFindingFilters(container, fields, onChange, onClear) {
       // Render entries
       blastEntries.innerHTML = "";
       if (entries.length === 0) return;
+      if (entries.some(credentialLastUsed)) {
+        const note = document.createElement("p");
+        note.className = "blast-coverage";
+        note.textContent = "Last-use timestamps come from provider records, which may lag.";
+        blastEntries.appendChild(note);
+      }
 
       entries.forEach((entry) => {
         const identity = document.createElement("div");
@@ -8822,6 +8932,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
         }
 
         identity.appendChild(header);
+        identity.insertAdjacentHTML("beforeend", credentialLastUsedHtml(entry));
 
         const stats = document.createElement("p");
         stats.className = "blast-coverage";
@@ -8966,7 +9077,6 @@ function createFindingFilters(container, fields, onChange, onClear) {
             if (td.email) fields.push(["Email", td.email]);
             if (td.created_at) fields.push(["Created", td.created_at]);
             if (td.expires_at) fields.push(["Expires", td.expires_at]);
-            if (td.last_used_at) fields.push(["Last Used", td.last_used_at]);
             if (Array.isArray(td.scopes) && td.scopes.length) fields.push(["Scopes", td.scopes.join(", ")]);
             if (fields.length) {
               tokenHtml = `<div style="margin-top:10px;padding:10px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;">
@@ -8981,6 +9091,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
               <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:700;background:#e0f2fe;color:#075985;">${escapeHtml((entry.provider || "").toUpperCase())}</span>
               <strong>${escapeHtml(entry.account || "(identity)")}</strong>
             </div>
+            ${credentialLastUsedHtml(entry)}
             ${groups}
             ${tokenHtml}
           </div>`;
@@ -9004,6 +9115,8 @@ function createFindingFilters(container, fields, onChange, onClear) {
     .detail-item div { font-size: 14px; font-weight: 500; margin-top: 2px; word-break: break-all; }
     .snippet { background: #1e293b; color: #e2e8f0; padding: 14px; border-radius: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; margin: 10px 0; }
     .rationale { padding: 14px 18px; border-radius: 8px; font-size: 14px; line-height: 1.7; margin-bottom: 16px; }
+    .credential-last-used { width: fit-content; max-width: 100%; margin: 6px 0; padding: 4px 8px; border-radius: 5px; background: #e2e8f0; font-size: 12px; font-variant-numeric: tabular-nums; }
+    .credential-last-used-source { display: block; color: #475569; font-size: 11px; overflow-wrap: anywhere; }
     code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
     @media print { body { padding: 12px; } .no-print { display: none; } }
   </style>
@@ -9036,6 +9149,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
 
   ${entries.length > 0 ? `
   <h2>Blast Radius (${entries.length} Identit${entries.length !== 1 ? "ies" : "y"}, ${countResources(entries)} Resource${countResources(entries) !== 1 ? "s" : ""})</h2>
+  <p>Last-use timestamps come from provider records, which may lag.</p>
   ${accessHtml}
   ` : `
   <h2>Blast Radius</h2>
@@ -9642,6 +9756,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
         <div class="am-graph__eyebrow">${isResource ? "Recorded resource" : "Credential identity"}</div>
         <div class="am-graph__title">${escapeHtml(title)}</div>
         <div class="am-graph__subtitle">${escapeHtml(subtitle)}</div>
+        ${credentialLastUsedHtml(identity)}
         <div class="am-graph__section">
           <span class="rollup-chip rollup-chip--${riskClass}">${escapeHtml(riskLabels[riskClass])}</span>
           <div class="evidence-summary">${investigationEvidenceBadges(identity)}</div>
@@ -9957,6 +10072,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
         disc.textContent = discParts.join(" · ");
         info.appendChild(disc);
       }
+      info.insertAdjacentHTML("beforeend", credentialLastUsedHtml(identity));
 
       // Meta row
       const meta = document.createElement("div");
@@ -10159,7 +10275,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
             ["Name", td.name], ["Username", td.username], ["Token Type", td.token_type],
             ["Account Type", td.account_type], ["User ID", td.user_id], ["Email", td.email],
             ["Company", td.company], ["Created", td.created_at], ["Expires", td.expires_at],
-            ["Last Used", td.last_used_at], ["Location", td.location],
+            ["Location", td.location],
           ];
           if (identity.provider_metadata) {
             if (identity.provider_metadata.version) fields.push(["Version", identity.provider_metadata.version]);
@@ -10276,7 +10392,8 @@ function createFindingFilters(container, fields, onChange, onClear) {
         const account = formatIdentityLabel(identity);
         const groups = investigationResourceGroups(identity);
 
-        const fingerprint = (identity.fingerprint || "").toLowerCase();
+        const fingerprintMatches = filterLower && accessMapFindingFingerprints(identity)
+          .some((fingerprint) => fingerprint.toLowerCase().includes(filterLower));
         const evidence = identity.provider_metadata && identity.provider_metadata.authorization_evidence;
         const evidenceSearch = filterLower && evidence ? JSON.stringify({
           principal: evidence.principal,
@@ -10289,7 +10406,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
           assessment: evidence.assessment,
           roles: identity.roles,
         }).toLowerCase() : filterLower ? JSON.stringify(identity.roles || []).toLowerCase() : "";
-        const identityNameMatches = Boolean(filterLower) && (account.toLowerCase().includes(filterLower) || fingerprint.includes(filterLower) || evidenceSearch.includes(filterLower));
+        const identityNameMatches = Boolean(filterLower) && (account.toLowerCase().includes(filterLower) || fingerprintMatches || evidenceSearch.includes(filterLower));
         let anyResourceMatches = false;
         let anyPermMatches = false;
 

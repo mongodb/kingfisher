@@ -7,6 +7,7 @@
 use std::{
     collections::BTreeMap,
     hash::{Hash, Hasher},
+    ops::ControlFlow,
 };
 
 #[cfg(feature = "validation")]
@@ -216,54 +217,163 @@ fn get_base64_strings_impl<const CHECK: bool>(
     control: &crate::ScanControl,
 ) -> Result<Vec<DecodedData>, crate::ScanAborted> {
     let mut results = Vec::new();
+    let _ = visit_base64_candidates::<CHECK>(input, control, |start, end| {
+        let base64_slice = &input[start..end];
+        // Ordinary identifiers usually decode to non-ASCII bytes immediately.
+        // Check a bounded prefix before trying any allocating decoders.
+        if !base64_quartets_can_decode_to_ascii(&base64_slice[..MIN_BASE64_LENGTH]) {
+            return ControlFlow::Continue(());
+        }
+        let decoded = general_purpose::STANDARD
+            .decode(base64_slice)
+            .or_else(|_| general_purpose::URL_SAFE.decode(base64_slice))
+            .or_else(|_| general_purpose::URL_SAFE_NO_PAD.decode(base64_slice));
+
+        if let Ok(decoded) = decoded
+            && decoded.is_ascii()
+        {
+            results.push(DecodedData { decoded, pos_start: start, pos_end: end });
+        }
+        ControlFlow::Continue(())
+    })?;
+    Ok(results)
+}
+
+const MIN_BASE64_LENGTH: usize = 32;
+const MAX_BASE64_PADDING: usize = 2;
+const MIN_BASE64_ALPHABET_LENGTH: usize = MIN_BASE64_LENGTH - MAX_BASE64_PADDING;
+const BASE64_CHECK_INTERVAL: usize = 64 * 1024;
+
+#[inline]
+fn base64_probe_delimiter(window: &[u8; MIN_BASE64_ALPHABET_LENGTH]) -> Option<usize> {
+    // The last byte is often already a delimiter, especially in binary data.
+    let last = window.len() - 1;
+    if !is_base64_byte(window[last]) {
+        return Some(last);
+    }
+
+    // Check eight bytes at once for non-ASCII or bytes below '+' (the smallest
+    // Base64 byte). After clearing the high bits, adding this per-byte bias
+    // sets each high bit at '+' without carrying into adjacent bytes.
+    const HIGH_BITS: u64 = u64::from_le_bytes([0x80; 8]);
+    const BELOW_ALPHABET: u64 = u64::from_le_bytes([0x80 - b'+'; 8]);
+    let start = last - size_of::<u64>();
+    let word = u64::from_le_bytes(window[start..last].try_into().unwrap());
+    let threshold = (word & !HIGH_BITS) + BELOW_ALPHABET;
+    let delimiters = (word | !threshold) & HIGH_BITS;
+    if delimiters != 0 {
+        // The probe can skip through any delimiter. If there is another one
+        // later in the window, the next probe will account for it.
+        return Some(last - 1 - delimiters.leading_zeros() as usize / 8);
+    }
+    window[..last].iter().rposition(|&byte| !is_base64_byte(byte))
+}
+
+fn visit_base64_candidates<const CHECK: bool>(
+    input: &[u8],
+    control: &crate::ScanControl,
+    mut visit: impl FnMut(usize, usize) -> ControlFlow<()>,
+) -> Result<ControlFlow<()>, crate::ScanAborted> {
     let mut i = 0;
-    while i < input.len() {
+    let mut dense_until = 0;
+    let mut last_long_run: Option<usize> = None;
+    'runs: while i < input.len() {
         if CHECK {
             control.check()?;
         }
-        while i < input.len() && !is_base64_byte(input[i]) {
-            if CHECK && i.is_multiple_of(64 * 1024) {
-                control.check()?;
+        let start;
+        if i >= dense_until {
+            let mut next_check = i.saturating_add(BASE64_CHECK_INTERVAL);
+            // Each candidate needs at least 30 consecutive alphabet bytes before
+            // padding. A delimiter in the next 30 bytes rules out every start
+            // through that delimiter and gives us a new run boundary.
+            loop {
+                let Some(window) = input[i..].first_chunk() else {
+                    break 'runs;
+                };
+                let Some(delimiter) = base64_probe_delimiter(window) else {
+                    break;
+                };
+                i += delimiter + 1;
+                if CHECK && i >= next_check {
+                    control.check()?;
+                    next_check = i.saturating_add(BASE64_CHECK_INTERVAL);
+                }
             }
-            i += 1;
+            start = i;
+            // Closely spaced long runs make lookahead more expensive than the
+            // ordinary forward walk. Resume probing after a kilobyte.
+            if last_long_run.is_some_and(|prior| i - prior <= 128) {
+                dense_until = i.saturating_add(1024);
+            }
+            last_long_run = Some(i);
+            i += MIN_BASE64_ALPHABET_LENGTH;
+        } else {
+            while i < input.len() && !is_base64_byte(input[i]) {
+                if CHECK && i.is_multiple_of(BASE64_CHECK_INTERVAL) {
+                    control.check()?;
+                }
+                i += 1;
+            }
+            start = i;
         }
-        let start = i;
         while i < input.len() && is_base64_byte(input[i]) {
-            if CHECK && i.is_multiple_of(64 * 1024) {
+            if CHECK && i.is_multiple_of(BASE64_CHECK_INTERVAL) {
                 control.check()?;
             }
             i += 1;
         }
 
-        let mut eq_count = 0;
-        while i < input.len() && input[i] == b'=' && eq_count < 2 {
+        let alphabet_end = i;
+        while i - alphabet_end < MAX_BASE64_PADDING && input.get(i) == Some(&b'=') {
             i += 1;
-            eq_count += 1;
         }
-        let end = i;
-
-        let len = end - start;
-        if len >= 32 && len % 4 == 0 {
-            let base64_slice = &input[start..end];
-
-            // Try decoding with STANDARD, then URL_SAFE, then URL_SAFE_NO_PAD
-            let decode_result = general_purpose::STANDARD
-                .decode(base64_slice)
-                .or_else(|_| general_purpose::URL_SAFE.decode(base64_slice))
-                .or_else(|_| general_purpose::URL_SAFE_NO_PAD.decode(base64_slice));
-
-            if let Ok(decoded) = decode_result
-                && decoded.is_ascii()
-            {
-                results.push(DecodedData { decoded, pos_start: start, pos_end: end });
-            }
+        let len = i - start;
+        if len >= MIN_BASE64_LENGTH && len.is_multiple_of(4) && visit(start, i).is_break() {
+            return Ok(ControlFlow::Break(()));
         }
     }
 
     if CHECK {
         control.check()?;
     }
-    Ok(results)
+    Ok(ControlFlow::Continue(()))
+}
+
+/// Conservatively detects an ASCII Base64 candidate without allocating decoded bytes.
+#[cfg(feature = "__cli-internals")]
+pub fn has_ascii_base64_candidate(input: &[u8]) -> bool {
+    visit_base64_candidates::<false>(input, &crate::ScanControl::default(), |start, end| {
+        if base64_quartets_can_decode_to_ascii(&input[start..end]) {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    })
+    .expect("unlimited scan cannot be cancelled")
+    .is_break()
+}
+
+fn base64_quartets_can_decode_to_ascii(bytes: &[u8]) -> bool {
+    // Check the high bit of each produced byte. For a padded tail, only
+    // check bytes the decoder would emit. Alphabet and padding validity are
+    // still the decoder's responsibility.
+    bytes.as_chunks::<4>().0.iter().all(|quartet| {
+        base64_sextet(quartet[0]) < 32
+            && (quartet[2] == b'=' || base64_sextet(quartet[1]) & 8 == 0)
+            && (quartet[3] == b'=' || base64_sextet(quartet[2]) & 2 == 0)
+    })
+}
+
+fn base64_sextet(byte: u8) -> u8 {
+    match byte {
+        b'A'..=b'Z' => byte - b'A',
+        b'a'..=b'z' => byte - b'a' + 26,
+        b'0'..=b'9' => byte - b'0' + 52,
+        b'+' | b'-' => 62,
+        b'/' | b'_' => 63,
+        _ => 0,
+    }
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1608,6 +1718,20 @@ mod tests {
     }
 
     #[test]
+    fn base64_delimiter_probe_classifies_all_bytes_at_each_window_position() {
+        for index in 0..MIN_BASE64_ALPHABET_LENGTH {
+            let mut window = [b'A'; MIN_BASE64_ALPHABET_LENGTH];
+            for byte in u8::MIN..=u8::MAX {
+                window[index] = byte;
+                assert_eq!(
+                    base64_probe_delimiter(&window),
+                    (!is_base64_byte(byte)).then_some(index)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn base64_detection_preserves_alphabets_padding_and_offsets() {
         let payload = b"???>>>a sufficiently long ASCII payload";
         for engine in [general_purpose::STANDARD, general_purpose::URL_SAFE] {
@@ -1618,9 +1742,68 @@ mod tests {
             assert_eq!(decoded[0].decoded, payload);
             assert_eq!(decoded[0].pos_start, 1);
             assert_eq!(decoded[0].pos_end, 1 + encoded.len());
+
+            for index in [0, 1, 2, 24] {
+                let mut binary = *payload;
+                binary[index] = 0xff;
+                let encoded = engine.encode(binary);
+                assert!(get_base64_strings(encoded.as_bytes()).is_empty());
+            }
         }
         assert!(get_base64_strings(&[0xff; 64]).is_empty());
         assert!(get_base64_strings(b"short").is_empty());
+    }
+
+    #[test]
+    fn base64_short_run_skip_preserves_minimum_length_tokens_at_all_alignments() {
+        let payloads: [&[u8]; 3] = [&[b'a'; 22], &[b'b'; 23], &[b'c'; 24]];
+        let tokens = payloads.map(|payload| general_purpose::STANDARD.encode(payload));
+        for alignment in 0..MIN_BASE64_ALPHABET_LENGTH {
+            let mut input = b"short words ".repeat(10);
+            input.extend(std::iter::repeat_n(b'!', alignment));
+            // Exercise the dense fallback and then return to lookahead.
+            let mut spans = Vec::new();
+            for token in tokens.iter().cycle().take(40) {
+                let start = input.len();
+                input.extend_from_slice(token.as_bytes());
+                spans.push(start..input.len());
+                input.extend_from_slice(b"\xff=");
+            }
+            input.extend_from_slice(&[b'a'; MIN_BASE64_ALPHABET_LENGTH - 1]);
+            input.extend_from_slice(b"==");
+            input.extend_from_slice(tokens[0].as_bytes());
+            spans.push(input.len() - tokens[0].len()..input.len());
+
+            let decoded = get_base64_strings(&input);
+            assert_eq!(decoded.len(), spans.len());
+            for (item, span) in decoded.iter().zip(spans) {
+                assert_eq!(item.pos_start..item.pos_end, span.clone());
+                assert_eq!(
+                    general_purpose::STANDARD.encode(&item.decoded).as_bytes(),
+                    &input[span]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn base64_short_run_skip_checks_cancellation_before_a_later_candidate() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let checks = AtomicUsize::new(0);
+        let control = crate::ScanControl::default().with_check_observer(move |_| {
+            if checks.fetch_add(1, Ordering::Relaxed) == 0 {
+                Ok(())
+            } else {
+                Err(crate::ScanAborted::Cancelled)
+            }
+        });
+        let mut input = vec![b' '; 2 * BASE64_CHECK_INTERVAL];
+        input.extend_from_slice(&[b'Y'; MIN_BASE64_LENGTH]);
+        let result = visit_base64_candidates::<true>(&input, &control, |_, _| {
+            panic!("visited a candidate after cancellation")
+        });
+        assert_eq!(result, Err(crate::ScanAborted::Cancelled));
     }
 
     #[test]

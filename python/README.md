@@ -4,6 +4,9 @@ Fast secret detection, credential validation and revocation for Python, powered
 by [Kingfisher's Rust libraries](https://github.com/mongodb/kingfisher).
 Native, in-process execution; no CLI subprocess required. Requires CPython 3.10+.
 
+**No Git executable required.** The SDK reads local Git history and staged changes
+directly from the repository.
+
 ## Install
 
 ```bash
@@ -12,7 +15,8 @@ uv add kingfisher-secret-scanner
 
 The **PyPI distribution** is `kingfisher-secret-scanner`; the **Python import** is
 `kingfisher_sdk`. It coexists with the separately distributed `kingfisher-bin` CLI.
-The prepared SDK version is **1.6.4**, a backward-compatible patch release.
+The prepared SDK version is **1.7.0**. It adds cryptographic helpers for custom
+rules and preserves existing Python APIs.
 The SDK version is independent of the CLI and Rust library versions.
 
 SDK/runtime changes need a new PyPI version. The release workflow checks this
@@ -20,7 +24,7 @@ before native builds, while default manual runs remain test-only. Maintainers
 can check the prepared version without building or publishing:
 
 ```bash
-python3 scripts/check-sdk-release.py --require-new --expected-version 1.6.4
+python3 scripts/check-sdk-release.py --require-new --expected-version 1.7.0
 ```
 
 Explicit publication requires upstream `main`, `publish=true`, and matching
@@ -273,9 +277,9 @@ for result in Scanner().scan_inputs(expand_archives(inputs, depth=2)):
 
 Supply your own Python enumerator with `ScanInput.from_file(path)` or
 `ScanInput(path="config.txt", data=blob_bytes, commit=commit_hex)` instead of either
-native iterator. Both use the same scanner and archive transform. Native Git runs
-without a Git executable and enumerates reachable file versions, including merge
-parents; filesystem enumeration honors local ignore files and skips symlinks.
+native iterator. Both use the same scanner and archive transform. Native Git
+enumerates reachable file versions, including merge parents. Filesystem enumeration
+honors local ignore files and skips symlinks.
 Archive expansion shares CLI extractors, with explicit depth and per-root budgets.
 Repeated TAR member names retain each occurrence's bytes. The byte budget also caps
 intermediate decompressed streams (including TAR headers/padding); exhaustion

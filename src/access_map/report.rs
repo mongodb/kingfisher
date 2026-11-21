@@ -189,6 +189,25 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
       font-size: 13px;
       margin-top: 4px;
     }
+    .usage-note { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+    .credential-last-used {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 4px 8px;
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    .identity .credential-last-used {
+      width: fit-content;
+      max-width: 100%;
+      margin-top: 10px;
+      padding: 6px 10px;
+      border-radius: 6px;
+      background: var(--panel);
+      font-size: 14px;
+    }
+    .credential-last-used-source { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
     .identity-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -360,6 +379,7 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
       </div>
     </div>
   <main>
+    <p class="usage-note">Last-use timestamps come from provider records, which may lag.</p>
     <div id="layout">
       <aside id="summary"></aside>
       <div id="cards"></div>
@@ -443,6 +463,38 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
       return chip;
     }
 
+    function renderLastUsed(model) {
+      const field = document.createElement('div');
+      field.className = 'credential-last-used';
+      const label = document.createElement('strong');
+      label.textContent = 'Last used';
+      field.appendChild(label);
+
+      const raw = model.token_details?.last_used_at;
+      const iso = typeof raw === 'string' && /^(\d{4}-\d{2}-\d{2})(T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))?$/i.exec(raw);
+      const date = new Date(iso ? raw : NaN);
+      const calendarDate = new Date(iso ? iso[1] : NaN);
+      if (Number.isFinite(date.getTime()) && Number.isFinite(calendarDate.getTime()) && calendarDate.toISOString().startsWith(iso[1])) {
+        const dateOnly = !iso[2];
+        const time = document.createElement('time');
+        time.dateTime = dateOnly ? raw : date.toISOString();
+        time.textContent = new Intl.DateTimeFormat(undefined, {
+          dateStyle: 'medium', timeStyle: dateOnly ? undefined : 'long', timeZone: 'UTC',
+        }).format(date);
+        field.appendChild(time);
+        const source = model.provider_metadata?.credential_last_used_source;
+        if (typeof source === 'string' && source.trim()) {
+          const description = document.createElement('span');
+          description.className = 'credential-last-used-source';
+          description.textContent = source.trim();
+          field.appendChild(description);
+        }
+      } else {
+        field.append('Unavailable');
+      }
+      return field;
+    }
+
     function renderIdentity(model, el) {
       el.innerHTML = '';
       const title = document.createElement('div');
@@ -464,6 +516,7 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
       subtitle.className = 'identity-sub';
       subtitle.textContent = model.identity?.access_type || 'unknown';
       el.appendChild(subtitle);
+      el.appendChild(renderLastUsed(model));
 
       const grid = document.createElement('div');
       grid.className = 'identity-grid';
@@ -1041,6 +1094,7 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
         titleRow.appendChild(titleText);
         link.appendChild(titleRow);
         li.appendChild(link);
+        li.appendChild(renderLastUsed(model));
 
         const meta = document.createElement('div');
         meta.className = 'summary-meta';

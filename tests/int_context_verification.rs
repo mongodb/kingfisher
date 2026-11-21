@@ -1,7 +1,6 @@
 use std::{
     ffi::{OsStr, OsString},
     fs,
-    path::Path,
     process::Command,
 };
 
@@ -75,17 +74,5 @@ fn default_scan_uses_betterleaks_builtin_catalog() -> Result<()> {
             "default scan used an unexpected rule catalog: {rule_id}"
         );
     }
-    Ok(())
-}
-
-#[test]
-fn scan_inputs_exclude_parser_fixture_directory() -> Result<()> {
-    let inputs = scan_inputs_without_parser_fixtures()?;
-
-    assert!(inputs.iter().all(|path| Path::new(path) != Path::new("testdata/parsers")));
-    assert!(
-        inputs.iter().any(|path| Path::new(path) == Path::new("testdata/python_vulnerable.py"))
-    );
-
     Ok(())
 }

@@ -1,0 +1,137 @@
+# Demonstration protocol only: this .invalid origin is not a real provider.
+# Loading, `rules check`, and offline scanning do not contact it.
+# Before live use, replace the literal origin, pinned peer key, field names,
+# canonicalization, and success contract with the reviewed provider protocol.
+# Never obtain an origin or peer public key from the file being scanned.
+#
+# Both visible rules construct the SAME one-request, read-only identity envelope:
+#   X25519 ephemeral ECDH -> HKDF-SHA256 -> AES-256-GCM -> P-256 ECDSA/SHA256.
+# The signing scalar is the finding; the ephemeral exchange key is independent.
+# All *_b64 fields use standard padded Base64. AES-GCM sealed = ciphertext || tag16.
+# HKDF info = UTF-8 "kingfisher-crypto-v1"; salt is fresh random16; nonce random12.
+# AAD = UTF-8 "kingfisher-crypto-v1|CLIENT_ID|EPHEMERAL_PUBLIC_B64".
+# Signed bytes = UTF-8 "AAD_TEXT|SALT_B64|NONCE_B64|SEALED_B64" (no trailing newline).
+# The verifier must resolve CLIENT_ID to a previously registered signing public
+# key, verify the signature before accepting the envelope, authenticate/decrypt
+# the request, reject replays, and check CURRENT credential status. It must never
+# treat a supplied signing public key or a valid signature alone as proof of life.
+# Success: HTTP 200, application/json, canonical body exactly
+# {"credential_status":"active","signature_verified":true}
+# Errors must not echo that success object or reveal cryptographic failure detail.
+# This fixed-body contract lets Liquid use existing substring matchers; the Expr
+# variant checks JSON fields structurally. Neither rule enables revocation.
+#
+# NONPRODUCTION published vectors (never deploy these keys):
+# - Detection examples: RFC 6979 A.2.5 P-256 private scalar, standard Base64.
+#   https://www.rfc-editor.org/rfc/rfc6979#appendix-A.2.5
+# - Pinned exchange public key: RFC 7748 6.1 Bob X25519 public key. Its private
+#   counterpart is PUBLIC too; replace this illustrative pin before live use.
+#   https://www.rfc-editor.org/rfc/rfc7748#section-6.1
+# Copyable offline detection fixture (choose one visible rule's assignment):
+# KFC_CLIENT_ID=tenant-fixture-7f51
+# KFC_LIQUID_P256_PRIVATE_KEY=ya+p2EW6dRZrXCFXZ7HWk05Qw9s26JsSe4piKxIPZyE=
+# KFC_EXPR_P256_PRIVATE_KEY=ya+p2EW6dRZrXCFXZ7HWk05Qw9s26JsSe4piKxIPZyE=
+rules:
+  - name: Cryptographic authentication demo (Liquid)
+    id: custom.crypto-demo.liquid-p256
+    pattern: '(?m)^[\t ]*KFC_LIQUID_P256_PRIVATE_KEY=([A-Za-z0-9+/]{43}=)[\t ]*\r?$'
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - 'KFC_LIQUID_P256_PRIVATE_KEY=ya+p2EW6dRZrXCFXZ7HWk05Qw9s26JsSe4piKxIPZyE='
+    negative_examples:
+      - 'KFC_LIQUID_P256_PRIVATE_KEY=not-a-raw-p256-scalar'
+      - 'UNRELATED_PRIVATE_KEY=ya+p2EW6dRZrXCFXZ7HWk05Qw9s26JsSe4piKxIPZyE='
+    depends_on_rule:
+      - rule_id: custom.crypto-demo.client-id
+        variable: CLIENT_ID
+        within: 4L
+    validation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://crypto.example.invalid/v1/verify
+          headers:
+            Content-Type: application/json
+            Accept: application/json
+          # Assignments are LOCAL to this body template, not other request fields.
+          body: >-
+            {%- assign ephemeral_private = '' | random_bytes: 32 -%}
+            {%- assign ephemeral_public = ephemeral_private | ec_public_key: 'X25519' -%}
+            {%- assign peer_public = '3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=' -%}
+            {%- assign shared = peer_public | ecdh: ephemeral_private, 'X25519' -%}
+            {%- assign salt = '' | random_bytes: 16 -%}
+            {%- assign info = 'kingfisher-crypto-v1' | b64enc -%}
+            {%- assign key = shared | hkdf_sha256: salt, info, 32 -%}
+            {%- assign nonce = '' | random_bytes: 12 -%}
+            {%- capture aad_text -%}kingfisher-crypto-v1|{{ CLIENT_ID }}|{{ ephemeral_public }}{%- endcapture -%}
+            {%- assign aad = aad_text | b64enc -%}
+            {%- assign plaintext = '{"operation":"identity"}' | b64enc -%}
+            {%- assign sealed = plaintext | aes_gcm_encrypt: key, nonce, aad -%}
+            {%- capture signing_text -%}{{ aad_text }}|{{ salt }}|{{ nonce }}|{{ sealed }}{%- endcapture -%}
+            {%- assign signature = signing_text | b64enc | ecdsa_sign: TOKEN, 'P-256', 'p1363' -%}
+            {"client_id":{{ CLIENT_ID | json_escape }},"ephemeral_public_key_b64":{{ ephemeral_public | json_escape }},"salt_b64":{{ salt | json_escape }},"nonce_b64":{{ nonce | json_escape }},"sealed_b64":{{ sealed | json_escape }},"signature_b64":{{ signature | json_escape }}}
+          response_matcher:
+            - type: StatusMatch
+              status: [200]
+            - type: HeaderMatch
+              header: content-type
+              expected: [application/json]
+            - type: JsonValid
+            - type: WordMatch
+              words: ['{"credential_status":"active","signature_verified":true}']
+              match_all_words: true
+
+  - name: Cryptographic authentication demo (Betterleaks expression)
+    id: custom.crypto-demo.expr-p256
+    pattern: '(?m)^[\t ]*KFC_EXPR_P256_PRIVATE_KEY=([A-Za-z0-9+/]{43}=)[\t ]*\r?$'
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - 'KFC_EXPR_P256_PRIVATE_KEY=ya+p2EW6dRZrXCFXZ7HWk05Qw9s26JsSe4piKxIPZyE='
+    negative_examples:
+      - 'KFC_EXPR_P256_PRIVATE_KEY=not-a-raw-p256-scalar'
+      - 'UNRELATED_PRIVATE_KEY=ya+p2EW6dRZrXCFXZ7HWk05Qw9s26JsSe4piKxIPZyE='
+    depends_on_rule:
+      - rule_id: custom.crypto-demo.client-id
+        variable: CLIENT_ID
+        within: 4L
+    validation:
+      type: Betterleaks
+      content:
+        components:
+          custom.crypto-demo.client-id: CLIENT_ID
+        # crypto.* additions are Kingfisher extensions, not an upstream guarantee.
+        expression: |-
+          let client_id = components["custom.crypto-demo.client-id"].secret;
+          let signing_private = base64.decode(finding.secret);
+          let ephemeral_private = crypto.randomBytes(32);
+          let ephemeral_public = base64.encode(crypto.ecPublicKey("X25519", ephemeral_private));
+          let peer_public = base64.decode("3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=");
+          let shared = crypto.ecdh("X25519", ephemeral_private, peer_public);
+          let salt = crypto.randomBytes(16);
+          let key = crypto.hkdfSha256(shared, salt, bytes("kingfisher-crypto-v1"), 32);
+          let nonce = crypto.randomBytes(12);
+          let aad_text = "kingfisher-crypto-v1|" + client_id + "|" + ephemeral_public;
+          let sealed = crypto.aesGcmEncrypt(key, nonce, bytes("{\"operation\":\"identity\"}"), bytes(aad_text));
+          let salt_b64 = base64.encode(salt);
+          let nonce_b64 = base64.encode(nonce);
+          let sealed_b64 = base64.encode(sealed);
+          let signing_text = aad_text + "|" + salt_b64 + "|" + nonce_b64 + "|" + sealed_b64;
+          let signature = crypto.ecdsaSign("P-256", signing_private, bytes(signing_text), "p1363");
+          let body = toJSON({"client_id": client_id, "ephemeral_public_key_b64": ephemeral_public, "salt_b64": salt_b64, "nonce_b64": nonce_b64, "sealed_b64": sealed_b64, "signature_b64": base64.encode(signature)});
+          let r = http.post("https://crypto.example.invalid/v1/verify", {"Content-Type": "application/json", "Accept": "application/json"}, body);
+          r.status == 200 && r.json.credential_status == "active" && r.json.signature_verified == true
+            ? {"result": "valid"} : validate.unknown(r)
+
+  - name: Cryptographic authentication demo client ID
+    id: custom.crypto-demo.client-id
+    visible: false
+    pattern: '(?m)^[\t ]*KFC_CLIENT_ID=([A-Za-z0-9][A-Za-z0-9_-]{7,63})[\t ]*\r?$'
+    confidence: medium
+    examples:
+      - 'KFC_CLIENT_ID=tenant-fixture-7f51'
+    negative_examples:
+      - 'KFC_CLIENT_ID=short'
+      - 'UNRELATED_CLIENT_ID=tenant-fixture-7f51'

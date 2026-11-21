@@ -244,6 +244,7 @@ rules:
         endpoint: Vec::new(),
         endpoint_config: None,
         config: None,
+        ..Default::default()
     };
 
     // ── load rules once ─────────────────────────────────────────────

@@ -1,18 +1,122 @@
+use std::time::Duration;
+
 use anyhow::{Context, Result, anyhow};
+use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use reqwest::{Client, header};
-use serde::Deserialize;
+use serde::{Deserialize, de::DeserializeOwned};
 use tracing::warn;
 
 use crate::{cli::commands::access_map::AccessMapArgs, validation::GLOBAL_USER_AGENT};
 
 use super::{
-    AccessMapResult, AccessSummary, AccessTokenDetails, PermissionSummary, ResourceExposure,
-    RoleBinding, Severity, build_recommendations,
+    AccessMapResult, AccessSummary, AccessTokenDetails, PermissionSummary, ProviderMetadata,
+    ResourceExposure, RoleBinding, Severity, build_recommendations,
 };
 
 const ANTHROPIC_API: &str = "https://api.anthropic.com/v1";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
+const AUDIT_API_VERSION: &str = "2026-10-21";
+const USAGE_API_BETA: &str = "analytics-usage-cost-2026-08-24";
+const AUDIT_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
+const MAX_AUDIT_RESPONSE_BYTES: usize = 16 * 1024;
 const MAX_MODEL_RESOURCES: usize = 50;
+
+struct UsageBucket {
+    width: &'static str,
+    duration: TimeDelta,
+    source: &'static str,
+}
+
+const HOURLY_USAGE: UsageBucket = UsageBucket {
+    width: "1h",
+    duration: TimeDelta::hours(1),
+    source: "Anthropic API usage (1-hour bucket start)",
+};
+const MINUTE_USAGE: UsageBucket = UsageBucket {
+    width: "1m",
+    duration: TimeDelta::minutes(1),
+    source: "Anthropic API usage (1-minute bucket start)",
+};
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnthropicCredentialFile {
+    token: String,
+    key_id: Option<String>,
+    audit_token: Option<String>,
+}
+
+struct AnthropicKeyHistory<'a> {
+    key_id: &'a str,
+    audit_token: &'a str,
+}
+
+#[derive(Deserialize)]
+struct AnthropicAuditKey {
+    id: String,
+    partial_key_hint: Option<String>,
+}
+
+impl AnthropicCredentialFile {
+    fn key_history(&self) -> Result<Option<AnthropicKeyHistory<'_>>> {
+        if self.token.trim().is_empty() {
+            return Err(anyhow!("Anthropic credential JSON requires a non-empty token"));
+        }
+        if self.key_id.is_none() && self.audit_token.is_none() {
+            return Ok(None);
+        }
+        let key_id = self
+            .key_id
+            .as_deref()
+            .filter(|id| {
+                id.len() <= 256
+                    && id.strip_prefix("apikey_").is_some_and(|suffix| {
+                        !suffix.is_empty()
+                            && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
+                    })
+            })
+            .context("Anthropic key history requires a valid key_id")?;
+        let audit_token = self
+            .audit_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|token| {
+                token.strip_prefix("sk-ant-admin01-").is_some_and(|suffix| !suffix.is_empty())
+            })
+            .context(
+                "Anthropic key history requires an organization Admin API key as audit_token",
+            )?;
+        if audit_token == self.token.trim() {
+            return Err(anyhow!(
+                "Anthropic key history requires an audit_token distinct from the target token"
+            ));
+        }
+        Ok(Some(AnthropicKeyHistory { key_id, audit_token }))
+    }
+}
+
+#[derive(Deserialize)]
+struct AnthropicUsageResponse {
+    data: Vec<AnthropicUsageRow>,
+}
+
+#[derive(Deserialize)]
+struct AnthropicUsageRow {
+    starting_at: String,
+    ending_at: String,
+    group: AnthropicUsageGroup,
+    usage: AnthropicUsageMetrics,
+}
+
+#[derive(Deserialize)]
+struct AnthropicUsageGroup {
+    api_key_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AnthropicUsageMetrics {
+    requests: Option<u64>,
+}
 
 #[derive(Debug, Deserialize, Default, Clone)]
 struct AnthropicModelsResponse {
@@ -55,29 +159,175 @@ struct KeyIntrospection {
 }
 
 pub async fn map_access(args: &AccessMapArgs) -> Result<AccessMapResult> {
-    let token = if let Some(path) = args.credential_path.as_deref() {
-        let raw = std::fs::read_to_string(path)
-            .with_context(|| format!("Failed to read Anthropic token from {}", path.display()))?;
-        raw.trim().to_string()
-    } else {
-        return Err(anyhow!("Anthropic access-map requires a validated token from scan results"));
-    };
+    let path = args.credential_path.as_deref().context(
+        "Anthropic access-map requires a credential file or a validated token from scan results",
+    )?;
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read Anthropic token from {}", path.display()))?;
+    map_access_from_credential_at(&raw, ANTHROPIC_API).await
+}
 
-    map_access_from_token(&token).await
+async fn map_access_from_credential_at(raw: &str, api_base: &str) -> Result<AccessMapResult> {
+    let raw = raw.trim();
+    if !raw.starts_with('{') {
+        return map_access_from_token_at(raw, None, api_base).await;
+    }
+    let credential: AnthropicCredentialFile = serde_json::from_str(raw).map_err(|_| {
+        anyhow!("Invalid Anthropic credential JSON; expected a token and optional audit fields")
+    })?;
+    map_access_from_token_at(credential.token.trim(), credential.key_history()?, api_base).await
 }
 
 pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
-    map_access_from_token_at(token, ANTHROPIC_API).await
+    map_access_from_token_at(token, None, ANTHROPIC_API).await
 }
 
-async fn map_access_from_token_at(token: &str, api_base: &str) -> Result<AccessMapResult> {
+async fn map_access_from_token_at(
+    token: &str,
+    key_history: Option<AnthropicKeyHistory<'_>>,
+    api_base: &str,
+) -> Result<AccessMapResult> {
     let client = Client::builder()
         .user_agent(GLOBAL_USER_AGENT.as_str())
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .context("Failed to build Anthropic HTTP client")?;
 
-    map_access_with_client(&client, token, api_base).await
+    let usage = match &key_history {
+        Some(history) => fetch_recent_key_usage(&client, api_base, token, history).await,
+        None => None,
+    };
+    let mut result = map_access_with_client(&client, token, api_base).await?;
+    if let (Some(history), Some((bucket_start, source)), Some(details)) =
+        (key_history, usage, &mut result.token_details)
+        && details.user_id.as_deref().is_none_or(|id| id == history.key_id)
+    {
+        details.last_used_at = Some(bucket_start.to_rfc3339_opts(SecondsFormat::Secs, true));
+        result
+            .provider_metadata
+            .get_or_insert_with(ProviderMetadata::default)
+            .credential_last_used_source = Some(source.into());
+    }
+    Ok(result)
+}
+
+async fn fetch_recent_key_usage(
+    client: &Client,
+    api_base: &str,
+    token: &str,
+    history: &AnthropicKeyHistory<'_>,
+) -> Option<(DateTime<Utc>, &'static str)> {
+    let mut audit_token = header::HeaderValue::from_str(history.audit_token).ok()?;
+    audit_token.set_sensitive(true);
+    // Minute queries are limited to one day, and the analytics data can take up to
+    // 24 hours to refresh. Locate the latest recorded hour first, then refine it.
+    let hour_seconds = HOURLY_USAGE.duration.num_seconds();
+    let ending_at = DateTime::from_timestamp(
+        Utc::now().timestamp().div_euclid(hour_seconds) * hour_seconds,
+        0,
+    )?;
+    let starting_at = ending_at - TimeDelta::days(30);
+    // The caller supplies the key ID. Bind it to the target using the Admin API's
+    // redacted hint before requesting usage, even if the target cannot identify itself.
+    let response = client
+        .get(format!("{api_base}/organizations/api_keys/{}", history.key_id))
+        .header("x-api-key", audit_token.clone())
+        .header("anthropic-version", AUDIT_API_VERSION)
+        .timeout(AUDIT_REQUEST_TIMEOUT)
+        .send()
+        .await
+        .ok()?;
+    let key: AnthropicAuditKey = read_audit_response(response).await?;
+    let (prefix, suffix) = key.partial_key_hint.as_deref()?.split_once("...")?;
+    if key.id != history.key_id
+        || prefix.is_empty()
+        || suffix.is_empty()
+        || prefix.len() + suffix.len() >= token.len()
+        || !token.starts_with(prefix)
+        || !token.ends_with(suffix)
+    {
+        return None;
+    }
+
+    let hour = fetch_usage_bucket(
+        client,
+        api_base,
+        &audit_token,
+        history.key_id,
+        starting_at,
+        ending_at,
+        &HOURLY_USAGE,
+    )
+    .await?;
+    let minute = fetch_usage_bucket(
+        client,
+        api_base,
+        &audit_token,
+        history.key_id,
+        hour,
+        hour + HOURLY_USAGE.duration,
+        &MINUTE_USAGE,
+    )
+    .await;
+    Some(minute.map_or((hour, HOURLY_USAGE.source), |start| (start, MINUTE_USAGE.source)))
+}
+
+async fn fetch_usage_bucket(
+    client: &Client,
+    api_base: &str,
+    audit_token: &header::HeaderValue,
+    key_id: &str,
+    starting_at: DateTime<Utc>,
+    ending_at: DateTime<Utc>,
+    bucket: &UsageBucket,
+) -> Option<DateTime<Utc>> {
+    let response = client
+        .get(format!("{api_base}/organizations/analytics/usage"))
+        .header("x-api-key", audit_token.clone())
+        .header("anthropic-version", AUDIT_API_VERSION)
+        .header("anthropic-beta", USAGE_API_BETA)
+        .timeout(AUDIT_REQUEST_TIMEOUT)
+        .query(&[
+            ("api_key_ids[]", key_id),
+            ("group_by[]", "api_key_id"),
+            ("starting_at", &starting_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
+            ("ending_at", &ending_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
+            ("time_bucket_width", bucket.width),
+            ("order_by", "time"),
+            ("order", "desc"),
+            ("limit", "1"),
+        ])
+        .send()
+        .await
+        .ok()?;
+    let report: AnthropicUsageResponse = read_audit_response(response).await?;
+    let [row] = report.data.as_slice() else { return None };
+    let bucket_start: DateTime<Utc> = row.starting_at.parse().ok()?;
+    let bucket_end: DateTime<Utc> = row.ending_at.parse().ok()?;
+    // The provider sorts across all matching buckets newest first. The one-row
+    // response must still identify the requested key and a populated UTC bucket.
+    (row.group.api_key_id.as_deref() == Some(key_id)
+        && row.usage.requests.is_some_and(|requests| requests > 0)
+        && bucket_start >= starting_at
+        && bucket_end <= ending_at
+        && bucket_end - bucket_start == bucket.duration
+        && bucket_start.timestamp().rem_euclid(bucket.duration.num_seconds()) == 0
+        && bucket_start.timestamp_subsec_nanos() == 0)
+        .then_some(bucket_start)
+}
+
+async fn read_audit_response<T: DeserializeOwned>(mut response: reqwest::Response) -> Option<T> {
+    if !response.status().is_success() {
+        return None;
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        if body.len().saturating_add(chunk.len()) > MAX_AUDIT_RESPONSE_BYTES {
+            return None;
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body).ok()
 }
 
 async fn map_access_with_client(
@@ -396,7 +646,7 @@ mod tests {
             .mount(&server)
             .await;
         // Anthropic retains a partial result when optional inventory calls fail.
-        super::map_access_from_token_at("test-token", &server.uri()).await.unwrap();
+        super::map_access_from_token_at("test-token", None, &server.uri()).await.unwrap();
         assert!(!server.received_requests().await.unwrap().is_empty());
         assert!(destination.received_requests().await.unwrap().is_empty());
     }
@@ -404,7 +654,7 @@ mod tests {
     use serde_json::json;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
-        matchers::{header, method, path},
+        matchers::{header, method, path, query_param},
     };
 
     use super::*;
@@ -432,6 +682,211 @@ mod tests {
         .await;
         mount_get(&server, "/models", models).await;
         server
+    }
+
+    const TEST_KEY_ID: &str = "apikey_Test123";
+    const TEST_AUDIT_TOKEN: &str = "sk-ant-admin01-test-audit";
+
+    async fn mount_audit_key(server: &MockServer, response: ResponseTemplate) {
+        Mock::given(method("GET"))
+            .and(path(format!("/organizations/api_keys/{TEST_KEY_ID}")))
+            .and(header("x-api-key", TEST_AUDIT_TOKEN))
+            .and(header("anthropic-version", AUDIT_API_VERSION))
+            .respond_with(response)
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+
+    fn matching_audit_key() -> ResponseTemplate {
+        ResponseTemplate::new(200)
+            .set_body_json(json!({"id": TEST_KEY_ID, "partial_key_hint": "tes...key"}))
+    }
+
+    async fn mount_usage(server: &MockServer, width: &str, response: ResponseTemplate) {
+        Mock::given(method("GET"))
+            .and(path("/organizations/analytics/usage"))
+            .and(header("x-api-key", TEST_AUDIT_TOKEN))
+            .and(header("anthropic-version", AUDIT_API_VERSION))
+            .and(header("anthropic-beta", USAGE_API_BETA))
+            .and(query_param("api_key_ids[]", TEST_KEY_ID))
+            .and(query_param("group_by[]", "api_key_id"))
+            .and(query_param("time_bucket_width", width))
+            .and(query_param("order_by", "time"))
+            .and(query_param("order", "desc"))
+            .and(query_param("limit", "1"))
+            .respond_with(response)
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+
+    fn usage_row(
+        id: &str,
+        start: DateTime<Utc>,
+        bucket: &UsageBucket,
+        requests: u64,
+    ) -> serde_json::Value {
+        json!({
+            "data": [{
+                "starting_at": start.to_rfc3339_opts(SecondsFormat::Secs, true),
+                "ending_at": (start + bucket.duration).to_rfc3339_opts(SecondsFormat::Secs, true),
+                "group": {"api_key_id": id},
+                "usage": {"requests": requests}
+            }]
+        })
+    }
+
+    fn recent_hour() -> DateTime<Utc> {
+        let seconds = HOURLY_USAGE.duration.num_seconds();
+        DateTime::from_timestamp(Utc::now().timestamp().div_euclid(seconds) * seconds, 0).unwrap()
+            - TimeDelta::hours(10)
+    }
+
+    #[tokio::test]
+    async fn observes_only_the_exact_key_and_reports_the_latest_minute_bucket_start() {
+        let server = inventory_server(
+            ResponseTemplate::new(200).set_body_json(json!({"data": []})),
+            json!({"data": []}),
+        )
+        .await;
+        mount_audit_key(&server, matching_audit_key()).await;
+        let hour = recent_hour();
+        let minute = hour + TimeDelta::minutes(43);
+        mount_usage(
+            &server,
+            "1h",
+            ResponseTemplate::new(200).set_body_json(usage_row(
+                TEST_KEY_ID,
+                hour,
+                &HOURLY_USAGE,
+                2,
+            )),
+        )
+        .await;
+        mount_usage(
+            &server,
+            "1m",
+            ResponseTemplate::new(200).set_body_json(usage_row(
+                TEST_KEY_ID,
+                minute,
+                &MINUTE_USAGE,
+                1,
+            )),
+        )
+        .await;
+        let raw =
+            json!({"token": "test-key", "key_id": TEST_KEY_ID, "audit_token": TEST_AUDIT_TOKEN});
+        let result = map_access_from_credential_at(&raw.to_string(), &server.uri()).await.unwrap();
+        assert_eq!(
+            result.token_details.as_ref().unwrap().last_used_at.as_deref(),
+            Some(minute.to_rfc3339_opts(SecondsFormat::Secs, true).as_str())
+        );
+        assert_eq!(
+            result.provider_metadata.as_ref().unwrap().credential_last_used_source.as_deref(),
+            Some(MINUTE_USAGE.source)
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests[0].url.path(), format!("/organizations/api_keys/{TEST_KEY_ID}"));
+        for request in &requests[1..3] {
+            assert_eq!(request.url.path(), "/organizations/analytics/usage");
+        }
+        let minute_query =
+            requests[2].url.query_pairs().collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(minute_query["starting_at"], hour.to_rfc3339_opts(SecondsFormat::Secs, true));
+        assert_eq!(
+            minute_query["ending_at"],
+            (hour + HOURLY_USAGE.duration).to_rfc3339_opts(SecondsFormat::Secs, true)
+        );
+        let report = serde_json::to_string(&result).unwrap();
+        assert!(!report.contains("test-key"));
+        assert!(!report.contains(TEST_AUDIT_TOKEN));
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn keeps_inventory_when_usage_is_denied_empty_or_for_another_key() {
+        let hour = recent_hour();
+        for response in [
+            ResponseTemplate::new(403),
+            ResponseTemplate::new(200).set_body_json(json!({"data": []})),
+            ResponseTemplate::new(200).set_body_json(usage_row(
+                "apikey_Other",
+                hour,
+                &HOURLY_USAGE,
+                3,
+            )),
+            ResponseTemplate::new(200).set_body_json(usage_row(
+                TEST_KEY_ID,
+                hour,
+                &HOURLY_USAGE,
+                0,
+            )),
+        ] {
+            let server = inventory_server(
+                ResponseTemplate::new(200).set_body_json(json!({"data": [{"id":"test-model"}]})),
+                json!({"data": []}),
+            )
+            .await;
+            mount_audit_key(&server, matching_audit_key()).await;
+            mount_usage(&server, "1h", response).await;
+            let raw = json!({"token": "test-key", "key_id": TEST_KEY_ID, "audit_token": TEST_AUDIT_TOKEN});
+            let result =
+                map_access_from_credential_at(&raw.to_string(), &server.uri()).await.unwrap();
+            assert!(result.token_details.unwrap().last_used_at.is_none());
+            assert!(result.provider_metadata.is_none());
+            assert!(result.resources.iter().any(|resource| resource.name == "test-model"));
+            assert_eq!(server.received_requests().await.unwrap().len(), 6);
+            server.verify().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn unverified_target_never_queries_usage() {
+        for response in [
+            ResponseTemplate::new(403),
+            ResponseTemplate::new(200).set_body_json(json!({"id": TEST_KEY_ID})),
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"id": "apikey_Other", "partial_key_hint": "tes...key"})),
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"id": TEST_KEY_ID, "partial_key_hint": "tes...other"})),
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"id": TEST_KEY_ID, "partial_key_hint": "...key"})),
+        ] {
+            let server = inventory_server(
+                ResponseTemplate::new(200).set_body_json(json!({"data": [{"id":"test-model"}]})),
+                json!({"data": [{"id": TEST_KEY_ID}]}),
+            )
+            .await;
+            mount_audit_key(&server, response).await;
+            Mock::given(path("/organizations/analytics/usage"))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(0)
+                .mount(&server)
+                .await;
+            let raw = json!({"token": "test-key", "key_id": TEST_KEY_ID, "audit_token": TEST_AUDIT_TOKEN});
+            let result =
+                map_access_from_credential_at(&raw.to_string(), &server.uri()).await.unwrap();
+            let token = result.token_details.unwrap();
+            assert!(token.user_id.is_none());
+            assert!(token.last_used_at.is_none());
+            assert!(result.provider_metadata.is_none());
+            assert!(result.resources.iter().any(|resource| resource.name == "test-model"));
+            server.verify().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn plaintext_credential_never_queries_usage() {
+        let server = inventory_server(
+            ResponseTemplate::new(200).set_body_json(json!({"data": []})),
+            json!({"data": []}),
+        )
+        .await;
+        let result = map_access_from_credential_at("test-key\n", &server.uri()).await.unwrap();
+        assert!(result.token_details.unwrap().last_used_at.is_none());
+        assert_eq!(server.received_requests().await.unwrap().len(), 4);
+        server.verify().await;
     }
 
     #[tokio::test]

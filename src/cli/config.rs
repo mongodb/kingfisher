@@ -272,6 +272,10 @@ pub struct WebhookConfig {
 pub struct GlobalConfig {
     pub tls_mode: Option<ConfigTlsMode>,
     pub allow_internal_ips: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_rule_internal_ips: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enable_internal_ips_for: Vec<String>,
     pub no_update_check: Option<bool>,
     pub user_agent_suffix: Option<String>,
     /// Additive — merged with `--endpoint`. Each entry is `provider=url`.
