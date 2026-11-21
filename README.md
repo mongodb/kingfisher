@@ -54,6 +54,7 @@ Choose your language and add the SDK to your existing application:
 
 - **Python:**
 
+  [Available on PyPi](https://pypi.org/project/kingfisher-secret-scanner/)
   ```sh
   uv add kingfisher-secret-scanner
   ```
@@ -62,13 +63,15 @@ Choose your language and add the SDK to your existing application:
   [runnable examples](python/examples) for scanning, validation, rule inspection,
   and explicit revocation.
 
+
 - **Node.js / TypeScript:**
 
+    [Available on npmjs](https://www.npmjs.com/package/kingfisher-secret-scanner)
   ```sh
   npm install kingfisher-secret-scanner
   ```
 
-  The stable npm SDK **1.0.0** wraps the same Rust crates with napi-rs. See the
+  The stable npm SDK wraps the same Rust crates with napi-rs. See the
   [Node SDK guide](docs/JAVASCRIPT.md) and [source/examples](javascript). It targets
   Node.js, including VS Code workspace extensions, rather than browser/WASM runtimes.
   Explore [Kingfisher Workbench](javascript/examples/kingfisher-workbench/README.md), a
@@ -87,6 +90,12 @@ Choose your language and add the SDK to your existing application:
   [runnable examples](crates/kingfisher-scanner/examples), and
   [revocation guide](docs/LIBRARY.md#revoke-a-credential).
 
+    **Available on crates.io:**
+    - [kingfisher-scanner](https://crates.io/crates/kingfisher-scanner)
+    - [kingfisher-rules](https://crates.io/crates/kingfisher-rules)
+    - [kingfisher-core](https://crates.io/crates/kingfisher-core)
+
+
 Or install the **CLI**, scan a codebase, and open the interactive HTML report:
 
 ```sh
@@ -99,6 +108,7 @@ default; add `--no-validate` for detection only. Add `--blast-radius` to map sup
 credentials' access when authorized. Revocation remains a separate, explicit action.
 See the [CLI installation guide](docs/INSTALLATION.md#pypi-wheels) and
 [usage guide](docs/USAGE.md) for more options.
+
 
 ## Scan Targets
 
