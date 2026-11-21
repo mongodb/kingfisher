@@ -38,6 +38,8 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Prepare Python SDK 1.7.0 and npm SDK 1.1.0 with the shared custom-rule
+  cryptographic helpers. Both releases preserve existing SDK APIs.
 - Mark SARIF 2.1.0 as a stable, supported scan report format.
 - Reuse indexed Git blob sizes in the content prepass and final scan to avoid repeat header lookups.
 - Reuse a bounded set of inflated Git blobs in the final scan, along with any completed

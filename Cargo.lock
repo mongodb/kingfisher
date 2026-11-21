@@ -4608,7 +4608,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-node"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "ignore",
@@ -4627,7 +4627,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-python"
-version = "1.6.4"
+version = "1.7.0"
 dependencies = [
  "anyhow",
  "ignore",

@@ -28,8 +28,8 @@ The manifests currently prepare these releases; a Git tag does not override Carg
 | `kingfisher-bin` | `2.20.0` | `kingfisher` executable and library |
 
 The Python SDK (`kingfisher-secret-scanner`) is independently versioned at
-`1.6.4` in `crates/kingfisher-python/Cargo.toml`; Python modules share that version.
-The stable npm SDK uses **1.0.2** in `crates/kingfisher-node/Cargo.toml` and
+`1.7.0` in `crates/kingfisher-python/Cargo.toml`. Python modules share that version.
+The prepared npm SDK uses **1.1.0** in `crates/kingfisher-node/Cargo.toml` and
 `javascript/package.json`, with six same-version native packages. Versions remain
 independent, but release triggers share the coordinated build gate below.
 
@@ -542,7 +542,7 @@ OIDC or tag-write permission. Build runners remain read-only. Use those exact
 publisher pins for local publishing setup as well; consumer runtime support is
 separate. Self-hosted publishers are unsupported.
 
-The prepared SDK version is **1.0.2**. Synchronize the Node crate, all seven npm
+The prepared SDK version is **1.1.0**. Synchronize the Node crate, all seven npm
 manifests, `Cargo.lock` and `javascript/package-lock.json`, then regenerate rule
 provenance after lockfile changes. Merge the reviewed version bump into upstream
 `main`. **An npm release tag is required**; merging alone does not authorize npm

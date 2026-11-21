@@ -1,7 +1,7 @@
 # Kingfisher Workbench — runnable Node SDK application
 
-A complete local application built with the stable **Kingfisher Node SDK 1.0.2**:
-scan a directory and its Git history, inspect a searchable HTML report, optionally
+A complete local application targeting the stable **Kingfisher Node SDK 1.1.0**.
+Scan a directory and its Git history, inspect a searchable HTML report, optionally
 validate findings, and explicitly revoke an authorized credential from the live
 report. Detection uses Rust **in process through Node-API**, not a scanner CLI,
 Python service, browser SDK, or shell wrapper.
@@ -50,8 +50,9 @@ npm run test:checkout
 
 ### With the installed npm SDK
 
-Copy this example into a directory outside the checkout (or use the example
-included in the npm package), then install its exact stable dependency:
+After npm SDK 1.1.0 is published, copy this example into a directory outside
+the checkout or use the example included in the npm package. Then install its
+exact stable dependency:
 
 ```sh
 npm install
@@ -61,7 +62,7 @@ npm test
 ```
 
 The [private example manifest](<package.json>) pins
-`"kingfisher-secret-scanner": "1.0.2"`. Normal commands import that installed
+`"kingfisher-secret-scanner": "1.1.0"`. Normal commands import that installed
 package; they never auto-discover a source-tree addon. Only the explicit checkout
 runner overrides SDK selection. Installation and native build details are in the
 [SDK guide](<https://github.com/mongodb/kingfisher/blob/main/docs/JAVASCRIPT.md#build-and-test-from-a-checkout>).

@@ -26,8 +26,9 @@
 Git history with the same Rust engine and rule catalog used by Kingfisher's CLI
 and Python SDK—directly inside your Node.js process.
 
-**Stable SDK: 1.0.2.** No CLI subprocess, Python interpreter, or separate Kingfisher
-installation. ESM, CommonJS and TypeScript declarations are included.
+The prepared **stable SDK release 1.1.0** adds cryptographic authentication
+helpers in Liquid and Betterleaks expressions. The SDK runs in process and
+includes ESM, CommonJS and TypeScript declarations.
 
 **No Git executable required.** The SDK reads local Git history and staged changes
 directly from the repository.

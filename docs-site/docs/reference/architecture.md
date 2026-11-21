@@ -155,8 +155,8 @@ native work off the event loop. The Node SDK is not a Python or CLI wrapper. The
 continues to own its source discovery, scan-wide storage, provider coordination,
 and report rendering.
 
-The stable JavaScript/TypeScript SDK **1.0.2** is versioned
-independently of the CLI, Python SDK, and Rust crates. See the
+The JavaScript/TypeScript SDK is versioned independently of the CLI, Python SDK,
+and Rust crates. The prepared stable release is **1.1.0**. See the
 [Node SDK guide](../reference/javascript-bindings.md) for its supported APIs and runtime platforms and
 the [Rust library guide](../reference/library.md) for shared capabilities.
 

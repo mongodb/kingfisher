@@ -31,47 +31,58 @@ refuse to ship it. Get the crate on [crates.io](https://crates.io/crates/kingfis
 
 ## Fail the build when a secret is in the artifact
 
-In a project using Rust 1.99 or newer, add the crate. The gate below also uses
-`anyhow` for error handling.
+In a project using Rust 1.99 or newer, add the scanner, `anyhow` for error
+handling, and `walkdir` to enumerate artifact files.
 
 ```sh
-cargo add kingfisher-scanner anyhow
+cargo add kingfisher-scanner anyhow walkdir
 ```
 
 Save this as `src/bin/secret-gate.rs` in your build tooling, or fold it into an
-existing `xtask`. It scans every path it's given, reports each finding like a
-compiler diagnostic, and exits non-zero if anything turns up.
+existing `xtask`. It takes files or directories, scans regular files without
+following symlinks, and fails if it finds a secret or has no files to scan.
 
 ```rust
-use std::{path::PathBuf, process::ExitCode, sync::Arc};
+use std::{process::ExitCode, sync::Arc};
 
 use kingfisher_scanner::{RulesDatabase, Scanner, ScannerConfig, get_builtin_rules};
+use walkdir::WalkDir;
 
 fn main() -> anyhow::Result<ExitCode> {
+    let mut paths = std::env::args_os().skip(1).peekable();
+    anyhow::ensure!(paths.peek().is_some(), "provide at least one artifact path");
+
     let rules = RulesDatabase::from_rule_collection(get_builtin_rules(None)?)?;
     let scanner = Scanner::with_config(
         Arc::new(rules),
         ScannerConfig { redact_secrets: true, ..Default::default() },
     );
 
+    let mut scanned = 0;
     let mut leaks = 0;
-    for path in std::env::args_os().skip(1).map(PathBuf::from) {
-        // `?` fails the build if a file can't be read, so it never counts as clean.
-        for finding in scanner.scan_file(&path)? {
-            if !finding.rule().visible() {
+    for path in paths {
+        for entry in WalkDir::new(path).follow_root_links(false) {
+            let entry = entry?;
+            if !entry.file_type().is_file() {
                 continue;
             }
-            eprintln!(
-                "error: {}:{}:{}: {}",
-                path.display(),
-                finding.line(),
-                finding.column(),
-                finding.rule_id
-            );
-            leaks += 1;
+            let path = entry.path();
+            let findings = scanner.scan_file(path)?;
+            scanned += 1;
+            for finding in findings.into_iter().filter(|finding| finding.rule().visible()) {
+                eprintln!(
+                    "error: {}:{}:{}: {}",
+                    path.display(),
+                    finding.line(),
+                    finding.column(),
+                    finding.rule_id
+                );
+                leaks += 1;
+            }
         }
     }
 
+    anyhow::ensure!(scanned > 0, "no artifact files found");
     if leaks > 0 {
         eprintln!("{leaks} secret(s) found, refusing to ship");
         return Ok(ExitCode::FAILURE);
@@ -83,7 +94,7 @@ fn main() -> anyhow::Result<ExitCode> {
 Run it over the staged artifact as the last step before you publish:
 
 ```sh
-cargo run --release --bin secret-gate -- $(find target/dist -type f)
+cargo run --release --bin secret-gate -- target/dist
 ```
 
 ```text
@@ -97,8 +108,10 @@ A few details make this safe to run on every build:
 - **The secret never reaches your logs.** `redact_secrets: true` removes the
   credential value from each finding. The gate reports only the rule, path, and
   position.
-- **A clean result means the file really was clean.** A read or scan error
-  stops the gate instead of being skipped quietly.
+- **Discovery errors fail the build.** The gate needs at least one regular
+  file and stops on any directory traversal, read, or scan error. It passes
+  each filename directly to the scanner, including names with spaces or
+  shell metacharacters.
 - **Helper matches stay quiet.** Some rules match a component, such as the
   secret half of an AWS key pair, only to support another rule. Filtering on
   `rule().visible()` reports what a person needs to act on.

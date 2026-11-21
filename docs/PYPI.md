@@ -18,7 +18,8 @@ requires CPython 3.10+ with the standard GIL build. Wheels target Linux x64/ARM6
 (glibc 2.28+), macOS x64/ARM64 (11+), and native Windows x64/ARM64. PyPy,
 free-threaded Python and musl wheels are not currently part of the release matrix.
 
-The prepared SDK release is **1.6.4**, a backward-compatible patch release.
+The prepared SDK release is **1.7.0**. It adds cryptographic helpers for custom
+rules and preserves existing Python APIs.
 
 CLI and low-level Rust validation responses can include
 [allowlisted identity metadata](RULES.md#validation-response-identity-metadata)
@@ -821,7 +822,8 @@ Use a separate process when a hard wall-clock execution limit is required.
 
 ## Validate explicitly
 
-Custom Liquid/Betterleaks rules can use the shared [cryptographic authentication helpers](RULES.md#cryptographic-authentication)
+Starting in Python SDK 1.7.0, custom Liquid/Betterleaks rules can use the shared
+[cryptographic authentication helpers](RULES.md#cryptographic-authentication)
 (ECDH/ECDSA, AES-GCM, HKDF/PBKDF2 and Ed25519), without a separate Python crypto
 API. Load the [complete scaffold](../crates/kingfisher-scanner/examples/rules/cryptographic-auth.yml)
 through `Rules`, retain its invisible client-ID finding, and use `Validator`
@@ -1533,7 +1535,7 @@ in sync. The read-only preflight runs **before** wheel/source jobs:
 For a read-only local/orchestrator check (Python 3.11+), run:
 
 ```bash
-python3 scripts/check-sdk-release.py --require-new --expected-version 1.6.4
+python3 scripts/check-sdk-release.py --require-new --expected-version 1.7.0
 ```
 
 Omit `--expected-version` to infer the prepared manifest version. The command
@@ -1548,7 +1550,7 @@ that `HEAD` is the current upstream `main` commit, and use the exact version/SHA
 gh workflow run release.yml --repo mongodb/kingfisher --ref main \
   -f publish=true \
   -f expected_sha="$(git rev-parse HEAD)" \
-  -f expected_version=1.6.4
+  -f expected_version=1.7.0
 ```
 
 `publish` defaults to `false`. Publication requires both safety inputs: the full
