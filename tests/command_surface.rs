@@ -59,5 +59,5 @@ fn scan_help_lists_sarif_as_stable_and_supported() {
         Command::new(env!("CARGO_BIN_EXE_kingfisher")).args(["scan", "--help"]).output().unwrap();
     assert!(output.status.success());
     let help = String::from_utf8(output.stdout).unwrap();
-    assert!(help.contains("SARIF 2.1.0 (stable and supported)"), "{help}");
+    assert!(help.contains("SARIF 2.1.0 (stable)"), "{help}");
 }

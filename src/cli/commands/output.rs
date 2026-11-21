@@ -51,7 +51,7 @@ pub enum ReportOutputFormat {
     /// TOON format optimized for LLMs and agents
     Toon,
 
-    /// SARIF 2.1.0 (stable and supported)
+    /// SARIF 2.1.0 (stable)
     Sarif,
 
     /// Standalone HTML audit report
